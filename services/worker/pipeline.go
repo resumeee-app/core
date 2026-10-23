@@ -1,0 +1,200 @@
+package worker
+
+import (
+	"context"
+	"fmt"
+
+	"resumeee/internal/domain"
+)
+
+func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
+	if p.branchRepo == nil {
+		return
+	}
+
+	// 1. Transition version status to processing
+	if err := p.branchRepo.UpdateVersionStatus(ctx, job.VersionID, domain.VersionStatusProcessing, ""); err != nil {
+		if p.logger != nil {
+			p.logger.Error("failed to update version status to processing", "version_id", job.VersionID, "err", err)
+		}
+		return
+	}
+
+	// 2. Context Assembly
+	if job.BranchID == "" {
+		v, err := p.branchRepo.GetVersion(ctx, "", job.VersionID)
+		if err != nil {
+			p.failJob(ctx, job.VersionID, fmt.Sprintf("failed to load version: %v", err))
+			return
+		}
+		job.BranchID = v.BranchID
+	}
+
+	branch, err := p.branchRepo.GetBranch(ctx, job.UserID, job.BranchID)
+	if err != nil {
+		p.failJob(ctx, job.VersionID, fmt.Sprintf("failed to load branch: %v", err))
+		return
+	}
+
+	if job.UserID == "" {
+		job.UserID = branch.UserID
+	}
+
+	prof, err := p.profileRepo.GetProfile(ctx, job.UserID)
+	if err != nil {
+		p.failJob(ctx, job.VersionID, fmt.Sprintf("failed to load profile: %v", err))
+		return
+	}
+
+	snapshot, err := p.profileRepo.GetSnapshot(ctx, job.UserID)
+	if err != nil {
+		p.failJob(ctx, job.VersionID, fmt.Sprintf("failed to load profile snapshot: %v", err))
+		return
+	}
+
+	var preset *domain.Preset
+	if branch.PresetID != nil && *branch.PresetID != "" && p.presetRepo != nil {
+		pr, err := p.presetRepo.GetPreset(ctx, job.UserID, *branch.PresetID)
+		if err == nil {
+			preset = pr
+		}
+	}
+
+	// Continuity: Prior version context
+	var priorContent *domain.TailoredContent
+	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" {
+		activeVer, err := p.branchRepo.GetVersion(ctx, branch.ID, *branch.ActiveVersionID)
+		if err == nil && activeVer != nil {
+			priorContent = activeVer.TailoredContent
+		}
+	}
+
+	tmpl, err := p.templateRepo.GetTemplate(ctx, job.UserID, branch.TemplateSetID)
+	if err != nil {
+		p.failJob(ctx, job.VersionID, fmt.Sprintf("failed to load template set: %v", err))
+		return
+	}
+
+	// 3. Provider Resolution & LLM Invocation
+	presetInstructions := ""
+	if preset != nil {
+		presetInstructions = preset.SystemInstructions
+	}
+
+	provider := branch.ProviderOverride
+	if provider == "" && preset != nil {
+		provider = preset.ProviderOverride
+	}
+	if provider == "" {
+		provider = prof.DefaultProvider
+	}
+
+	model := branch.ModelOverride
+	if model == "" && preset != nil {
+		model = preset.ModelOverride
+	}
+	if model == "" {
+		model = prof.DefaultModel
+	}
+
+	req := domain.GenerationRequest{
+		Model:              model,
+		MasterProfile:      snapshot,
+		GlobalRules:        prof.GlobalWritingRules,
+		PresetInstructions: presetInstructions,
+		BranchContext:      *branch,
+		PriorVersion:       priorContent,
+	}
+
+	if p.llmService == nil {
+		p.failJob(ctx, job.VersionID, "no LLM service configured")
+		return
+	}
+
+	resp, err := p.llmService.GenerateTailoredResume(ctx, req)
+	if err != nil {
+		p.failJob(ctx, job.VersionID, fmt.Sprintf("llm generation error: %v", err))
+		return
+	}
+	if resp == nil {
+		p.failJob(ctx, job.VersionID, "llm returned empty generation response")
+		return
+	}
+
+	// 4. Provenance Validation ("No Lies" invariant)
+	if p.validator == nil {
+		p.failJob(ctx, job.VersionID, "no provenance validator configured")
+		return
+	}
+
+	valRes, err := p.validator.Validate(&resp.TailoredContent, snapshot, branch)
+	if err != nil {
+		p.failJob(ctx, job.VersionID, fmt.Sprintf("provenance validation error: %v", err))
+		return
+	}
+	sanitizedContent := valRes.SanitizedContent
+	warnings := valRes.Warnings
+
+	// 5. Template Rendering
+	if p.renderer == nil {
+		p.failJob(ctx, job.VersionID, "no template renderer configured")
+		return
+	}
+
+	rendered, err := p.renderer.Render(ctx, tmpl, prof, sanitizedContent)
+	if err != nil {
+		p.failJob(ctx, job.VersionID, fmt.Sprintf("template render error: %v", err))
+		return
+	}
+
+	// 6. Dual Persistence & Pointer Progression
+	ver, err := p.branchRepo.GetVersion(ctx, branch.ID, job.VersionID)
+	if err != nil {
+		p.failJob(ctx, job.VersionID, fmt.Sprintf("failed to get version: %v", err))
+		return
+	}
+
+	status := domain.VersionStatusCompleted
+	if len(warnings) > 0 {
+		status = domain.VersionStatusCompletedWithWarnings
+	}
+
+	ver.Status = status
+	ver.MasterRevisionUsed = snapshot.MasterRevision
+	ver.TemplateSetIDUsed = branch.TemplateSetID
+	if ver.ProviderUsed == "" {
+		ver.ProviderUsed = provider
+	}
+	if ver.ModelUsed == "" {
+		ver.ModelUsed = model
+	}
+	ver.TailoredContent = sanitizedContent
+	ver.GapReport = &resp.GapReport
+	ver.ValidationWarnings = warnings
+	ver.HTMLOutput = rendered.HTML
+	ver.MarkdownOutput = rendered.Markdown
+	ver.PlainTextOutput = rendered.PlainText
+
+	if err := p.branchRepo.CompleteVersion(ctx, ver); err != nil {
+		p.failJob(ctx, job.VersionID, fmt.Sprintf("failed to complete version: %v", err))
+		return
+	}
+
+	if p.logger != nil {
+		p.logger.Info("generation job completed successfully",
+			"version_id", ver.ID,
+			"branch_id", branch.ID,
+			"status", ver.Status,
+			"warnings_count", len(warnings),
+		)
+	}
+}
+
+func (p *Pool) failJob(ctx context.Context, versionID, errMsg string) {
+	if p.logger != nil {
+		p.logger.Error("generation job failed", "version_id", versionID, "error", errMsg)
+	}
+	if p.branchRepo != nil {
+		_ = p.branchRepo.UpdateVersionStatus(ctx, versionID, domain.VersionStatusFailed, errMsg)
+	}
+}

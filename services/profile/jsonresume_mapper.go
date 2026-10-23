@@ -1,0 +1,892 @@
+package profile
+
+import (
+	"encoding/json"
+	"regexp"
+	"strings"
+	"time"
+
+	"resumeee/internal/domain"
+
+	"github.com/google/uuid"
+)
+
+const defaultSchemaURL = "https://raw.githubusercontent.com/jsonresume/resume-schema/v1.0.0/schema.json"
+
+// ToSnapshot converts a parsed JSONResume document into a domain MasterProfileSnapshot,
+// generating relational entities, child facts with skill associations, and preserving unmapped sections.
+func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64) (*domain.MasterProfileSnapshot, error) {
+	if resume == nil {
+		return nil, domain.ErrValidation
+	}
+	if userID == "" {
+		userID = "default"
+	}
+
+	// 1. Construct Profile root
+	profileID := "prof-" + uuid.New().String()
+	rules := ""
+	provider := "gemini"
+	model := "gemini-2.5-pro"
+	metadata := make(map[string]any)
+
+	if existingProfile != nil {
+		if existingProfile.ID != "" {
+			profileID = existingProfile.ID
+		}
+		rules = existingProfile.GlobalWritingRules
+		if existingProfile.DefaultProvider != "" {
+			provider = existingProfile.DefaultProvider
+		}
+		if existingProfile.DefaultModel != "" {
+			model = existingProfile.DefaultModel
+		}
+		if existingProfile.Metadata != nil {
+			for k, v := range existingProfile.Metadata {
+				metadata[k] = v
+			}
+		}
+	}
+
+	if resume.Basics.Image != "" {
+		metadata["basics_image"] = resume.Basics.Image
+	}
+	if resume.Basics.URL != "" {
+		metadata["basics_url"] = resume.Basics.URL
+	}
+
+	// Preserve unmapped sections (volunteer, awards, publications, languages, interests, references, meta, etc.)
+	unmappedData := make(map[string]any)
+	if len(resume.Volunteer) > 0 {
+		unmappedData["volunteer"] = resume.Volunteer
+	}
+	if len(resume.Awards) > 0 {
+		unmappedData["awards"] = resume.Awards
+	}
+	if len(resume.Publications) > 0 {
+		unmappedData["publications"] = resume.Publications
+	}
+	if len(resume.Languages) > 0 {
+		unmappedData["languages"] = resume.Languages
+	}
+	if len(resume.Interests) > 0 {
+		unmappedData["interests"] = resume.Interests
+	}
+	if len(resume.References) > 0 {
+		unmappedData["references"] = resume.References
+	}
+	if resume.Meta != nil {
+		unmappedData["meta"] = resume.Meta
+	}
+	if resume.Schema != "" {
+		unmappedData["$schema"] = resume.Schema
+	}
+	if len(resume.Unmapped) > 0 {
+		unmappedData["extra_unmapped"] = resume.Unmapped
+	}
+	if len(unmappedData) > 0 {
+		metadata["jsonresume_unmapped"] = unmappedData
+	}
+
+	profiles := make([]domain.SocialLink, len(resume.Basics.Profiles))
+	for i, p := range resume.Basics.Profiles {
+		profiles[i] = domain.SocialLink{
+			Network:  p.Network,
+			Username: p.Username,
+			URL:      p.URL,
+		}
+	}
+
+	prof := domain.Profile{
+		ID:       profileID,
+		UserID:   userID,
+		FullName: resume.Basics.Name,
+		Headline: resume.Basics.Label,
+		Email:    resume.Basics.Email,
+		Phone:    resume.Basics.Phone,
+		Location: domain.Location{
+			Address:     resume.Basics.Location.Address,
+			PostalCode:  resume.Basics.Location.PostalCode,
+			City:        resume.Basics.Location.City,
+			CountryCode: resume.Basics.Location.CountryCode,
+			Region:      resume.Basics.Location.Region,
+		},
+		Profiles:           profiles,
+		Summary:            resume.Basics.Summary,
+		GlobalWritingRules: rules,
+		DefaultProvider:    provider,
+		DefaultModel:       model,
+		MasterRevision:     revision,
+		Metadata:           metadata,
+		CreatedAt:          time.Now().UTC(),
+		UpdatedAt:          time.Now().UTC(),
+	}
+
+	// 2. Map Skills and build matching index
+	skills := make([]domain.Skill, len(resume.Skills))
+	for i, s := range resume.Skills {
+		skills[i] = domain.Skill{
+			ID:          "skill-" + uuid.New().String(),
+			UserID:      userID,
+			Name:        s.Name,
+			Proficiency: s.Level,
+			Keywords:    s.Keywords,
+			CreatedAt:   time.Now().UTC(),
+			UpdatedAt:   time.Now().UTC(),
+		}
+	}
+	matcher := newSkillMatcher(skills)
+
+	var allFacts []domain.Fact
+
+	// 3. Map Work Experiences and child Facts
+	experiences := make([]domain.WorkExperience, len(resume.Work))
+	for i, w := range resume.Work {
+		expID := "exp-" + uuid.New().String()
+		company := w.GetCompany()
+		var endDate *string
+		isCurrent := true
+		if w.EndDate != "" {
+			ed := w.EndDate
+			endDate = &ed
+			isCurrent = false
+		}
+
+		expMeta := make(map[string]any)
+		if w.URL != "" {
+			expMeta["url"] = w.URL
+		}
+		if w.Location != "" {
+			expMeta["location"] = w.Location
+		}
+
+		var expFacts []domain.Fact
+		for _, h := range w.Highlights {
+			matched := matcher.findMatchingSkills(h)
+			fact := domain.Fact{
+				ID:        "fact-" + uuid.New().String(),
+				UserID:    userID,
+				OwnerID:   expID,
+				OwnerType: domain.OwnerTypeWorkExperience,
+				Statement: h,
+				Skills:    matched,
+				CreatedAt: time.Now().UTC(),
+				UpdatedAt: time.Now().UTC(),
+			}
+			expFacts = append(expFacts, fact)
+			allFacts = append(allFacts, fact)
+		}
+
+		// Experience-level skills: union of fact skills + skills mentioned in summary / position
+		expSkills := matcher.findMatchingSkills(w.Summary + " " + w.Position + " " + company)
+		for _, f := range expFacts {
+			expSkills = mergeUniqueSkills(expSkills, f.Skills)
+		}
+
+		experiences[i] = domain.WorkExperience{
+			ID:             expID,
+			UserID:         userID,
+			Company:        company,
+			RoleTitle:      w.Position,
+			EmploymentType: domain.EmploymentTypeFullTime,
+			StartDate:      w.StartDate,
+			EndDate:        endDate,
+			IsCurrent:      isCurrent,
+			Location: domain.Location{
+				City: w.Location,
+			},
+			DutiesSummary: w.Summary,
+			Facts:         expFacts,
+			Skills:        expSkills,
+			Metadata:      expMeta,
+			CreatedAt:     time.Now().UTC(),
+			UpdatedAt:     time.Now().UTC(),
+		}
+	}
+
+	// 4. Map Projects and child Facts
+	projects := make([]domain.Project, len(resume.Projects))
+	for i, p := range resume.Projects {
+		projID := "proj-" + uuid.New().String()
+		var endDate *string
+		if p.EndDate != "" {
+			ed := p.EndDate
+			endDate = &ed
+		}
+		role := ""
+		if len(p.Roles) > 0 {
+			role = strings.Join(p.Roles, ", ")
+		}
+
+		projMeta := make(map[string]any)
+		if len(p.Keywords) > 0 {
+			projMeta["keywords"] = p.Keywords
+		}
+		if p.Entity != "" {
+			projMeta["entity"] = p.Entity
+		}
+		if p.Type != "" {
+			projMeta["type"] = p.Type
+		}
+		if len(p.Roles) > 0 {
+			projMeta["roles"] = p.Roles
+		}
+
+		var projFacts []domain.Fact
+		for _, h := range p.Highlights {
+			matched := matcher.findMatchingSkills(h)
+			fact := domain.Fact{
+				ID:        "fact-" + uuid.New().String(),
+				UserID:    userID,
+				OwnerID:   projID,
+				OwnerType: domain.OwnerTypeProject,
+				Statement: h,
+				Skills:    matched,
+				CreatedAt: time.Now().UTC(),
+				UpdatedAt: time.Now().UTC(),
+			}
+			projFacts = append(projFacts, fact)
+			allFacts = append(allFacts, fact)
+		}
+
+		projSkills := matcher.findMatchingSkills(p.Description + " " + strings.Join(p.Keywords, " "))
+		for _, f := range projFacts {
+			projSkills = mergeUniqueSkills(projSkills, f.Skills)
+		}
+
+		projects[i] = domain.Project{
+			ID:        projID,
+			UserID:    userID,
+			Name:      p.Name,
+			Role:      role,
+			URL:       p.URL,
+			StartDate: p.StartDate,
+			EndDate:   endDate,
+			Summary:   p.Description,
+			Facts:     projFacts,
+			Skills:    projSkills,
+			Metadata:  projMeta,
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+		}
+	}
+
+	// 5. Map Education
+	educations := make([]domain.Education, len(resume.Education))
+	for i, e := range resume.Education {
+		eduID := "edu-" + uuid.New().String()
+		var endDate *string
+		if e.EndDate != "" {
+			ed := e.EndDate
+			endDate = &ed
+		}
+		eduMeta := make(map[string]any)
+		if e.URL != "" {
+			eduMeta["url"] = e.URL
+		}
+		if len(e.Courses) > 0 {
+			eduMeta["courses"] = e.Courses
+		}
+
+		educations[i] = domain.Education{
+			ID:          eduID,
+			UserID:      userID,
+			Institution: e.Institution,
+			Degree:      e.StudyType,
+			Field:       e.Area,
+			StartDate:   e.StartDate,
+			EndDate:     endDate,
+			Score:       e.Score,
+			Metadata:    eduMeta,
+			CreatedAt:   time.Now().UTC(),
+			UpdatedAt:   time.Now().UTC(),
+		}
+	}
+
+	// 6. Map Certifications
+	certifications := make([]domain.Certification, len(resume.Certificates))
+	for i, c := range resume.Certificates {
+		certID := "cert-" + uuid.New().String()
+		certifications[i] = domain.Certification{
+			ID:        certID,
+			UserID:    userID,
+			Name:      c.Name,
+			Issuer:    c.Issuer,
+			Date:      c.Date,
+			URL:       c.URL,
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+		}
+	}
+
+	return &domain.MasterProfileSnapshot{
+		Profile:        prof,
+		MasterRevision: revision,
+		Skills:         skills,
+		Experiences:    experiences,
+		Projects:       projects,
+		Education:      educations,
+		Certifications: certifications,
+		Facts:          allFacts,
+		ExportedAt:     time.Now().UTC(),
+	}, nil
+}
+
+// FromSnapshot converts a MasterProfileSnapshot back into a valid JSONResume document,
+// restoring unmapped sections and child highlights.
+func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
+	if snapshot == nil {
+		return nil, domain.ErrValidation
+	}
+
+	schemaURL := defaultSchemaURL
+
+	// 1. Basics
+	profiles := make([]JSONResumeProfile, len(snapshot.Profile.Profiles))
+	for i, p := range snapshot.Profile.Profiles {
+		profiles[i] = JSONResumeProfile{
+			Network:  p.Network,
+			Username: p.Username,
+			URL:      p.URL,
+		}
+	}
+
+	basics := JSONResumeBasics{
+		Name:    snapshot.Profile.FullName,
+		Label:   snapshot.Profile.Headline,
+		Email:   snapshot.Profile.Email,
+		Phone:   snapshot.Profile.Phone,
+		Summary: snapshot.Profile.Summary,
+		Location: JSONResumeLocation{
+			Address:     snapshot.Profile.Location.Address,
+			PostalCode:  snapshot.Profile.Location.PostalCode,
+			City:        snapshot.Profile.Location.City,
+			CountryCode: snapshot.Profile.Location.CountryCode,
+			Region:      snapshot.Profile.Location.Region,
+		},
+		Profiles: profiles,
+	}
+
+	if snapshot.Profile.Metadata != nil {
+		if img, ok := snapshot.Profile.Metadata["basics_image"].(string); ok {
+			basics.Image = img
+		}
+		if u, ok := snapshot.Profile.Metadata["basics_url"].(string); ok {
+			basics.URL = u
+		}
+	}
+
+	// 2. Work Experiences
+	// Index snapshot.Facts by owner ID as fallback if exp.Facts is empty
+	expFactsMap := make(map[string][]string)
+	projFactsMap := make(map[string][]string)
+	for _, f := range snapshot.Facts {
+		switch f.OwnerType {
+		case domain.OwnerTypeWorkExperience:
+			expFactsMap[f.OwnerID] = append(expFactsMap[f.OwnerID], f.Statement)
+		case domain.OwnerTypeProject:
+			projFactsMap[f.OwnerID] = append(projFactsMap[f.OwnerID], f.Statement)
+		}
+	}
+
+	workList := make([]JSONResumeWork, len(snapshot.Experiences))
+	for i, exp := range snapshot.Experiences {
+		endDate := ""
+		if exp.EndDate != nil {
+			endDate = *exp.EndDate
+		}
+
+		var highlights []string
+		if len(exp.Facts) > 0 {
+			for _, f := range exp.Facts {
+				highlights = append(highlights, f.Statement)
+			}
+		} else {
+			highlights = expFactsMap[exp.ID]
+		}
+
+		urlStr := ""
+		locStr := exp.Location.City
+		if exp.Metadata != nil {
+			if u, ok := exp.Metadata["url"].(string); ok {
+				urlStr = u
+			}
+			if l, ok := exp.Metadata["location"].(string); ok {
+				locStr = l
+			}
+		}
+
+		workList[i] = JSONResumeWork{
+			Name:       exp.Company,
+			Company:    exp.Company,
+			Position:   exp.RoleTitle,
+			URL:        urlStr,
+			StartDate:  exp.StartDate,
+			EndDate:    endDate,
+			Summary:    exp.DutiesSummary,
+			Highlights: highlights,
+			Location:   locStr,
+		}
+	}
+
+	// 3. Projects
+	projList := make([]JSONResumeProject, len(snapshot.Projects))
+	for i, proj := range snapshot.Projects {
+		endDate := ""
+		if proj.EndDate != nil {
+			endDate = *proj.EndDate
+		}
+
+		var highlights []string
+		if len(proj.Facts) > 0 {
+			for _, f := range proj.Facts {
+				highlights = append(highlights, f.Statement)
+			}
+		} else {
+			highlights = projFactsMap[proj.ID]
+		}
+
+		var roles []string
+		var keywords []string
+		entity := ""
+		pType := ""
+
+		if proj.Metadata != nil {
+			roles = extractStringSlice(proj.Metadata["roles"])
+			keywords = extractStringSlice(proj.Metadata["keywords"])
+			if e, ok := proj.Metadata["entity"].(string); ok {
+				entity = e
+			}
+			if t, ok := proj.Metadata["type"].(string); ok {
+				pType = t
+			}
+		}
+		if len(roles) == 0 && proj.Role != "" {
+			roles = []string{proj.Role}
+		}
+
+		projList[i] = JSONResumeProject{
+			Name:        proj.Name,
+			Description: proj.Summary,
+			Highlights:  highlights,
+			Keywords:    keywords,
+			StartDate:   proj.StartDate,
+			EndDate:     endDate,
+			URL:         proj.URL,
+			Roles:       roles,
+			Entity:      entity,
+			Type:        pType,
+		}
+	}
+
+	// 4. Education
+	eduList := make([]JSONResumeEducation, len(snapshot.Education))
+	for i, edu := range snapshot.Education {
+		endDate := ""
+		if edu.EndDate != nil {
+			endDate = *edu.EndDate
+		}
+		urlStr := ""
+		var courses []string
+		if edu.Metadata != nil {
+			if u, ok := edu.Metadata["url"].(string); ok {
+				urlStr = u
+			}
+			courses = extractStringSlice(edu.Metadata["courses"])
+		}
+
+		eduList[i] = JSONResumeEducation{
+			Institution: edu.Institution,
+			URL:         urlStr,
+			Area:        edu.Field,
+			StudyType:   edu.Degree,
+			StartDate:   edu.StartDate,
+			EndDate:     endDate,
+			Score:       edu.Score,
+			Courses:     courses,
+		}
+	}
+
+	// 5. Certifications
+	certList := make([]JSONResumeCertificate, len(snapshot.Certifications))
+	for i, cert := range snapshot.Certifications {
+		certList[i] = JSONResumeCertificate{
+			Name:   cert.Name,
+			Date:   cert.Date,
+			Issuer: cert.Issuer,
+			URL:    cert.URL,
+		}
+	}
+
+	// 6. Skills
+	skillList := make([]JSONResumeSkill, len(snapshot.Skills))
+	for i, skill := range snapshot.Skills {
+		skillList[i] = JSONResumeSkill{
+			Name:     skill.Name,
+			Level:    skill.Proficiency,
+			Keywords: skill.Keywords,
+		}
+	}
+
+	res := &JSONResume{
+		Schema:       schemaURL,
+		Basics:       basics,
+		Work:         workList,
+		Education:    eduList,
+		Certificates: certList,
+		Skills:       skillList,
+		Projects:     projList,
+	}
+
+	// 7. Restore unmapped sections from Profile.Metadata["jsonresume_unmapped"]
+	if snapshot.Profile.Metadata != nil {
+		if rawUnmapped, ok := snapshot.Profile.Metadata["jsonresume_unmapped"]; ok && rawUnmapped != nil {
+			data, err := json.Marshal(rawUnmapped)
+			if err == nil {
+				var aux struct {
+					Schema        string                     `json:"$schema"`
+					Volunteer     []JSONResumeVolunteer      `json:"volunteer"`
+					Awards        []JSONResumeAward          `json:"awards"`
+					Publications  []JSONResumePublication    `json:"publications"`
+					Languages     []JSONResumeLanguage       `json:"languages"`
+					Interests     []JSONResumeInterest       `json:"interests"`
+					References    []JSONResumeReference      `json:"references"`
+					Meta          *JSONResumeMeta            `json:"meta"`
+					ExtraUnmapped map[string]json.RawMessage `json:"extra_unmapped"`
+				}
+				if err := json.Unmarshal(data, &aux); err == nil {
+					if aux.Schema != "" {
+						res.Schema = aux.Schema
+					}
+					if len(aux.Volunteer) > 0 {
+						res.Volunteer = aux.Volunteer
+					}
+					if len(aux.Awards) > 0 {
+						res.Awards = aux.Awards
+					}
+					if len(aux.Publications) > 0 {
+						res.Publications = aux.Publications
+					}
+					if len(aux.Languages) > 0 {
+						res.Languages = aux.Languages
+					}
+					if len(aux.Interests) > 0 {
+						res.Interests = aux.Interests
+					}
+					if len(aux.References) > 0 {
+						res.References = aux.References
+					}
+					if aux.Meta != nil {
+						res.Meta = aux.Meta
+					}
+					if len(aux.ExtraUnmapped) > 0 {
+						res.Unmapped = aux.ExtraUnmapped
+					}
+				}
+			}
+		}
+	}
+
+	return res, nil
+}
+
+// FromTailored converts a BranchVersion's TailoredContent and base Profile into a valid JSONResume export.
+func FromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*JSONResume, error) {
+	if tailored == nil {
+		return nil, domain.ErrValidation
+	}
+
+	schemaURL := defaultSchemaURL
+	var basics JSONResumeBasics
+
+	if profile != nil {
+		profiles := make([]JSONResumeProfile, len(profile.Profiles))
+		for i, p := range profile.Profiles {
+			profiles[i] = JSONResumeProfile{
+				Network:  p.Network,
+				Username: p.Username,
+				URL:      p.URL,
+			}
+		}
+
+		basics = JSONResumeBasics{
+			Name:    profile.FullName,
+			Label:   profile.Headline,
+			Email:   profile.Email,
+			Phone:   profile.Phone,
+			Summary: profile.Summary,
+			Location: JSONResumeLocation{
+				Address:     profile.Location.Address,
+				PostalCode:  profile.Location.PostalCode,
+				City:        profile.Location.City,
+				CountryCode: profile.Location.CountryCode,
+				Region:      profile.Location.Region,
+			},
+			Profiles: profiles,
+		}
+
+		if profile.Metadata != nil {
+			if img, ok := profile.Metadata["basics_image"].(string); ok {
+				basics.Image = img
+			}
+			if u, ok := profile.Metadata["basics_url"].(string); ok {
+				basics.URL = u
+			}
+		}
+	}
+
+	// Override summary with tailored summary if present
+	if tailored.Summary != "" {
+		basics.Summary = tailored.Summary
+	}
+
+	// 1. Work from TailoredExperiences
+	workList := make([]JSONResumeWork, len(tailored.Experiences))
+	for i, exp := range tailored.Experiences {
+		endDate := ""
+		if exp.EndDate != nil {
+			endDate = *exp.EndDate
+		}
+		var highlights []string
+		for _, b := range exp.Bullets {
+			highlights = append(highlights, b.Text)
+		}
+
+		loc := exp.Location.City
+		if loc == "" {
+			loc = exp.CompanyLocation.City
+		}
+
+		workList[i] = JSONResumeWork{
+			Name:       exp.Company,
+			Company:    exp.Company,
+			Position:   exp.RoleTitle,
+			StartDate:  exp.StartDate,
+			EndDate:    endDate,
+			Summary:    exp.DutiesSummary,
+			Highlights: highlights,
+			Location:   loc,
+		}
+	}
+
+	// 2. Projects from TailoredProjects
+	projList := make([]JSONResumeProject, len(tailored.Projects))
+	for i, proj := range tailored.Projects {
+		endDate := ""
+		if proj.EndDate != nil {
+			endDate = *proj.EndDate
+		}
+		var highlights []string
+		for _, b := range proj.Bullets {
+			highlights = append(highlights, b.Text)
+		}
+		var roles []string
+		if proj.Role != "" {
+			roles = []string{proj.Role}
+		}
+
+		projList[i] = JSONResumeProject{
+			Name:        proj.Name,
+			Description: proj.Summary,
+			Highlights:  highlights,
+			StartDate:   proj.StartDate,
+			EndDate:     endDate,
+			URL:         proj.URL,
+			Roles:       roles,
+		}
+	}
+
+	// 3. Education from TailoredEducation
+	eduList := make([]JSONResumeEducation, len(tailored.Education))
+	for i, edu := range tailored.Education {
+		endDate := ""
+		if edu.EndDate != nil {
+			endDate = *edu.EndDate
+		}
+		eduList[i] = JSONResumeEducation{
+			Institution: edu.Institution,
+			StudyType:   edu.Degree,
+			Area:        edu.Field,
+			StartDate:   edu.StartDate,
+			EndDate:     endDate,
+			Score:       edu.Score,
+		}
+	}
+
+	// 4. Certifications from TailoredCert
+	certList := make([]JSONResumeCertificate, len(tailored.Certifications))
+	for i, cert := range tailored.Certifications {
+		certList[i] = JSONResumeCertificate{
+			Name:   cert.Name,
+			Issuer: cert.Issuer,
+			Date:   cert.Date,
+			URL:    cert.URL,
+		}
+	}
+
+	// 5. Skills from TailoredSkillGroups
+	skillList := make([]JSONResumeSkill, len(tailored.SkillGroups))
+	for i, sg := range tailored.SkillGroups {
+		skillList[i] = JSONResumeSkill{
+			Name:     sg.Category,
+			Keywords: sg.Skills,
+		}
+	}
+
+	res := &JSONResume{
+		Schema:       schemaURL,
+		Basics:       basics,
+		Work:         workList,
+		Education:    eduList,
+		Certificates: certList,
+		Skills:       skillList,
+		Projects:     projList,
+	}
+
+	// Restore unmapped sections if profile was provided
+	if profile != nil && profile.Metadata != nil {
+		if rawUnmapped, ok := profile.Metadata["jsonresume_unmapped"]; ok && rawUnmapped != nil {
+			data, err := json.Marshal(rawUnmapped)
+			if err == nil {
+				var aux struct {
+					Schema        string                     `json:"$schema"`
+					Volunteer     []JSONResumeVolunteer      `json:"volunteer"`
+					Awards        []JSONResumeAward          `json:"awards"`
+					Publications  []JSONResumePublication    `json:"publications"`
+					Languages     []JSONResumeLanguage       `json:"languages"`
+					Interests     []JSONResumeInterest       `json:"interests"`
+					References    []JSONResumeReference      `json:"references"`
+					Meta          *JSONResumeMeta            `json:"meta"`
+					ExtraUnmapped map[string]json.RawMessage `json:"extra_unmapped"`
+				}
+				if err := json.Unmarshal(data, &aux); err == nil {
+					if aux.Schema != "" {
+						res.Schema = aux.Schema
+					}
+					if len(aux.Volunteer) > 0 {
+						res.Volunteer = aux.Volunteer
+					}
+					if len(aux.Awards) > 0 {
+						res.Awards = aux.Awards
+					}
+					if len(aux.Publications) > 0 {
+						res.Publications = aux.Publications
+					}
+					if len(aux.Languages) > 0 {
+						res.Languages = aux.Languages
+					}
+					if len(aux.Interests) > 0 {
+						res.Interests = aux.Interests
+					}
+					if len(aux.References) > 0 {
+						res.References = aux.References
+					}
+					if aux.Meta != nil {
+						res.Meta = aux.Meta
+					}
+					if len(aux.ExtraUnmapped) > 0 {
+						res.Unmapped = aux.ExtraUnmapped
+					}
+				}
+			}
+		}
+	}
+
+	return res, nil
+}
+
+// Helper types & functions for skill matching
+
+type skillEntry struct {
+	skill   domain.Skill
+	pattern *regexp.Regexp
+}
+
+type skillMatcher struct {
+	entries []skillEntry
+}
+
+func newSkillMatcher(skills []domain.Skill) *skillMatcher {
+	var entries []skillEntry
+	for _, s := range skills {
+		terms := []string{s.Name}
+		terms = append(terms, s.Keywords...)
+
+		var validTerms []string
+		for _, t := range terms {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				validTerms = append(validTerms, regexp.QuoteMeta(t))
+			}
+		}
+
+		if len(validTerms) > 0 {
+			patternStr := `(?i)\b(?:` + strings.Join(validTerms, "|") + `)\b`
+			re, err := regexp.Compile(patternStr)
+			if err == nil {
+				entries = append(entries, skillEntry{
+					skill:   s,
+					pattern: re,
+				})
+			}
+		}
+	}
+	return &skillMatcher{entries: entries}
+}
+
+func (m *skillMatcher) findMatchingSkills(text string) []domain.Skill {
+	if m == nil || strings.TrimSpace(text) == "" {
+		return nil
+	}
+
+	var matched []domain.Skill
+	seen := make(map[string]bool)
+
+	for _, entry := range m.entries {
+		if entry.pattern.MatchString(text) {
+			if !seen[entry.skill.ID] {
+				seen[entry.skill.ID] = true
+				matched = append(matched, entry.skill)
+			}
+		}
+	}
+	return matched
+}
+
+func mergeUniqueSkills(a, b []domain.Skill) []domain.Skill {
+	seen := make(map[string]bool)
+	var merged []domain.Skill
+	for _, s := range a {
+		if !seen[s.ID] {
+			seen[s.ID] = true
+			merged = append(merged, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s.ID] {
+			seen[s.ID] = true
+			merged = append(merged, s)
+		}
+	}
+	return merged
+}
+
+func extractStringSlice(val any) []string {
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case []string:
+		return v
+	case []any:
+		var result []string
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}

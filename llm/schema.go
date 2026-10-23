@@ -1,0 +1,191 @@
+package llm
+
+// GenerationResponseSchema returns the canonical JSON Schema for domain.GenerationResponse
+// (TailoredContent and GapReport), enforcing strict validation keywords (required, additionalProperties: false).
+func GenerationResponseSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"tailored_content": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"summary": map[string]any{
+						"type":        "string",
+						"description": "Professional executive summary tailored to target role",
+					},
+					"skill_groups": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"category": map[string]any{"type": "string"},
+								"skills": map[string]any{
+									"type":  "array",
+									"items": map[string]any{"type": "string"},
+								},
+								"source_skill_ids": map[string]any{
+									"type":  "array",
+									"items": map[string]any{"type": "string"},
+								},
+							},
+							"required":             []string{"category", "skills"},
+							"additionalProperties": false,
+						},
+					},
+					"experiences": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"source_entity_id": map[string]any{
+									"type":        "string",
+									"description": "Exact UUID of the Master WorkExperience",
+								},
+								"company":    map[string]any{"type": "string"},
+								"role_title": map[string]any{"type": "string"},
+								"start_date": map[string]any{"type": "string"},
+								"end_date":   map[string]any{"type": "string"},
+								"location": map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"city":         map[string]any{"type": "string"},
+										"region":       map[string]any{"type": "string"},
+										"country_code": map[string]any{"type": "string"},
+									},
+								},
+								"hours_per_week":     map[string]any{"type": "integer"},
+								"supervisor_name":    map[string]any{"type": "string"},
+								"supervisor_contact": map[string]any{"type": "string"},
+								"duties_summary":     map[string]any{"type": "string"},
+								"bullets": map[string]any{
+									"type": "array",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"text": map[string]any{
+												"type":        "string",
+												"description": "Tailored accomplishment bullet",
+											},
+											"source_fact_ids": map[string]any{
+												"type":        "array",
+												"items":       map[string]any{"type": "string"},
+												"description": "UUIDs of Facts under this WorkExperience that justify this bullet",
+											},
+											"source_skill_ids": map[string]any{
+												"type":  "array",
+												"items": map[string]any{"type": "string"},
+											},
+										},
+										"required":             []string{"text", "source_fact_ids"},
+										"additionalProperties": false,
+									},
+								},
+							},
+							"required":             []string{"source_entity_id", "company", "role_title", "start_date", "bullets"},
+							"additionalProperties": false,
+						},
+					},
+					"projects": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"source_entity_id": map[string]any{"type": "string"},
+								"name":             map[string]any{"type": "string"},
+								"role":             map[string]any{"type": "string"},
+								"url":              map[string]any{"type": "string"},
+								"start_date":       map[string]any{"type": "string"},
+								"end_date":         map[string]any{"type": "string"},
+								"summary":          map[string]any{"type": "string"},
+								"bullets": map[string]any{
+									"type": "array",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"text":             map[string]any{"type": "string"},
+											"source_fact_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+											"source_skill_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+										},
+										"required":             []string{"text", "source_fact_ids"},
+										"additionalProperties": false,
+									},
+								},
+							},
+							"required":             []string{"source_entity_id", "name", "bullets"},
+							"additionalProperties": false,
+						},
+					},
+					"education": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"source_entity_id": map[string]any{"type": "string"},
+								"institution":      map[string]any{"type": "string"},
+								"degree":           map[string]any{"type": "string"},
+								"field":            map[string]any{"type": "string"},
+								"start_date":       map[string]any{"type": "string"},
+								"end_date":         map[string]any{"type": "string"},
+								"score":            map[string]any{"type": "string"},
+							},
+							"required":             []string{"source_entity_id", "institution", "degree", "field", "start_date"},
+							"additionalProperties": false,
+						},
+					},
+					"certifications": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"source_entity_id": map[string]any{"type": "string"},
+								"name":             map[string]any{"type": "string"},
+								"issuer":           map[string]any{"type": "string"},
+								"date":             map[string]any{"type": "string"},
+								"url":              map[string]any{"type": "string"},
+							},
+							"required":             []string{"source_entity_id", "name", "issuer", "date"},
+							"additionalProperties": false,
+						},
+					},
+				},
+				"required":             []string{"summary", "skill_groups", "experiences", "projects", "education", "certifications"},
+				"additionalProperties": false,
+			},
+			"gap_report": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"overall_match_summary": map[string]any{
+						"type":        "string",
+						"description": "Concise summary of alignment against target requirements",
+					},
+					"missing_requirements": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"requirement": map[string]any{
+									"type":        "string",
+									"description": "Target requirement or qualification missing from master profile",
+								},
+								"importance": map[string]any{
+									"type": "string",
+									"enum": []string{"critical", "preferred", "nice_to_have"},
+								},
+								"clarifying_prompt": map[string]any{
+									"type":        "string",
+									"description": "Question to prompt user for missing experience or facts",
+								},
+							},
+							"required":             []string{"requirement", "importance", "clarifying_prompt"},
+							"additionalProperties": false,
+						},
+					},
+				},
+				"required":             []string{"overall_match_summary", "missing_requirements"},
+				"additionalProperties": false,
+			},
+		},
+		"required":             []string{"tailored_content", "gap_report"},
+		"additionalProperties": false,
+	}
+}

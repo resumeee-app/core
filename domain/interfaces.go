@@ -110,3 +110,31 @@ type LLMProvider interface {
 	Name() string
 	GenerateTailoredResume(ctx context.Context, req GenerationRequest) (*GenerationResponse, error)
 }
+
+// OutputFormat designates the targeted rendering medium.
+type OutputFormat string
+
+const (
+	OutputFormatHTML      OutputFormat = "html"
+	OutputFormatMarkdown  OutputFormat = "markdown"
+	OutputFormatPlainText OutputFormat = "text"
+)
+
+// RenderOutput contains the rendered text artifacts across all three supported formats.
+type RenderOutput struct {
+	HTML      string `json:"html"`
+	Markdown  string `json:"markdown"`
+	PlainText string `json:"plain_text"`
+}
+
+// TemplateRenderer defines the external testing and execution seam for resume rendering.
+type TemplateRenderer interface {
+	// Render compiles and executes all three formats in a TemplateSet against candidate profile and tailored content.
+	Render(ctx context.Context, tmpl *TemplateSet, profile *Profile, content *TailoredContent) (*RenderOutput, error)
+
+	// RenderFormat executes a single template string targeting the designated format.
+	RenderFormat(format OutputFormat, tmplStr string, data any) (string, error)
+
+	// Validate checks that all templates within a TemplateSet parse cleanly and cite only whitelisted functions.
+	Validate(tmpl *TemplateSet) error
+}

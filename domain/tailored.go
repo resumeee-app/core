@@ -43,6 +43,9 @@ type TailoredExperience struct {
 	Bullets           []TailoredBullet `json:"bullets"`
 }
 
+// BulletPoints provides backward-compatibility for template property access.
+func (e TailoredExperience) BulletPoints() []TailoredBullet { return e.Bullets }
+
 // TailoredProject contains tailored bullets for a specific Project entity.
 type TailoredProject struct {
 	SourceEntityID string           `json:"source_entity_id"` // Must match a Project.ID
@@ -55,6 +58,9 @@ type TailoredProject struct {
 	Bullets        []TailoredBullet `json:"bullets"`
 }
 
+// BulletPoints provides backward-compatibility for template property access.
+func (p TailoredProject) BulletPoints() []TailoredBullet { return p.Bullets }
+
 // TailoredEducation captures tailored academic achievements.
 type TailoredEducation struct {
 	SourceEntityID string           `json:"source_entity_id"` // Must match an Education.ID
@@ -66,6 +72,9 @@ type TailoredEducation struct {
 	Score          string           `json:"score,omitempty"`
 	Bullets        []TailoredBullet `json:"bullets,omitempty"`
 }
+
+// BulletPoints provides backward-compatibility for template property access.
+func (d TailoredEducation) BulletPoints() []TailoredBullet { return d.Bullets }
 
 // TailoredCert captures tailored professional credentials.
 type TailoredCert struct {

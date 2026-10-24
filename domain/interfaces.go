@@ -95,6 +95,7 @@ type GenerationRequest struct {
 	MasterProfile      *MasterProfileSnapshot
 	GlobalRules        string           // Tier 1
 	PresetInstructions string           // Tier 2
+	Preset             *Preset          // Tier 2 Preset metadata & overrides
 	BranchContext      Branch           // Tier 3
 	PriorVersion       *TailoredContent // For iterative refinements
 }

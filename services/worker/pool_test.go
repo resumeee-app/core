@@ -610,3 +610,57 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestPool_RecoverStaleJobs(t *testing.T) {
+	env := setupTestWorkerEnv(t)
+	ctx := context.Background()
+
+	// Create pending version and processing version
+	v1 := &domain.BranchVersion{
+		ID:                 "ver-stale-pending",
+		BranchID:           env.branchID,
+		Status:             domain.VersionStatusPending,
+		MasterRevisionUsed: 1,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, v1); err != nil {
+		t.Fatalf("failed to create v1: %v", err)
+	}
+
+	v2 := &domain.BranchVersion{
+		ID:                 "ver-stale-processing",
+		BranchID:           env.branchID,
+		Status:             domain.VersionStatusProcessing,
+		MasterRevisionUsed: 1,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
+		t.Fatalf("failed to create v2: %v", err)
+	}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		BranchRepo: env.branchRepo,
+	})
+
+	if err := pool.RecoverStaleJobs(ctx, "server restart recovery test"); err != nil {
+		t.Fatalf("RecoverStaleJobs failed: %v", err)
+	}
+
+	refetched1, err := env.branchRepo.GetVersion(ctx, env.branchID, v1.ID)
+	if err != nil {
+		t.Fatalf("failed to get v1: %v", err)
+	}
+	if refetched1.Status != domain.VersionStatusFailed {
+		t.Errorf("expected v1 status failed, got %s", refetched1.Status)
+	}
+	if refetched1.ErrorMessage != "server restart recovery test" {
+		t.Errorf("expected error message 'server restart recovery test', got %q", refetched1.ErrorMessage)
+	}
+
+	refetched2, err := env.branchRepo.GetVersion(ctx, env.branchID, v2.ID)
+	if err != nil {
+		t.Fatalf("failed to get v2: %v", err)
+	}
+	if refetched2.Status != domain.VersionStatusFailed {
+		t.Errorf("expected v2 status failed, got %s", refetched2.Status)
+	}
+}
+

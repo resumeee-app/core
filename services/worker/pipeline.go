@@ -102,6 +102,7 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 		MasterProfile:      snapshot,
 		GlobalRules:        prof.GlobalWritingRules,
 		PresetInstructions: presetInstructions,
+		Preset:             preset,
 		BranchContext:      *branch,
 		PriorVersion:       priorContent,
 	}

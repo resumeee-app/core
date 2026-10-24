@@ -144,6 +144,9 @@ func (r *Registry) SetDefault(provider, model string) {
 // 4. Master Profile defaults (profile.DefaultProvider, profile.DefaultModel)
 // 5. System fallbacks (Registry default provider and model)
 func (r *Registry) Resolve(req domain.GenerationRequest, preset *domain.Preset, profile *domain.Profile) (domain.LLMProvider, string, error) {
+	if preset == nil && req.Preset != nil {
+		preset = req.Preset
+	}
 	r.mu.RLock()
 	hasProviders := len(r.providers) > 0
 	r.mu.RUnlock()

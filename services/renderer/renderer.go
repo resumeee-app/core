@@ -197,6 +197,7 @@ func Validate(tmpl *domain.TemplateSet) error {
 	}
 
 	synth := SyntheticRenderContext()
+	synth.CSSStyles = htmltemplate.CSS(tmpl.CSSStyles)
 
 	if tmpl.HTMLTemplate != "" {
 		ht, err := htmltemplate.New("html").Funcs(SafeFuncMap).Parse(tmpl.HTMLTemplate)

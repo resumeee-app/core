@@ -347,3 +347,167 @@ func TestService_GenerateVersion(t *testing.T) {
 		t.Errorf("expected enqueued version ID %s, got %s", ver.ID, env.enqueuer.jobs[0].VersionID)
 	}
 }
+
+// 5. Rollback/Promotion updates LastSyncedMasterRevision and reflects staleness
+func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
+	env := setupTestBranchEnv(t, 10)
+	ctx := context.Background()
+
+	// Obtain current profile revision as rev1
+	prof, err := env.profileRepo.GetProfile(ctx, env.defaultUser)
+	if err != nil {
+		t.Fatalf("failed to get profile: %v", err)
+	}
+	rev1 := prof.MasterRevision
+
+	// Update initial v1 to have MasterRevisionUsed = rev1
+	v1, err := env.branchRepo.GetVersion(ctx, env.branchID, env.v1ID)
+	if err != nil {
+		t.Fatalf("failed to get v1: %v", err)
+	}
+	v1.MasterRevisionUsed = rev1
+	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+		t.Fatalf("failed to complete v1: %v", err)
+	}
+
+	// Advance profile master revision to rev2
+	rev2, err := env.profileRepo.IncrementMasterRevision(ctx, env.defaultUser)
+	if err != nil {
+		t.Fatalf("failed to increment master revision: %v", err)
+	}
+
+	// Create and complete v2 at MasterRevisionUsed = rev2
+	v2 := &domain.BranchVersion{
+		ID:                 "ver-v2-test",
+		BranchID:           env.branchID,
+		Status:             domain.VersionStatusCompleted,
+		MasterRevisionUsed: rev2,
+		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		SourceType:         domain.SourceTypeLLMGeneration,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
+		t.Fatalf("failed to create v2: %v", err)
+	}
+	if err := env.branchRepo.CompleteVersion(ctx, v2); err != nil {
+		t.Fatalf("failed to complete v2: %v", err)
+	}
+
+	// Fetch branch - should be active on v2 and not stale (rev2 == profile rev2)
+	b, err := env.svc.GetBranch(ctx, env.defaultUser, env.branchID)
+	if err != nil {
+		t.Fatalf("failed to get branch: %v", err)
+	}
+	if b.ActiveVersionID == nil || *b.ActiveVersionID != v2.ID {
+		t.Fatalf("expected ActiveVersionID=%s, got %v", v2.ID, b.ActiveVersionID)
+	}
+	if b.IsStale {
+		t.Fatalf("expected branch not stale when active on v2 (rev %d), but got is_stale=true", rev2)
+	}
+
+	// Rollback active version to v1 (which had MasterRevisionUsed = rev1)
+	b.ActiveVersionID = &env.v1ID
+	updated, err := env.svc.UpdateBranch(ctx, b)
+	if err != nil {
+		t.Fatalf("UpdateBranch rollback failed: %v", err)
+	}
+
+	if updated.LastSyncedMasterRevision != rev1 {
+		t.Errorf("expected LastSyncedMasterRevision to be rolled back to %d, got %d", rev1, updated.LastSyncedMasterRevision)
+	}
+	if !updated.IsStale {
+		t.Errorf("expected branch to be marked stale after rolling back to rev %d (profile is rev %d)", rev1, rev2)
+	}
+
+	// Verify persistence: fetching branch anew reports IsStale = true
+	refetched, err := env.svc.GetBranch(ctx, env.defaultUser, env.branchID)
+	if err != nil {
+		t.Fatalf("failed to refetch branch: %v", err)
+	}
+	if refetched.LastSyncedMasterRevision != rev1 {
+		t.Errorf("persisted LastSyncedMasterRevision expected %d, got %d", rev1, refetched.LastSyncedMasterRevision)
+	}
+	if !refetched.IsStale {
+		t.Errorf("persisted branch expected IsStale=true, got false")
+	}
+}
+
+// 6. Foreign, non-existent, or incomplete ActiveVersionID must be rejected
+func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
+	env := setupTestBranchEnv(t, 10)
+	ctx := context.Background()
+
+	// Create Branch 2 with version vOther
+	b2 := &domain.Branch{
+		ID:            "branch-other-" + uuid.New().String(),
+		UserID:        env.defaultUser,
+		Name:          "Other Branch",
+		TemplateSetID: renderer.TemplateStandardCleanID,
+	}
+	created2, err := env.svc.CreateBranch(ctx, b2)
+	if err != nil {
+		t.Fatalf("failed to create branch 2: %v", err)
+	}
+
+	vOther := &domain.BranchVersion{
+		ID:                 "ver-other-branch",
+		BranchID:           created2.ID,
+		Status:             domain.VersionStatusCompleted,
+		MasterRevisionUsed: 1,
+		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		SourceType:         domain.SourceTypeLLMGeneration,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, vOther); err != nil {
+		t.Fatalf("failed to create vOther: %v", err)
+	}
+	if err := env.branchRepo.CompleteVersion(ctx, vOther); err != nil {
+		t.Fatalf("failed to complete vOther: %v", err)
+	}
+
+	b, err := env.svc.GetBranch(ctx, env.defaultUser, env.branchID)
+	if err != nil {
+		t.Fatalf("failed to get branch: %v", err)
+	}
+
+	// 1. Cross-branch version assignment
+	b.ActiveVersionID = &vOther.ID
+	_, err = env.svc.UpdateBranch(ctx, b)
+	if err == nil {
+		t.Fatalf("expected error assigning foreign branch version, got nil")
+	}
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Errorf("expected domain.ErrValidation, got: %v", err)
+	}
+
+	// 2. Non-existent version assignment
+	nonExistent := "ver-does-not-exist"
+	b.ActiveVersionID = &nonExistent
+	_, err = env.svc.UpdateBranch(ctx, b)
+	if err == nil {
+		t.Fatalf("expected error assigning non-existent version, got nil")
+	}
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Errorf("expected domain.ErrValidation, got: %v", err)
+	}
+
+	// 3. Pending/incomplete version assignment
+	vPending := &domain.BranchVersion{
+		ID:                 "ver-pending-test",
+		BranchID:           env.branchID,
+		Status:             domain.VersionStatusPending,
+		MasterRevisionUsed: 1,
+		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		SourceType:         domain.SourceTypeLLMGeneration,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, vPending); err != nil {
+		t.Fatalf("failed to create pending version: %v", err)
+	}
+	b.ActiveVersionID = &vPending.ID
+	_, err = env.svc.UpdateBranch(ctx, b)
+	if err == nil {
+		t.Fatalf("expected error assigning pending version as active, got nil")
+	}
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Errorf("expected domain.ErrValidation, got: %v", err)
+	}
+}
+

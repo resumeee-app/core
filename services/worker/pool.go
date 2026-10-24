@@ -142,6 +142,14 @@ func (p *Pool) Stop() {
 	}
 }
 
+// RecoverStaleJobs recovers interrupted jobs left in pending or processing states by failing them with the given reason.
+func (p *Pool) RecoverStaleJobs(ctx context.Context, reason string) error {
+	if p.branchRepo == nil {
+		return nil
+	}
+	return p.branchRepo.FailInterruptedVersions(ctx, reason)
+}
+
 func (p *Pool) workerLoop(ctx context.Context, workerID int) {
 	defer p.wg.Done()
 

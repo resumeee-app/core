@@ -249,8 +249,8 @@ const (
 // BranchVersion is an immutable snapshot tracking its own async generation lifecycle and rendered outputs.
 type BranchVersion struct {
 	ID                 string           `json:"id" gorm:"primaryKey;type:text"`
-	BranchID           string           `json:"branch_id" gorm:"index;not null"`
-	VersionNumber      int              `json:"version_number" gorm:"not null"` // Sequential per branch: 1, 2, 3...
+	BranchID           string           `json:"branch_id" gorm:"uniqueIndex:idx_branch_version;not null"`
+	VersionNumber      int              `json:"version_number" gorm:"uniqueIndex:idx_branch_version;not null"` // Sequential per branch: 1, 2, 3...
 	Status             VersionStatus    `json:"status" gorm:"index;not null"`
 	MasterRevisionUsed int64            `json:"master_revision_used"`
 	TemplateSetIDUsed  string           `json:"template_set_id_used"`

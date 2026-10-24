@@ -12,6 +12,11 @@ import (
 
 func sampleSnapshot() *domain.MasterProfileSnapshot {
 	endDate := "2023-12-31"
+	hours := 40
+	contact := domain.ContactDetail{Type: domain.ContactTypePhone, Value: "+1-555-0199"}
+	projEnd := "2022-12-31"
+	eduEnd := "2018-05-31"
+
 	return &domain.MasterProfileSnapshot{
 		Profile: domain.Profile{
 			ID:       "prof-1",
@@ -24,11 +29,13 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 		},
 		Experiences: []domain.WorkExperience{
 			{
-				ID:        "exp-1",
-				Company:   "Acme Corp",
-				RoleTitle: "Principal Engineer",
-				StartDate: "2021-01-01",
-				EndDate:   &endDate,
+				ID:             "exp-1",
+				Company:        "Acme Corp",
+				RoleTitle:      "Principal Engineer",
+				StartDate:      "2021-01-01",
+				EndDate:        &endDate,
+				CompanyContact: &contact,
+				HoursPerWeek:   &hours,
 				Skills: []domain.Skill{
 					{ID: "skill-exp-nested", Name: "Postgres", Category: "Databases"},
 				},
@@ -55,8 +62,9 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 		},
 		Projects: []domain.Project{
 			{
-				ID:   "proj-1",
-				Name: "OpenTelemetry Collector Exporter",
+				ID:        "proj-1",
+				Name:      "OpenTelemetry Collector Exporter",
+				EndDate:   &projEnd,
 				Skills: []domain.Skill{
 					{ID: "skill-proj-nested", Name: "OTel", Category: "Observability"},
 				},
@@ -78,6 +86,7 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 				Degree:      "B.S.",
 				Field:       "Computer Science",
 				StartDate:   "2014-09-01",
+				EndDate:     &eduEnd,
 				Facts: []domain.Fact{
 					{
 						ID:        "fact-edu-1",
@@ -848,3 +857,125 @@ func TestValidatorInterfaceAndNew(t *testing.T) {
 		t.Fatalf("v.ValidateStrict failed: err=%v", err)
 	}
 }
+
+func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
+	snapshot := sampleSnapshot()
+	snapshot.Experiences[0].Location = domain.Location{City: "San Francisco", Region: "CA", CountryCode: "USA"}
+
+	adversarialEndDate := "2099-01-01"
+	adversarialContent := &domain.TailoredContent{
+		Summary: "Adversarial LLM content",
+		Experiences: []domain.TailoredExperience{
+			{
+				SourceEntityID: "exp-1",
+				Company:        "Hallucinated Stripe Inc",
+				RoleTitle:      "Chief Executive Officer",
+				StartDate:      "1990-01-01",
+				EndDate:        &adversarialEndDate,
+				Location:       domain.Location{City: "Atlantis", CountryCode: "XX"},
+				Bullets: []domain.TailoredBullet{
+					{
+						Text:          "Architected streaming pipeline handling 100k eps.",
+						SourceFactIDs: []string{"fact-exp-1"},
+					},
+				},
+			},
+		},
+		Projects: []domain.TailoredProject{
+			{
+				SourceEntityID: "proj-1",
+				Name:           "Hallucinated Linux Kernel",
+				Role:           "Lead Architect",
+				URL:            "https://fake.example.com",
+				StartDate:      "1991-01-01",
+				Bullets: []domain.TailoredBullet{
+					{
+						Text:          "Maintained custom exporter plugin",
+						SourceFactIDs: []string{"fact-proj-1"},
+					},
+				},
+			},
+		},
+		Education: []domain.TailoredEducation{
+			{
+				SourceEntityID: "edu-1",
+				Institution:    "Hallucinated Oxford University",
+				Degree:         "Ph.D.",
+				Field:          "Astrophysics",
+				StartDate:      "1980-01-01",
+				Bullets: []domain.TailoredBullet{
+					{
+						Text:          "Published research on distributed consensus",
+						SourceFactIDs: []string{"fact-edu-1"},
+					},
+				},
+			},
+		},
+		Certifications: []domain.TailoredCert{
+			{
+				SourceEntityID: "cert-1",
+				Name:           "Hallucinated Nobel Prize",
+				Issuer:         "Nobel Committee",
+				Date:           "1901-01-01",
+				URL:            "https://fake-nobel.com",
+			},
+		},
+	}
+
+	res, err := validator.Validate(adversarialContent, snapshot, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 1. Experience headers must be strictly reconciled to snapshot values
+	exp := res.SanitizedContent.Experiences[0]
+	if exp.Company != "Acme Corp" {
+		t.Errorf("expected Company 'Acme Corp', got '%s'", exp.Company)
+	}
+	if exp.RoleTitle != "Principal Engineer" {
+		t.Errorf("expected RoleTitle 'Principal Engineer', got '%s'", exp.RoleTitle)
+	}
+	if exp.StartDate != "2021-01-01" {
+		t.Errorf("expected StartDate '2021-01-01', got '%s'", exp.StartDate)
+	}
+	if exp.EndDate == nil || *exp.EndDate != "2023-12-31" {
+		t.Errorf("expected EndDate '2023-12-31', got '%v'", exp.EndDate)
+	}
+	if exp.Location.City != "San Francisco" {
+		t.Errorf("expected Location.City 'San Francisco', got '%s'", exp.Location.City)
+	}
+
+	// 2. Project headers must be strictly reconciled to snapshot values
+	proj := res.SanitizedContent.Projects[0]
+	if proj.Name != "OpenTelemetry Collector Exporter" {
+		t.Errorf("expected Project Name 'OpenTelemetry Collector Exporter', got '%s'", proj.Name)
+	}
+
+	// 3. Education headers must be strictly reconciled to snapshot values
+	edu := res.SanitizedContent.Education[0]
+	if edu.Institution != "MIT" {
+		t.Errorf("expected Institution 'MIT', got '%s'", edu.Institution)
+	}
+	if edu.Degree != "B.S." {
+		t.Errorf("expected Degree 'B.S.', got '%s'", edu.Degree)
+	}
+	if edu.Field != "Computer Science" {
+		t.Errorf("expected Field 'Computer Science', got '%s'", edu.Field)
+	}
+	if edu.StartDate != "2014-09-01" {
+		t.Errorf("expected StartDate '2014-09-01', got '%s'", edu.StartDate)
+	}
+
+	// 4. Certification headers must be strictly reconciled to snapshot values
+	cert := res.SanitizedContent.Certifications[0]
+	if cert.Name != "Certified Kubernetes Administrator" {
+		t.Errorf("expected Cert Name 'Certified Kubernetes Administrator', got '%s'", cert.Name)
+	}
+	if cert.Issuer != "CNCF" {
+		t.Errorf("expected Cert Issuer 'CNCF', got '%s'", cert.Issuer)
+	}
+	if cert.Date != "2022-05-01" {
+		t.Errorf("expected Cert Date '2022-05-01', got '%s'", cert.Date)
+	}
+}
+

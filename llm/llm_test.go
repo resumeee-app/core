@@ -845,3 +845,132 @@ func TestNewRegistry_FromConfig(t *testing.T) {
 		t.Errorf("expected default provider gemini, got %s", reg.DefaultProvider())
 	}
 }
+
+func TestExtractJSON_Resilience(t *testing.T) {
+	expectedJSON := `{"tailored_content":{"summary":"test"}}`
+
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Clean JSON",
+			input:    `{"tailored_content":{"summary":"test"}}`,
+			expected: expectedJSON,
+		},
+		{
+			name:     "Markdown fenced json",
+			input:    "```json\n" + expectedJSON + "\n```",
+			expected: expectedJSON,
+		},
+		{
+			name:     "Markdown fenced uppercase JSON",
+			input:    "```JSON\n" + expectedJSON + "\n```",
+			expected: expectedJSON,
+		},
+		{
+			name:     "Markdown fenced without tag",
+			input:    "```\n" + expectedJSON + "\n```",
+			expected: expectedJSON,
+		},
+		{
+			name:     "Conversational preamble and postscript with fences",
+			input:    "Here is the tailored resume:\n```json\n" + expectedJSON + "\n```\nHope this helps!",
+			expected: expectedJSON,
+		},
+		{
+			name:     "Conversational wrapper without fences",
+			input:    "Sure, here is your JSON payload: " + expectedJSON + " - please verify.",
+			expected: expectedJSON,
+		},
+		{
+			name:     "Preamble with braces before fenced JSON",
+			input:    "For role {staff engineer}:\n```json\n" + expectedJSON + "\n```\nDone.",
+			expected: expectedJSON,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ExtractJSON(tc.input)
+			if got != tc.expected {
+				t.Errorf("ExtractJSON() = %q, want %q", got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCompatProvider_SuccessWithConversationalPreamble(t *testing.T) {
+	responseJSON, err := json.Marshal(sampleResponse)
+	if err != nil {
+		t.Fatalf("failed to marshal sample response: %v", err)
+	}
+
+	conversationalText := "Here is your requested resume JSON:\n```json\n" + string(responseJSON) + "\n```\nLet me know if you need any adjustments!"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		compatResp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": conversationalText,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(compatResp)
+	}))
+	defer server.Close()
+
+	provider := NewCompatProvider(server.URL, "test-key", WithHTTPClient(server.Client()))
+	resp, err := provider.GenerateTailoredResume(context.Background(), sampleRequest())
+	if err != nil {
+		t.Fatalf("GenerateTailoredResume failed on conversational preamble: %v", err)
+	}
+
+	if resp.TailoredContent.Summary != sampleResponse.TailoredContent.Summary {
+		t.Errorf("summary mismatch: got %q, want %q", resp.TailoredContent.Summary, sampleResponse.TailoredContent.Summary)
+	}
+}
+
+func TestRegistry_PresetOverridePropagationThroughGenerationRequest(t *testing.T) {
+	anthropic := &dummyProvider{name: "anthropic"}
+	gemini := &dummyProvider{name: "gemini"}
+
+	reg := &Registry{
+		providers: map[string]domain.LLMProvider{
+			"anthropic": anthropic,
+			"gemini":    gemini,
+		},
+		defaultProvider: "gemini",
+		defaultModel:    "gemini-2.5-pro",
+	}
+
+	// Request carries Preset with provider and model overrides, while preset parameter to Resolve is nil
+	req := domain.GenerationRequest{
+		BranchContext: domain.Branch{}, // no branch overrides
+		Preset: &domain.Preset{
+			ProviderOverride: "anthropic",
+			ModelOverride:    "claude-3-7-sonnet-20250219",
+		},
+	}
+	profile := &domain.Profile{
+		DefaultProvider: "gemini",
+		DefaultModel:    "gemini-pro-default",
+	}
+
+	provider, model, err := reg.Resolve(req, nil, profile)
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+
+	if provider.Name() != "anthropic" {
+		t.Errorf("expected provider 'anthropic' from req.Preset, got %s", provider.Name())
+	}
+	if model != "claude-3-7-sonnet-20250219" {
+		t.Errorf("expected model 'claude-3-7-sonnet-20250219' from req.Preset, got %s", model)
+	}
+}
+

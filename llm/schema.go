@@ -1,5 +1,53 @@
 package llm
 
+import (
+	"regexp"
+	"strings"
+)
+
+var (
+	codeFenceRegex = regexp.MustCompile("(?s)```(?:json|JSON)?\\s*([\\s\\S]*?)\\s*```")
+)
+
+// ExtractJSON extracts raw JSON from conversational wrappers, markdown fences, or raw text.
+func ExtractJSON(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return ""
+	}
+
+	// 1. Look for markdown code fence
+	if matches := codeFenceRegex.FindStringSubmatch(trimmed); len(matches) > 1 {
+		inner := strings.TrimSpace(matches[1])
+		firstObj := strings.Index(inner, "{")
+		lastObj := strings.LastIndex(inner, "}")
+		if firstObj != -1 && lastObj > firstObj {
+			return inner[firstObj : lastObj+1]
+		}
+		firstArr := strings.Index(inner, "[")
+		lastArr := strings.LastIndex(inner, "]")
+		if firstArr != -1 && lastArr > firstArr {
+			return inner[firstArr : lastArr+1]
+		}
+		return inner
+	}
+
+	// 2. Greedy search for outermost matching JSON braces without fences
+	firstBrace := strings.Index(trimmed, "{")
+	lastBrace := strings.LastIndex(trimmed, "}")
+	if firstBrace != -1 && lastBrace > firstBrace {
+		return trimmed[firstBrace : lastBrace+1]
+	}
+
+	firstBracket := strings.Index(trimmed, "[")
+	lastBracket := strings.LastIndex(trimmed, "]")
+	if firstBracket != -1 && lastBracket > firstBracket {
+		return trimmed[firstBracket : lastBracket+1]
+	}
+
+	return trimmed
+}
+
 // GenerationResponseSchema returns the canonical JSON Schema for domain.GenerationResponse
 // (TailoredContent and GapReport), enforcing strict validation keywords (required, additionalProperties: false).
 func GenerationResponseSchema() map[string]any {

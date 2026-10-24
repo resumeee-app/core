@@ -117,6 +117,23 @@ func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*dom
 }
 
 func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error) {
+	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" {
+		ver, err := s.branchRepo.GetVersion(ctx, "", *branch.ActiveVersionID)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				return nil, fmt.Errorf("%w: active version %s not found", domain.ErrValidation, *branch.ActiveVersionID)
+			}
+			return nil, err
+		}
+		if ver.BranchID != branch.ID {
+			return nil, fmt.Errorf("%w: version %s belongs to branch %s, not %s", domain.ErrValidation, ver.ID, ver.BranchID, branch.ID)
+		}
+		if ver.Status != domain.VersionStatusCompleted && ver.Status != domain.VersionStatusCompletedWithWarnings {
+			return nil, fmt.Errorf("%w: active version %s must be completed (got %s)", domain.ErrValidation, ver.ID, ver.Status)
+		}
+		branch.LastSyncedMasterRevision = ver.MasterRevisionUsed
+	}
+
 	if err := s.branchRepo.UpdateBranch(ctx, branch); err != nil {
 		return nil, err
 	}

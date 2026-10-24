@@ -190,26 +190,41 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				continue
 			}
 
-			if _, ok := validExperiences[exp.SourceEntityID]; !ok {
+			origExp, ok := validExperiences[exp.SourceEntityID]
+			if !ok {
 				warnings = append(warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded experience '%s'", exp.SourceEntityID))
 				continue
 			}
 
 			sanitizedBullets := sanitizeBullets("experience", exp.SourceEntityID, exp.Bullets, factRegistry, validSkills, &warnings)
 
-			sanitizedExp := exp
-			sanitizedExp.Bullets = sanitizedBullets
-			if exp.EndDate != nil {
-				end := *exp.EndDate
+			sanitizedExp := domain.TailoredExperience{
+				SourceEntityID:    origExp.ID,
+				Company:           origExp.Company,
+				RoleTitle:         origExp.RoleTitle,
+				StartDate:         origExp.StartDate,
+				Location:          origExp.Location,
+				CompanyLocation:   origExp.CompanyLocation,
+				SupervisorName:    origExp.SupervisorName,
+				SupervisorContact: origExp.SupervisorContact,
+				Bullets:           sanitizedBullets,
+			}
+			if origExp.EndDate != nil {
+				end := *origExp.EndDate
 				sanitizedExp.EndDate = &end
 			}
-			if exp.CompanyContact != nil {
-				cc := *exp.CompanyContact
+			if origExp.CompanyContact != nil {
+				cc := *origExp.CompanyContact
 				sanitizedExp.CompanyContact = &cc
 			}
-			if exp.HoursPerWeek != nil {
-				hpw := *exp.HoursPerWeek
+			if origExp.HoursPerWeek != nil {
+				hpw := *origExp.HoursPerWeek
 				sanitizedExp.HoursPerWeek = &hpw
+			}
+			if exp.DutiesSummary != "" {
+				sanitizedExp.DutiesSummary = exp.DutiesSummary
+			} else {
+				sanitizedExp.DutiesSummary = origExp.DutiesSummary
 			}
 
 			sanitizedExperiences = append(sanitizedExperiences, sanitizedExp)
@@ -233,18 +248,30 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				continue
 			}
 
-			if _, ok := validProjects[proj.SourceEntityID]; !ok {
+			origProj, ok := validProjects[proj.SourceEntityID]
+			if !ok {
 				warnings = append(warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded project '%s'", proj.SourceEntityID))
 				continue
 			}
 
 			sanitizedBullets := sanitizeBullets("project", proj.SourceEntityID, proj.Bullets, factRegistry, validSkills, &warnings)
 
-			sanitizedProj := proj
-			sanitizedProj.Bullets = sanitizedBullets
-			if proj.EndDate != nil {
-				end := *proj.EndDate
+			sanitizedProj := domain.TailoredProject{
+				SourceEntityID: origProj.ID,
+				Name:           origProj.Name,
+				Role:           origProj.Role,
+				URL:            origProj.URL,
+				StartDate:      origProj.StartDate,
+				Bullets:        sanitizedBullets,
+			}
+			if origProj.EndDate != nil {
+				end := *origProj.EndDate
 				sanitizedProj.EndDate = &end
+			}
+			if proj.Summary != "" {
+				sanitizedProj.Summary = proj.Summary
+			} else {
+				sanitizedProj.Summary = origProj.Summary
 			}
 
 			sanitizedProjects = append(sanitizedProjects, sanitizedProj)
@@ -268,17 +295,25 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				continue
 			}
 
-			if _, ok := validEducation[edu.SourceEntityID]; !ok {
+			origEdu, ok := validEducation[edu.SourceEntityID]
+			if !ok {
 				warnings = append(warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded education '%s'", edu.SourceEntityID))
 				continue
 			}
 
 			sanitizedBullets := sanitizeBullets("education", edu.SourceEntityID, edu.Bullets, factRegistry, validSkills, &warnings)
 
-			sanitizedEdu := edu
-			sanitizedEdu.Bullets = sanitizedBullets
-			if edu.EndDate != nil {
-				end := *edu.EndDate
+			sanitizedEdu := domain.TailoredEducation{
+				SourceEntityID: origEdu.ID,
+				Institution:    origEdu.Institution,
+				Degree:         origEdu.Degree,
+				Field:          origEdu.Field,
+				StartDate:      origEdu.StartDate,
+				Score:          origEdu.Score,
+				Bullets:        sanitizedBullets,
+			}
+			if origEdu.EndDate != nil {
+				end := *origEdu.EndDate
 				sanitizedEdu.EndDate = &end
 			}
 
@@ -303,12 +338,20 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				continue
 			}
 
-			if _, ok := validCertifications[cert.SourceEntityID]; !ok {
+			origCert, ok := validCertifications[cert.SourceEntityID]
+			if !ok {
 				warnings = append(warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded certification '%s'", cert.SourceEntityID))
 				continue
 			}
 
-			sanitizedCert := cert
+			sanitizedCert := domain.TailoredCert{
+				SourceEntityID: origCert.ID,
+				Name:           origCert.Name,
+				Issuer:         origCert.Issuer,
+				Date:           origCert.Date,
+				URL:            origCert.URL,
+			}
+
 			sanitizedCerts = append(sanitizedCerts, sanitizedCert)
 			retainedEntityIDs[cert.SourceEntityID] = true
 		}

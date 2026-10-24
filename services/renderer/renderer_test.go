@@ -825,3 +825,22 @@ func TestRenderer_RenderNilInputs(t *testing.T) {
 		t.Errorf("expected ErrValidation when rendering nil TemplateSet, got %v", err)
 	}
 }
+
+func TestValidate_CSSStylesIncluded(t *testing.T) {
+	tmpl := &domain.TemplateSet{
+		HTMLTemplate: `<style>{{.CSSStyles}}</style><h1>{{.FullName}}</h1>`,
+		CSSStyles:    `body { background-color: #f0f0f0; }`,
+	}
+	if err := renderer.Validate(tmpl); err != nil {
+		t.Fatalf("expected valid template with CSSStyles to pass Validate, got: %v", err)
+	}
+
+	invalidTmpl := &domain.TemplateSet{
+		HTMLTemplate: `<style>{{.CSSStyles}}</style><h1>{{.NonExistentField}}</h1>`,
+		CSSStyles:    `body { color: red; }`,
+	}
+	if err := renderer.Validate(invalidTmpl); err == nil {
+		t.Fatalf("expected template with non-existent field to fail Validate, got nil")
+	}
+}
+

@@ -231,6 +231,14 @@ func TestPresetsAndBranches(t *testing.T) {
 		UpdatedAt:        now,
 	}
 
+	if preset.IsBuiltIn() {
+		t.Errorf("expected preset-1 not to be built-in")
+	}
+	builtinPreset := domain.Preset{ID: "builtin-1-page-tech-resume"}
+	if !builtinPreset.IsBuiltIn() {
+		t.Errorf("expected builtin-1-page-tech-resume to be built-in")
+	}
+
 	presetID := preset.ID
 	branch := domain.Branch{
 		ID:                       "branch-1",

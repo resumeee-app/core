@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // OwnerType represents the polymorphic owner entity type of a Fact.
 type OwnerType string
@@ -191,6 +194,16 @@ type Preset struct {
 	IncludeAdminFields bool      `json:"include_admin_fields"` // True for immigration/government presets
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// IsBuiltIn returns true if the preset is a system-provided built-in preset.
+func (p Preset) IsBuiltIn() bool {
+	return strings.HasPrefix(p.ID, "builtin-")
+}
+
+// TemplateSetName returns an empty string on domain.Preset, allowing view models to override it.
+func (p Preset) TemplateSetName() string {
+	return ""
 }
 
 // TemplateSet bundles HTML, Markdown, and Plain Text Go templates stored in the database.

@@ -31,7 +31,7 @@ func TestProfileJSONRoundTrip(t *testing.T) {
 		Summary:            "Experienced systems engineer.",
 		GlobalWritingRules: "Active verbs only.",
 		DefaultProvider:    "gemini",
-		DefaultModel:       "gemini-2.5-pro",
+		DefaultModel:       "gemini-3.8-flash",
 		MasterRevision:     1,
 		Metadata:           map[string]any{"source": "test"},
 		CreatedAt:          now,

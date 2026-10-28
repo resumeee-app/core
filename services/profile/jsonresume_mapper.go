@@ -27,7 +27,7 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	profileID := "prof-" + uuid.New().String()
 	rules := ""
 	provider := "gemini"
-	model := "gemini-2.5-pro"
+	model := "gemini-3.8-flash"
 	metadata := make(map[string]any)
 
 	if existingProfile != nil {

@@ -14,7 +14,7 @@ import (
 
 const (
 	defaultGeminiBaseURL = "https://generativelanguage.googleapis.com"
-	defaultGeminiModel   = "gemini-2.5-pro"
+	defaultGeminiModel   = "gemini-3.8-flash"
 	ProviderGemini       = "gemini"
 )
 

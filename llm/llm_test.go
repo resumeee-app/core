@@ -729,7 +729,7 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 			"compat":    compat,
 		},
 		defaultProvider: "gemini",
-		defaultModel:    "gemini-2.5-pro",
+		defaultModel:    "gemini-3.8-flash",
 	}
 
 	// Case 1: GenerationRequest Overrides (Model + Branch ProviderOverride)
@@ -792,8 +792,8 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p5.Name() != "gemini" || m5 != "gemini-2.5-pro" {
-		t.Errorf("expected system default gemini / gemini-2.5-pro, got %s / %s", p5.Name(), m5)
+	if p5.Name() != "gemini" || m5 != "gemini-3.8-flash" {
+		t.Errorf("expected system default gemini / gemini-3.8-flash, got %s / %s", p5.Name(), m5)
 	}
 }
 
@@ -947,7 +947,7 @@ func TestRegistry_PresetOverridePropagationThroughGenerationRequest(t *testing.T
 			"gemini":    gemini,
 		},
 		defaultProvider: "gemini",
-		defaultModel:    "gemini-2.5-pro",
+		defaultModel:    "gemini-3.8-flash",
 	}
 
 	// Request carries Preset with provider and model overrides, while preset parameter to Resolve is nil
@@ -1051,11 +1051,26 @@ func TestRegistry_AvailableModels_FilterMatrix(t *testing.T) {
 					}
 				}
 				expectedGemini := []string{
+					"gemini-4-argon",
+					"gemini-3.1-pro-preview",
+					"gemini-3.1-pro-preview-customtools",
+					"gemini-3.8-flash",
+					"gemini-3.6-flash",
+					"gemini-flash-latest",
+					"gemini-3.8-flash-lite",
+					"gemini-3.5-flash-lite",
+					"gemini-flash-lite-latest",
+					"gemini-3.8-live",
+					"gemini-3.8-live-extended-thinking",
+					"gemini-3.8-flash-tts",
+					"gemini-3.8-flash-lite-tts",
 					"gemini-2.5-pro",
 					"gemini-2.5-flash",
-					"gemini-2.0-flash",
-					"gemini-1.5-pro",
-					"gemini-1.5-flash",
+					"gemini-2.5-flash-lite",
+					"gemini-embedding-2",
+					"gemini-embedding-001",
+					"text-embedding-004",
+					"imagen-3.0-generate-002",
 				}
 				for _, eg := range expectedGemini {
 					found := false

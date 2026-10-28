@@ -75,7 +75,7 @@ type Profile struct {
 	Summary            string         `json:"summary"`
 	GlobalWritingRules string         `json:"global_writing_rules"` // Tier 1 LLM instructions
 	DefaultProvider    string         `json:"default_provider" gorm:"default:'gemini'"`
-	DefaultModel       string         `json:"default_model" gorm:"default:'gemini-2.5-pro'"`
+	DefaultModel       string         `json:"default_model" gorm:"default:'gemini-3.8-flash'"`
 	MasterRevision     int64          `json:"master_revision" gorm:"not null;default:1"`
 	Metadata           map[string]any `json:"metadata,omitempty" gorm:"serializer:json"`
 	CreatedAt          time.Time      `json:"created_at"`

@@ -270,11 +270,26 @@ func (r *Registry) AvailableModels() []domain.ModelOption {
 				model       string
 				displayName string
 			}{
+				{"gemini-4-argon", "Google Gemini — gemini-4-argon"},
+				{"gemini-3.1-pro-preview", "Google Gemini — gemini-3.1-pro-preview"},
+				{"gemini-3.1-pro-preview-customtools", "Google Gemini — gemini-3.1-pro-preview-customtools"},
+				{"gemini-3.8-flash", "Google Gemini — gemini-3.8-flash"},
+				{"gemini-3.6-flash", "Google Gemini — gemini-3.6-flash"},
+				{"gemini-flash-latest", "Google Gemini — gemini-flash-latest"},
+				{"gemini-3.8-flash-lite", "Google Gemini — gemini-3.8-flash-lite"},
+				{"gemini-3.5-flash-lite", "Google Gemini — gemini-3.5-flash-lite"},
+				{"gemini-flash-lite-latest", "Google Gemini — gemini-flash-lite-latest"},
+				{"gemini-3.8-live", "Google Gemini — gemini-3.8-live"},
+				{"gemini-3.8-live-extended-thinking", "Google Gemini — gemini-3.8-live-extended-thinking"},
+				{"gemini-3.8-flash-tts", "Google Gemini — gemini-3.8-flash-tts"},
+				{"gemini-3.8-flash-lite-tts", "Google Gemini — gemini-3.8-flash-lite-tts"},
 				{"gemini-2.5-pro", "Google Gemini — gemini-2.5-pro"},
 				{"gemini-2.5-flash", "Google Gemini — gemini-2.5-flash"},
-				{"gemini-2.0-flash", "Google Gemini — gemini-2.0-flash"},
-				{"gemini-1.5-pro", "Google Gemini — gemini-1.5-pro"},
-				{"gemini-1.5-flash", "Google Gemini — gemini-1.5-flash"},
+				{"gemini-2.5-flash-lite", "Google Gemini — gemini-2.5-flash-lite"},
+				{"gemini-embedding-2", "Google Gemini — gemini-embedding-2"},
+				{"gemini-embedding-001", "Google Gemini — gemini-embedding-001"},
+				{"text-embedding-004", "Google Gemini — text-embedding-004"},
+				{"imagen-3.0-generate-002", "Google Gemini — imagen-3.0-generate-002"},
 			}
 			for _, item := range catalog {
 				isDefault := (r.defaultProvider == ProviderGemini && (r.defaultModel == item.model || (r.defaultModel == "" && item.model == defaultGeminiModel)))

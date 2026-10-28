@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"resumeee/internal/domain"
 )
@@ -27,6 +29,7 @@ type AnthropicProvider struct {
 	baseURL      string
 	httpClient   *http.Client
 	defaultModel string
+	logger       *slog.Logger
 }
 
 // NewAnthropicProvider creates an Anthropic adapter with the specified API key.
@@ -37,6 +40,7 @@ func NewAnthropicProvider(apiKey string, opts ...Option) *AnthropicProvider {
 		baseURL:      cfg.baseURL,
 		httpClient:   cfg.httpClient,
 		defaultModel: cfg.defaultModel,
+		logger:       cfg.logger,
 	}
 }
 
@@ -46,7 +50,7 @@ func (p *AnthropicProvider) Name() string {
 }
 
 // GenerateTailoredResume calls the Anthropic Messages API with forced tool use and parses the structured response.
-func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (genResp *domain.GenerationResponse, retErr error) {
 	prompts, err := BuildPrompt(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build prompt: %w", err)
@@ -56,6 +60,15 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 	if strings.TrimSpace(model) == "" {
 		model = p.defaultModel
 	}
+
+	logLLMRequest(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", prompts.SystemPrompt, prompts.UserPrompt)
+
+	start := time.Now()
+	var statusCode int
+	var rawResp string
+	defer func() {
+		logLLMResponse(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", time.Since(start), statusCode, rawResp, retErr)
+	}()
 
 	type anthropicMessage struct {
 		Role    string `json:"role"`
@@ -104,13 +117,15 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 
 	reqBodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal anthropic request: %w", err)
+		retErr = fmt.Errorf("failed to marshal anthropic request: %w", err)
+		return nil, retErr
 	}
 
 	url := fmt.Sprintf("%s/v1/messages", strings.TrimRight(p.baseURL, "/"))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create http request: %w", err)
+		retErr = fmt.Errorf("failed to create http request: %w", err)
+		return nil, retErr
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -119,26 +134,35 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic http request failed: %w", err)
+		retErr = fmt.Errorf("anthropic http request failed: %w", err)
+		return nil, retErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		retErr = fmt.Errorf("failed to read response body: %w", err)
+		return nil, retErr
 	}
 
+	statusCode = resp.StatusCode
+	rawResp = string(bodyBytes)
+
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+		return nil, retErr
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+		return nil, retErr
 	}
 	if resp.StatusCode >= 500 {
-		return nil, fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+		return nil, retErr
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("anthropic api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("anthropic api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, retErr
 	}
 
 	type contentBlock struct {
@@ -153,7 +177,8 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 
 	var anthropicResp anthropicResponse
 	if err := json.Unmarshal(bodyBytes, &anthropicResp); err != nil {
-		return nil, fmt.Errorf("%w: malformed anthropic response: %v", ErrInvalidResponse, err)
+		retErr = fmt.Errorf("%w: malformed anthropic response: %v", ErrInvalidResponse, err)
+		return nil, retErr
 	}
 
 	var targetInput json.RawMessage
@@ -165,22 +190,33 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 	}
 
 	if len(targetInput) == 0 {
-		return nil, fmt.Errorf("%w: no %s tool call in anthropic response", ErrInvalidResponse, anthropicToolName)
+		retErr = fmt.Errorf("%w: no %s tool call in anthropic response", ErrInvalidResponse, anthropicToolName)
+		return nil, retErr
 	}
 
-	var genResp domain.GenerationResponse
-	if err := json.Unmarshal(targetInput, &genResp); err != nil {
-		return nil, fmt.Errorf("%w: failed to unmarshal generation response from tool input: %v", ErrInvalidResponse, err)
+	var parsed domain.GenerationResponse
+	if err := json.Unmarshal(targetInput, &parsed); err != nil {
+		retErr = fmt.Errorf("%w: failed to unmarshal generation response from tool input: %v", ErrInvalidResponse, err)
+		return nil, retErr
 	}
 
-	return &genResp, nil
+	return &parsed, nil
 }
 
 // CompleteText implements RawCompleter for Anthropic Claude.
-func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
+func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (text string, retErr error) {
 	if strings.TrimSpace(model) == "" {
 		model = p.defaultModel
 	}
+
+	logLLMRequest(ctx, p.logger, p.Name(), model, "CompleteText", systemPrompt, userPrompt)
+
+	start := time.Now()
+	var statusCode int
+	var rawResp string
+	defer func() {
+		logLLMResponse(ctx, p.logger, p.Name(), model, "CompleteText", time.Since(start), statusCode, rawResp, retErr)
+	}()
 
 	type anthropicMessage struct {
 		Role    string `json:"role"`
@@ -205,13 +241,15 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 
 	reqBodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal anthropic request: %w", err)
+		retErr = fmt.Errorf("failed to marshal anthropic request: %w", err)
+		return "", retErr
 	}
 
 	url := fmt.Sprintf("%s/v1/messages", strings.TrimRight(p.baseURL, "/"))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("failed to create http request: %w", err)
+		retErr = fmt.Errorf("failed to create http request: %w", err)
+		return "", retErr
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -220,26 +258,35 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("anthropic http request failed: %w", err)
+		retErr = fmt.Errorf("anthropic http request failed: %w", err)
+		return "", retErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
+		retErr = fmt.Errorf("failed to read response body: %w", err)
+		return "", retErr
 	}
 
+	statusCode = resp.StatusCode
+	rawResp = string(bodyBytes)
+
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+		return "", retErr
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+		return "", retErr
 	}
 	if resp.StatusCode >= 500 {
-		return "", fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+		return "", retErr
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("anthropic api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("anthropic api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return "", retErr
 	}
 
 	type contentBlock struct {
@@ -253,7 +300,8 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 
 	var anthropicResp anthropicResponse
 	if err := json.Unmarshal(bodyBytes, &anthropicResp); err != nil {
-		return "", fmt.Errorf("%w: malformed anthropic response: %v", ErrInvalidResponse, err)
+		retErr = fmt.Errorf("%w: malformed anthropic response: %v", ErrInvalidResponse, err)
+		return "", retErr
 	}
 
 	for _, block := range anthropicResp.Content {
@@ -262,5 +310,6 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 		}
 	}
 
-	return "", fmt.Errorf("%w: no text content returned by anthropic", ErrInvalidResponse)
+	retErr = fmt.Errorf("%w: no text content returned by anthropic", ErrInvalidResponse)
+	return "", retErr
 }

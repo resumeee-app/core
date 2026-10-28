@@ -20,7 +20,7 @@ type Registry struct {
 }
 
 // NewRegistry initializes an LLM registry based on 12-factor environment configuration.
-func NewRegistry(cfg *config.Config) *Registry {
+func NewRegistry(cfg *config.Config, opts ...Option) *Registry {
 	r := &Registry{
 		providers: make(map[string]domain.LLMProvider),
 	}
@@ -30,16 +30,16 @@ func NewRegistry(cfg *config.Config) *Registry {
 	}
 
 	if cfg.GeminiAPIKey != "" {
-		r.Register(NewGeminiProvider(cfg.GeminiAPIKey))
+		r.Register(NewGeminiProvider(cfg.GeminiAPIKey, opts...))
 	}
 	if cfg.OpenAIAPIKey != "" {
-		r.Register(NewOpenAIProvider(cfg.OpenAIAPIKey))
+		r.Register(NewOpenAIProvider(cfg.OpenAIAPIKey, opts...))
 	}
 	if cfg.AnthropicAPIKey != "" {
-		r.Register(NewAnthropicProvider(cfg.AnthropicAPIKey))
+		r.Register(NewAnthropicProvider(cfg.AnthropicAPIKey, opts...))
 	}
 	if cfg.OpenAICompatBaseURL != "" {
-		r.Register(NewCompatProvider(cfg.OpenAICompatBaseURL, cfg.OpenAICompatAPIKey))
+		r.Register(NewCompatProvider(cfg.OpenAICompatBaseURL, cfg.OpenAICompatAPIKey, opts...))
 	}
 
 	// Establish system default provider hierarchy

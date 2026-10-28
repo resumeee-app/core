@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"resumeee/internal/domain"
 )
@@ -24,6 +26,7 @@ type GeminiProvider struct {
 	baseURL      string
 	httpClient   *http.Client
 	defaultModel string
+	logger       *slog.Logger
 }
 
 // NewGeminiProvider creates a new Google Gemini adapter with the specified API key.
@@ -34,6 +37,7 @@ func NewGeminiProvider(apiKey string, opts ...Option) *GeminiProvider {
 		baseURL:      cfg.baseURL,
 		httpClient:   cfg.httpClient,
 		defaultModel: cfg.defaultModel,
+		logger:       cfg.logger,
 	}
 }
 
@@ -43,7 +47,7 @@ func (p *GeminiProvider) Name() string {
 }
 
 // GenerateTailoredResume submits the prompt to Google Gemini and parses the structured response.
-func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (genResp *domain.GenerationResponse, retErr error) {
 	prompts, err := BuildPrompt(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build prompt: %w", err)
@@ -53,6 +57,15 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 	if strings.TrimSpace(model) == "" {
 		model = p.defaultModel
 	}
+
+	logLLMRequest(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", prompts.SystemPrompt, prompts.UserPrompt)
+
+	start := time.Now()
+	var statusCode int
+	var rawResp string
+	defer func() {
+		logLLMResponse(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", time.Since(start), statusCode, rawResp, retErr)
+	}()
 
 	type part struct {
 		Text string `json:"text"`
@@ -89,13 +102,15 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 
 	reqBodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal gemini request: %w", err)
+		retErr = fmt.Errorf("failed to marshal gemini request: %w", err)
+		return nil, retErr
 	}
 
 	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", strings.TrimRight(p.baseURL, "/"), model)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create http request: %w", err)
+		retErr = fmt.Errorf("failed to create http request: %w", err)
+		return nil, retErr
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -103,17 +118,23 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("gemini http request failed: %w", err)
+		retErr = fmt.Errorf("gemini http request failed: %w", err)
+		return nil, retErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		retErr = fmt.Errorf("failed to read response body: %w", err)
+		return nil, retErr
 	}
 
+	statusCode = resp.StatusCode
+	rawResp = string(bodyBytes)
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, parseGeminiError(resp.StatusCode, bodyBytes)
+		retErr = parseGeminiError(resp.StatusCode, bodyBytes)
+		return nil, retErr
 	}
 
 	type geminiResponse struct {
@@ -128,29 +149,41 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 
 	var geminiResp geminiResponse
 	if err := json.Unmarshal(bodyBytes, &geminiResp); err != nil {
-		return nil, fmt.Errorf("%w: malformed gemini response: %v", ErrInvalidResponse, err)
+		retErr = fmt.Errorf("%w: malformed gemini response: %v", ErrInvalidResponse, err)
+		return nil, retErr
 	}
 
 	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("%w: no candidates returned by gemini", ErrInvalidResponse)
+		retErr = fmt.Errorf("%w: no candidates returned by gemini", ErrInvalidResponse)
+		return nil, retErr
 	}
 
 	rawText := strings.TrimSpace(geminiResp.Candidates[0].Content.Parts[0].Text)
 	cleanJSON := stripCodeFences(rawText)
 
-	var genResp domain.GenerationResponse
-	if err := json.Unmarshal([]byte(cleanJSON), &genResp); err != nil {
-		return nil, fmt.Errorf("%w: failed to unmarshal generation response: %v", ErrInvalidResponse, err)
+	var parsed domain.GenerationResponse
+	if err := json.Unmarshal([]byte(cleanJSON), &parsed); err != nil {
+		retErr = fmt.Errorf("%w: failed to unmarshal generation response: %v", ErrInvalidResponse, err)
+		return nil, retErr
 	}
 
-	return &genResp, nil
+	return &parsed, nil
 }
 
 // CompleteText implements RawCompleter for Google Gemini.
-func (p *GeminiProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
+func (p *GeminiProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (text string, retErr error) {
 	if strings.TrimSpace(model) == "" {
 		model = p.defaultModel
 	}
+
+	logLLMRequest(ctx, p.logger, p.Name(), model, "CompleteText", systemPrompt, userPrompt)
+
+	start := time.Now()
+	var statusCode int
+	var rawResp string
+	defer func() {
+		logLLMResponse(ctx, p.logger, p.Name(), model, "CompleteText", time.Since(start), statusCode, rawResp, retErr)
+	}()
 
 	type part struct {
 		Text string `json:"text"`
@@ -181,29 +214,38 @@ func (p *GeminiProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 
 	reqBodyBytes, err := json.Marshal(reqPayload)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal gemini request: %w", err)
+		retErr = fmt.Errorf("failed to marshal gemini request: %w", err)
+		return "", retErr
 	}
 
-	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", strings.TrimRight(p.baseURL, "/"), model, p.apiKey)
+	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", strings.TrimRight(p.baseURL, "/"), model)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("failed to create http request: %w", err)
+		retErr = fmt.Errorf("failed to create http request: %w", err)
+		return "", retErr
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", p.apiKey)
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("gemini http request failed: %w", err)
+		retErr = fmt.Errorf("gemini http request failed: %w", err)
+		return "", retErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
+		retErr = fmt.Errorf("failed to read response body: %w", err)
+		return "", retErr
 	}
 
+	statusCode = resp.StatusCode
+	rawResp = string(bodyBytes)
+
 	if resp.StatusCode != http.StatusOK {
-		return "", parseGeminiError(resp.StatusCode, bodyBytes)
+		retErr = parseGeminiError(resp.StatusCode, bodyBytes)
+		return "", retErr
 	}
 
 	type geminiResponse struct {
@@ -218,11 +260,13 @@ func (p *GeminiProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 
 	var geminiResp geminiResponse
 	if err := json.Unmarshal(bodyBytes, &geminiResp); err != nil {
-		return "", fmt.Errorf("%w: malformed gemini response: %v", ErrInvalidResponse, err)
+		retErr = fmt.Errorf("%w: malformed gemini response: %v", ErrInvalidResponse, err)
+		return "", retErr
 	}
 
 	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("%w: no candidates returned by gemini", ErrInvalidResponse)
+		retErr = fmt.Errorf("%w: no candidates returned by gemini", ErrInvalidResponse)
+		return "", retErr
 	}
 
 	return strings.TrimSpace(geminiResp.Candidates[0].Content.Parts[0].Text), nil
@@ -296,4 +340,3 @@ func parseGeminiError(statusCode int, bodyBytes []byte) error {
 		return fmt.Errorf("gemini api returned status %d: %s", statusCode, cleanMsg)
 	}
 }
-

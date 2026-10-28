@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"resumeee/internal/domain"
 )
@@ -25,6 +27,7 @@ type CompatProvider struct {
 	apiKey       string
 	httpClient   *http.Client
 	defaultModel string
+	logger       *slog.Logger
 }
 
 // NewCompatProvider creates an OpenAI-compatible adapter targeting baseURL with optional API key.
@@ -35,6 +38,7 @@ func NewCompatProvider(baseURL string, apiKey string, opts ...Option) *CompatPro
 		apiKey:       apiKey,
 		httpClient:   cfg.httpClient,
 		defaultModel: cfg.defaultModel,
+		logger:       cfg.logger,
 	}
 }
 
@@ -44,7 +48,7 @@ func (p *CompatProvider) Name() string {
 }
 
 // GenerateTailoredResume calls the OpenAI-compatible chat completions endpoint.
-func (p *CompatProvider) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+func (p *CompatProvider) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (genResp *domain.GenerationResponse, retErr error) {
 	prompts, err := BuildPrompt(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build prompt: %w", err)
@@ -63,6 +67,15 @@ func (p *CompatProvider) GenerateTailoredResume(ctx context.Context, req domain.
 
 	systemPromptWithSchema := fmt.Sprintf("%s\n\n<json_output_schema>\n%s\n</json_output_schema>",
 		prompts.SystemPrompt, string(schemaBytes))
+
+	logLLMRequest(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", systemPromptWithSchema, prompts.UserPrompt)
+
+	start := time.Now()
+	var statusCode int
+	var rawResp string
+	defer func() {
+		logLLMResponse(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", time.Since(start), statusCode, rawResp, retErr)
+	}()
 
 	type chatMessage struct {
 		Role    string `json:"role"`
@@ -92,13 +105,15 @@ func (p *CompatProvider) GenerateTailoredResume(ctx context.Context, req domain.
 
 	reqBodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal compat request: %w", err)
+		retErr = fmt.Errorf("failed to marshal compat request: %w", err)
+		return nil, retErr
 	}
 
 	url := buildCompatURL(p.baseURL)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create http request: %w", err)
+		retErr = fmt.Errorf("failed to create http request: %w", err)
+		return nil, retErr
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -108,26 +123,35 @@ func (p *CompatProvider) GenerateTailoredResume(ctx context.Context, req domain.
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("compat http request failed: %w", err)
+		retErr = fmt.Errorf("compat http request failed: %w", err)
+		return nil, retErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		retErr = fmt.Errorf("failed to read response body: %w", err)
+		return nil, retErr
 	}
 
+	statusCode = resp.StatusCode
+	rawResp = string(bodyBytes)
+
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+		return nil, retErr
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+		return nil, retErr
 	}
 	if resp.StatusCode >= 500 {
-		return nil, fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+		return nil, retErr
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("compat api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("compat api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, retErr
 	}
 
 	type compatResponse struct {
@@ -140,29 +164,41 @@ func (p *CompatProvider) GenerateTailoredResume(ctx context.Context, req domain.
 
 	var compatResp compatResponse
 	if err := json.Unmarshal(bodyBytes, &compatResp); err != nil {
-		return nil, fmt.Errorf("%w: malformed compat response: %v", ErrInvalidResponse, err)
+		retErr = fmt.Errorf("%w: malformed compat response: %v", ErrInvalidResponse, err)
+		return nil, retErr
 	}
 
 	if len(compatResp.Choices) == 0 {
-		return nil, fmt.Errorf("%w: no choices returned by compat endpoint", ErrInvalidResponse)
+		retErr = fmt.Errorf("%w: no choices returned by compat endpoint", ErrInvalidResponse)
+		return nil, retErr
 	}
 
 	rawText := strings.TrimSpace(compatResp.Choices[0].Message.Content)
 	cleanJSON := stripCodeFences(rawText)
 
-	var genResp domain.GenerationResponse
-	if err := json.Unmarshal([]byte(cleanJSON), &genResp); err != nil {
-		return nil, fmt.Errorf("%w: failed to unmarshal generation response: %v", ErrInvalidResponse, err)
+	var parsed domain.GenerationResponse
+	if err := json.Unmarshal([]byte(cleanJSON), &parsed); err != nil {
+		retErr = fmt.Errorf("%w: failed to unmarshal generation response: %v", ErrInvalidResponse, err)
+		return nil, retErr
 	}
 
-	return &genResp, nil
+	return &parsed, nil
 }
 
 // CompleteText implements RawCompleter for OpenAI-compatible endpoints.
-func (p *CompatProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
+func (p *CompatProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (text string, retErr error) {
 	if strings.TrimSpace(model) == "" {
 		model = p.defaultModel
 	}
+
+	logLLMRequest(ctx, p.logger, p.Name(), model, "CompleteText", systemPrompt, userPrompt)
+
+	start := time.Now()
+	var statusCode int
+	var rawResp string
+	defer func() {
+		logLLMResponse(ctx, p.logger, p.Name(), model, "CompleteText", time.Since(start), statusCode, rawResp, retErr)
+	}()
 
 	type chatMessage struct {
 		Role    string `json:"role"`
@@ -184,13 +220,15 @@ func (p *CompatProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 
 	reqBodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal compat request: %w", err)
+		retErr = fmt.Errorf("failed to marshal compat request: %w", err)
+		return "", retErr
 	}
 
 	url := buildCompatURL(p.baseURL)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("failed to create http request: %w", err)
+		retErr = fmt.Errorf("failed to create http request: %w", err)
+		return "", retErr
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -200,26 +238,35 @@ func (p *CompatProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("compat http request failed: %w", err)
+		retErr = fmt.Errorf("compat http request failed: %w", err)
+		return "", retErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
+		retErr = fmt.Errorf("failed to read response body: %w", err)
+		return "", retErr
 	}
 
+	statusCode = resp.StatusCode
+	rawResp = string(bodyBytes)
+
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+		return "", retErr
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+		return "", retErr
 	}
 	if resp.StatusCode >= 500 {
-		return "", fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+		return "", retErr
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("compat api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		retErr = fmt.Errorf("compat api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return "", retErr
 	}
 
 	type openAIResponse struct {
@@ -232,11 +279,13 @@ func (p *CompatProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 
 	var openAIResp openAIResponse
 	if err := json.Unmarshal(bodyBytes, &openAIResp); err != nil {
-		return "", fmt.Errorf("%w: malformed compat response: %v", ErrInvalidResponse, err)
+		retErr = fmt.Errorf("%w: malformed compat response: %v", ErrInvalidResponse, err)
+		return "", retErr
 	}
 
 	if len(openAIResp.Choices) == 0 {
-		return "", fmt.Errorf("%w: no choices returned by compat endpoint", ErrInvalidResponse)
+		retErr = fmt.Errorf("%w: no choices returned by compat endpoint", ErrInvalidResponse)
+		return "", retErr
 	}
 
 	return strings.TrimSpace(openAIResp.Choices[0].Message.Content), nil

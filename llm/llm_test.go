@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -973,4 +974,114 @@ func TestRegistry_PresetOverridePropagationThroughGenerationRequest(t *testing.T
 		t.Errorf("expected model 'claude-3-7-sonnet-20250219' from req.Preset, got %s", model)
 	}
 }
+
+func TestRegistry_AvailableModels_FilterMatrix(t *testing.T) {
+	tests := []struct {
+		name              string
+		geminiKey         string
+		openaiKey         string
+		anthropicKey      string
+		compatURL         string
+		expectedProviders []string
+	}{
+		{
+			name:              "no keys configured",
+			expectedProviders: []string{},
+		},
+		{
+			name:              "only gemini configured",
+			geminiKey:         "test-gemini-key",
+			expectedProviders: []string{"gemini"},
+		},
+		{
+			name:              "gemini and anthropic",
+			geminiKey:         "test-gemini-key",
+			anthropicKey:      "test-anthropic-key",
+			expectedProviders: []string{"anthropic", "gemini"},
+		},
+		{
+			name:              "all providers configured",
+			geminiKey:         "secret-g-key",
+			openaiKey:         "secret-o-key",
+			anthropicKey:      "secret-a-key",
+			compatURL:         "http://localhost:11434/v1",
+			expectedProviders: []string{"anthropic", "compat", "gemini", "openai"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				GeminiAPIKey:        tc.geminiKey,
+				OpenAIAPIKey:        tc.openaiKey,
+				AnthropicAPIKey:     tc.anthropicKey,
+				OpenAICompatBaseURL: tc.compatURL,
+			}
+
+			reg := NewRegistry(cfg)
+			models := reg.AvailableModels()
+
+			providerMap := make(map[string]bool)
+			for _, m := range models {
+				providerMap[m.Provider] = true
+			}
+
+			var providers []string
+			for p := range providerMap {
+				providers = append(providers, p)
+			}
+			sort.Strings(providers)
+
+			if len(providers) != len(tc.expectedProviders) {
+				t.Fatalf("provider count mismatch: got %v, want %v", providers, tc.expectedProviders)
+			}
+			for i, p := range providers {
+				if p != tc.expectedProviders[i] {
+					t.Errorf("provider[%d] mismatch: got %s, want %s", i, p, tc.expectedProviders[i])
+				}
+			}
+
+			// Verify Gemini models include up-to-date versions if gemini is configured
+			if tc.geminiKey != "" {
+				var geminiModels []string
+				for _, m := range models {
+					if m.Provider == "gemini" {
+						geminiModels = append(geminiModels, m.Model)
+					}
+				}
+				expectedGemini := []string{
+					"gemini-2.5-pro",
+					"gemini-2.5-flash",
+					"gemini-2.0-flash",
+					"gemini-1.5-pro",
+					"gemini-1.5-flash",
+				}
+				for _, eg := range expectedGemini {
+					found := false
+					for _, gm := range geminiModels {
+						if gm == eg {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Errorf("expected Gemini model %q in available models, got %v", eg, geminiModels)
+					}
+				}
+			}
+
+			// Security verification: verify secret keys are never leaked in models list
+			for _, m := range models {
+				for _, secret := range []string{tc.geminiKey, tc.openaiKey, tc.anthropicKey} {
+					if secret != "" {
+						if strings.Contains(m.DisplayName, secret) || strings.Contains(m.Model, secret) || strings.Contains(m.Provider, secret) {
+							t.Fatalf("SECURITY VIOLATION: secret %q leaked in model option: %+v", secret, m)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 

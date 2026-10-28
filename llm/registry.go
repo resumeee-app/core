@@ -212,3 +212,104 @@ func defaultModelForProvider(name string) string {
 		return "default"
 	}
 }
+
+// AvailableModels returns a list of configured models from active providers.
+// Only providers registered in the registry (i.e. having active credentials) are included.
+// The list is safe for public exposure and contains zero credentials or secrets.
+func (r *Registry) AvailableModels() []domain.ModelOption {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var models []domain.ModelOption
+
+	// Providers sorted alphabetically: anthropic, compat, gemini, openai
+	providers := make([]string, 0, len(r.providers))
+	seen := make(map[string]bool)
+	for name := range r.providers {
+		canonical := name
+		if canonical == ProviderCompatAlt {
+			canonical = ProviderCompat
+		}
+		if !seen[canonical] {
+			seen[canonical] = true
+			providers = append(providers, canonical)
+		}
+	}
+	sort.Strings(providers)
+
+	for _, p := range providers {
+		switch p {
+		case ProviderAnthropic:
+			catalog := []struct {
+				model       string
+				displayName string
+			}{
+				{"claude-3-7-sonnet-20250219", "Anthropic — claude-3-7-sonnet-20250219"},
+				{"claude-3-5-sonnet-20241022", "Anthropic — claude-3-5-sonnet-20241022"},
+				{"claude-3-5-haiku-20241022", "Anthropic — claude-3-5-haiku-20241022"},
+			}
+			for _, item := range catalog {
+				isDefault := (r.defaultProvider == ProviderAnthropic && (r.defaultModel == item.model || (r.defaultModel == "" && item.model == defaultAnthropicModel)))
+				models = append(models, domain.ModelOption{
+					Provider:    ProviderAnthropic,
+					Model:       item.model,
+					DisplayName: item.displayName,
+					IsDefault:   isDefault,
+				})
+			}
+		case ProviderCompat:
+			isDefault := ((r.defaultProvider == ProviderCompat || r.defaultProvider == ProviderCompatAlt) && (r.defaultModel == defaultCompatModel || r.defaultModel == ""))
+			models = append(models, domain.ModelOption{
+				Provider:    ProviderCompat,
+				Model:       defaultCompatModel,
+				DisplayName: "OpenAI Compatible — default",
+				IsDefault:   isDefault,
+			})
+		case ProviderGemini:
+			catalog := []struct {
+				model       string
+				displayName string
+			}{
+				{"gemini-2.5-pro", "Google Gemini — gemini-2.5-pro"},
+				{"gemini-2.5-flash", "Google Gemini — gemini-2.5-flash"},
+				{"gemini-2.0-flash", "Google Gemini — gemini-2.0-flash"},
+				{"gemini-1.5-pro", "Google Gemini — gemini-1.5-pro"},
+				{"gemini-1.5-flash", "Google Gemini — gemini-1.5-flash"},
+			}
+			for _, item := range catalog {
+				isDefault := (r.defaultProvider == ProviderGemini && (r.defaultModel == item.model || (r.defaultModel == "" && item.model == defaultGeminiModel)))
+				models = append(models, domain.ModelOption{
+					Provider:    ProviderGemini,
+					Model:       item.model,
+					DisplayName: item.displayName,
+					IsDefault:   isDefault,
+				})
+			}
+		case ProviderOpenAI:
+			catalog := []struct {
+				model       string
+				displayName string
+			}{
+				{"gpt-4o", "OpenAI — gpt-4o"},
+				{"gpt-4o-mini", "OpenAI — gpt-4o-mini"},
+				{"o3-mini", "OpenAI — o3-mini"},
+				{"o1", "OpenAI — o1"},
+			}
+			for _, item := range catalog {
+				isDefault := (r.defaultProvider == ProviderOpenAI && (r.defaultModel == item.model || (r.defaultModel == "" && item.model == defaultOpenAIModel)))
+				models = append(models, domain.ModelOption{
+					Provider:    ProviderOpenAI,
+					Model:       item.model,
+					DisplayName: item.displayName,
+					IsDefault:   isDefault,
+				})
+			}
+		}
+	}
+
+	if models == nil {
+		models = []domain.ModelOption{}
+	}
+	return models
+}
+

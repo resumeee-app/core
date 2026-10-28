@@ -294,3 +294,12 @@ type MasterProfileSnapshot struct {
 	Facts          []Fact           `json:"facts"`
 	ExportedAt     time.Time        `json:"exported_at"`
 }
+
+// ModelOption represents a configured LLM provider and model pairing safe for public enumeration.
+type ModelOption struct {
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
+	DisplayName string `json:"display_name"`
+	IsDefault   bool   `json:"is_default"`
+}
+

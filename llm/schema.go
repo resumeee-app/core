@@ -237,3 +237,53 @@ func GenerationResponseSchema() map[string]any {
 		"additionalProperties": false,
 	}
 }
+
+// SanitizeGeminiSchema creates a deep clone of the provided schema map and recursively strips
+// unsupported keywords (such as "additionalProperties", "$schema", "$defs", "definitions", "title")
+// while preserving OpenAPI 3.0 fields supported by the Google Generative Language API.
+func SanitizeGeminiSchema(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	res, ok := sanitizeNode(schema).(map[string]any)
+	if !ok {
+		return nil
+	}
+	return res
+}
+
+// sanitizeNode recursively traverses and sanitizes maps, slices, and primitive values.
+func sanitizeNode(val any) any {
+	switch v := val.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any, len(v))
+		for k, child := range v {
+			switch k {
+			case "additionalProperties", "$schema", "$defs", "definitions", "title":
+				continue
+			default:
+				cleaned[k] = sanitizeNode(child)
+			}
+		}
+		return cleaned
+	case []any:
+		cleaned := make([]any, len(v))
+		for i, child := range v {
+			cleaned[i] = sanitizeNode(child)
+		}
+		return cleaned
+	case []string:
+		cleaned := make([]string, len(v))
+		copy(cleaned, v)
+		return cleaned
+	default:
+		return v
+	}
+}
+
+// GeminiResponseSchema returns a Google Gemini-compatible JSON schema for domain.GenerationResponse
+// by stripping additionalProperties and OpenAPI extensions unsupported by Gemini.
+func GeminiResponseSchema() map[string]any {
+	return SanitizeGeminiSchema(GenerationResponseSchema())
+}
+

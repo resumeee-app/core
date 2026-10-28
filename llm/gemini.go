@@ -83,7 +83,7 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 		},
 		GenerationConfig: generationConfig{
 			ResponseMimeType: "application/json",
-			ResponseSchema:   GenerationResponseSchema(),
+			ResponseSchema:   GeminiResponseSchema(),
 		},
 	}
 
@@ -112,17 +112,8 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
-	}
-	if resp.StatusCode >= 500 {
-		return nil, fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
-	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gemini api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, parseGeminiError(resp.StatusCode, bodyBytes)
 	}
 
 	type geminiResponse struct {
@@ -211,17 +202,8 @@ func (p *GeminiProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
-	}
-	if resp.StatusCode >= 500 {
-		return "", fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
-	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("gemini api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return "", parseGeminiError(resp.StatusCode, bodyBytes)
 	}
 
 	type geminiResponse struct {
@@ -245,3 +227,73 @@ func (p *GeminiProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 
 	return strings.TrimSpace(geminiResp.Candidates[0].Content.Parts[0].Text), nil
 }
+
+// parseGeminiError parses HTTP error payloads from Google Gemini API, deduplicating repeated
+// error lines in the response message and wrapping canonical sentinel errors.
+func parseGeminiError(statusCode int, bodyBytes []byte) error {
+	raw := strings.TrimSpace(string(bodyBytes))
+	var msg string
+
+	if len(raw) > 0 {
+		var objErr struct {
+			Error struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+				Status  string `json:"status"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(bodyBytes, &objErr); err == nil && objErr.Error.Message != "" {
+			msg = objErr.Error.Message
+		} else {
+			var strErr struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(bodyBytes, &strErr); err == nil && strErr.Error != "" {
+				msg = strErr.Error
+			} else {
+				msg = raw
+			}
+		}
+	}
+
+	// Deduplicate lines in error message while preserving ordering
+	var cleanMsg string
+	if msg != "" {
+		lines := strings.Split(msg, "\n")
+		var deduped []string
+		seen := make(map[string]bool)
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			if !seen[trimmed] {
+				seen[trimmed] = true
+				deduped = append(deduped, trimmed)
+			}
+		}
+		if len(deduped) > 0 {
+			cleanMsg = strings.Join(deduped, "\n")
+		} else {
+			cleanMsg = strings.TrimSpace(msg)
+		}
+	}
+
+	if cleanMsg == "" {
+		cleanMsg = fmt.Sprintf("gemini api returned status %d", statusCode)
+	}
+
+	switch {
+	case statusCode == http.StatusBadRequest:
+		return fmt.Errorf("%w: %s", ErrBadRequest, cleanMsg)
+	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
+		return fmt.Errorf("%w: status %d: %s", ErrUnauthorized, statusCode, cleanMsg)
+	case statusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("%w: status 429: %s", ErrRateLimited, cleanMsg)
+	case statusCode >= 500:
+		return fmt.Errorf("%w: status %d: %s", ErrUpstream, statusCode, cleanMsg)
+	default:
+		return fmt.Errorf("gemini api returned status %d: %s", statusCode, cleanMsg)
+	}
+}
+

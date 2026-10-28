@@ -4,6 +4,9 @@ import "errors"
 
 // Sentinel errors returned by LLM adapters and registry.
 var (
+	// ErrBadRequest indicates the LLM provider rejected the request due to invalid parameters or schema (HTTP 400).
+	ErrBadRequest = errors.New("llm provider bad request: invalid prompt or schema")
+
 	// ErrUnauthorized indicates the LLM provider rejected the API key or authentication token (HTTP 401/403).
 	ErrUnauthorized = errors.New("llm provider unauthorized: invalid API key")
 

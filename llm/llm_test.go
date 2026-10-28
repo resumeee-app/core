@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1078,6 +1079,272 @@ func TestRegistry_AvailableModels_FilterMatrix(t *testing.T) {
 							t.Fatalf("SECURITY VIOLATION: secret %q leaked in model option: %+v", secret, m)
 						}
 					}
+				}
+			}
+		})
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Gemini Schema Sanitizer & Error Parsing Tests (Issue #67)
+// -----------------------------------------------------------------------------
+
+func TestSanitizeGeminiSchema(t *testing.T) {
+	t.Run("CanonicalGenerationResponseSchema", func(t *testing.T) {
+		orig := GenerationResponseSchema()
+		sanitized := SanitizeGeminiSchema(orig)
+
+		// Assert no "additionalProperties" anywhere in sanitized
+		assertNoAdditionalProperties(t, sanitized, "root")
+
+		// Assert required, properties, items, type are intact
+		if sanitized["type"] != "object" {
+			t.Fatalf("expected type object, got %v", sanitized["type"])
+		}
+		props, ok := sanitized["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected properties map")
+		}
+		if _, ok := props["tailored_content"]; !ok {
+			t.Errorf("missing tailored_content property")
+		}
+		if _, ok := props["gap_report"]; !ok {
+			t.Errorf("missing gap_report property")
+		}
+	})
+
+	t.Run("DeeplyNestedObjects", func(t *testing.T) {
+		input := map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"level1": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"level2": map[string]any{
+							"type":                 "object",
+							"additionalProperties": false,
+							"properties": map[string]any{
+								"name": map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		sanitized := SanitizeGeminiSchema(input)
+		assertNoAdditionalProperties(t, sanitized, "root")
+	})
+
+	t.Run("ArrayOfObjects", func(t *testing.T) {
+		input := map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"id": map[string]any{"type": "string"},
+				},
+			},
+		}
+
+		sanitized := SanitizeGeminiSchema(input)
+		assertNoAdditionalProperties(t, sanitized, "root")
+		items, ok := sanitized["items"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected items to be map[string]any")
+		}
+		if items["type"] != "object" {
+			t.Errorf("expected items type object, got %v", items["type"])
+		}
+	})
+
+	t.Run("UnsupportedKeywordsRemoval", func(t *testing.T) {
+		input := map[string]any{
+			"$schema":              "http://json-schema.org/draft-07/schema#",
+			"$defs":                map[string]any{"def1": map[string]any{"type": "string"}},
+			"definitions":          map[string]any{"def2": map[string]any{"type": "string"}},
+			"title":                "ResumeGenerationResponse",
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"summary": map[string]any{
+					"type":  "string",
+					"title": "SummaryTitle",
+				},
+			},
+		}
+
+		sanitized := SanitizeGeminiSchema(input)
+		for _, forbidden := range []string{"$schema", "$defs", "definitions", "title", "additionalProperties"} {
+			if _, ok := sanitized[forbidden]; ok {
+				t.Errorf("expected %q to be removed from root", forbidden)
+			}
+		}
+		props := sanitized["properties"].(map[string]any)
+		summary := props["summary"].(map[string]any)
+		if _, ok := summary["title"]; ok {
+			t.Errorf("expected title to be removed from nested property")
+		}
+	})
+
+	t.Run("EmptySchema", func(t *testing.T) {
+		input := map[string]any{}
+		sanitized := SanitizeGeminiSchema(input)
+		if sanitized == nil || len(sanitized) != 0 {
+			t.Errorf("expected empty map, got %v", sanitized)
+		}
+	})
+
+	t.Run("NilSchema", func(t *testing.T) {
+		sanitized := SanitizeGeminiSchema(nil)
+		if sanitized != nil {
+			t.Errorf("expected nil for nil input, got %v", sanitized)
+		}
+	})
+
+	t.Run("SchemaWithoutForbiddenKeys", func(t *testing.T) {
+		input := map[string]any{
+			"type":        "string",
+			"description": "simple string",
+		}
+		sanitized := SanitizeGeminiSchema(input)
+		if sanitized["type"] != "string" || sanitized["description"] != "simple string" {
+			t.Errorf("expected unmodified fields, got %v", sanitized)
+		}
+	})
+
+	t.Run("OriginalSchemaImmutability", func(t *testing.T) {
+		input := map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"sub": map[string]any{
+					"additionalProperties": false,
+				},
+			},
+		}
+		_ = SanitizeGeminiSchema(input)
+
+		if input["additionalProperties"] != false {
+			t.Errorf("original root schema was mutated!")
+		}
+		sub := input["properties"].(map[string]any)["sub"].(map[string]any)
+		if sub["additionalProperties"] != false {
+			t.Errorf("original nested schema was mutated!")
+		}
+	})
+
+	t.Run("GeminiResponseSchema_Helper", func(t *testing.T) {
+		schema := GeminiResponseSchema()
+		assertNoAdditionalProperties(t, schema, "root")
+		if schema["type"] != "object" {
+			t.Errorf("expected type object, got %v", schema["type"])
+		}
+	})
+}
+
+func assertNoAdditionalProperties(t *testing.T, node any, path string) {
+	t.Helper()
+	switch v := node.(type) {
+	case map[string]any:
+		if _, ok := v["additionalProperties"]; ok {
+			t.Errorf("forbidden additionalProperties found at %s", path)
+		}
+		for k, child := range v {
+			assertNoAdditionalProperties(t, child, path+"."+k)
+		}
+	case []any:
+		for i, child := range v {
+			assertNoAdditionalProperties(t, child, fmt.Sprintf("%s[%d]", path, i))
+		}
+	}
+}
+
+func TestGeminiProvider_ErrorParsing(t *testing.T) {
+	testCases := []struct {
+		name        string
+		statusCode  int
+		errorBody   string
+		expectedErr error
+		mustContain string
+	}{
+		{
+			name:       "HTTP400_RepeatingPayloadError",
+			statusCode: 400,
+			errorBody: `{
+  "error": {
+    "code": 400,
+    "message": "Invalid JSON payload received. Unknown name \"additionalProperties\" at 'generation_config.response_schema': Cannot find field.\nInvalid JSON payload received. Unknown name \"additionalProperties\" at 'generation_config.response_schema': Cannot find field.\nInvalid JSON payload received. Unknown name \"additionalProperties\" at 'generation_config.response_schema': Cannot find field.",
+    "status": "INVALID_ARGUMENT"
+  }
+}`,
+			expectedErr: ErrBadRequest,
+			mustContain: `Invalid JSON payload received. Unknown name "additionalProperties" at 'generation_config.response_schema': Cannot find field.`,
+		},
+		{
+			name:        "HTTP400_StandardMessage",
+			statusCode:  400,
+			errorBody:   `{"error": {"code": 400, "message": "Invalid field value", "status": "INVALID_ARGUMENT"}}`,
+			expectedErr: ErrBadRequest,
+			mustContain: "Invalid field value",
+		},
+		{
+			name:        "HTTP401_Unauthorized",
+			statusCode:  401,
+			errorBody:   `{"error": {"code": 401, "message": "API key not valid"}}`,
+			expectedErr: ErrUnauthorized,
+			mustContain: "API key not valid",
+		},
+		{
+			name:        "HTTP429_RateLimited",
+			statusCode:  429,
+			errorBody:   `{"error": {"code": 429, "message": "Resource exhausted"}}`,
+			expectedErr: ErrRateLimited,
+			mustContain: "Resource exhausted",
+		},
+		{
+			name:        "HTTP500_UpstreamFailure",
+			statusCode:  500,
+			errorBody:   `{"error": {"code": 500, "message": "Internal server crash"}}`,
+			expectedErr: ErrUpstream,
+			mustContain: "Internal server crash",
+		},
+		{
+			name:        "MalformedJSON_Body",
+			statusCode:  400,
+			errorBody:   `Bad Request: cannot parse payload`,
+			expectedErr: ErrBadRequest,
+			mustContain: "Bad Request: cannot parse payload",
+		},
+		{
+			name:        "EmptyBody",
+			statusCode:  400,
+			errorBody:   ``,
+			expectedErr: ErrBadRequest,
+			mustContain: "gemini api returned status 400",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := parseGeminiError(tc.statusCode, []byte(tc.errorBody))
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if tc.expectedErr != nil && !errors.Is(err, tc.expectedErr) {
+				t.Errorf("expected error to wrap %v, got %v", tc.expectedErr, err)
+			}
+			if tc.mustContain != "" && !strings.Contains(err.Error(), tc.mustContain) {
+				t.Errorf("expected error %q to contain %q", err.Error(), tc.mustContain)
+			}
+			if tc.name == "HTTP400_RepeatingPayloadError" {
+				// Assert that the message appears exactly once (deduplicated)
+				count := strings.Count(err.Error(), `Invalid JSON payload received. Unknown name "additionalProperties"`)
+				if count != 1 {
+					t.Errorf("expected repeating lines to be deduplicated to 1 occurrence, found %d", count)
 				}
 			}
 		})

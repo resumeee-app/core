@@ -154,3 +154,94 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 
 	return &genResp, nil
 }
+
+// CompleteText implements RawCompleter for Google Gemini.
+func (p *GeminiProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
+	if strings.TrimSpace(model) == "" {
+		model = p.defaultModel
+	}
+
+	type part struct {
+		Text string `json:"text"`
+	}
+	type content struct {
+		Role  string `json:"role,omitempty"`
+		Parts []part `json:"parts"`
+	}
+	type systemInstruction struct {
+		Parts []part `json:"parts"`
+	}
+	type geminiRequest struct {
+		SystemInstruction systemInstruction `json:"system_instruction"`
+		Contents          []content         `json:"contents"`
+	}
+
+	reqPayload := geminiRequest{
+		SystemInstruction: systemInstruction{
+			Parts: []part{{Text: systemPrompt}},
+		},
+		Contents: []content{
+			{
+				Role:  "user",
+				Parts: []part{{Text: userPrompt}},
+			},
+		},
+	}
+
+	reqBodyBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal gemini request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", strings.TrimRight(p.baseURL, "/"), model, p.apiKey)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to create http request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("gemini http request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return "", fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+	}
+	if resp.StatusCode >= 500 {
+		return "", fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("gemini api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	type geminiResponse struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+
+	var geminiResp geminiResponse
+	if err := json.Unmarshal(bodyBytes, &geminiResp); err != nil {
+		return "", fmt.Errorf("%w: malformed gemini response: %v", ErrInvalidResponse, err)
+	}
+
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("%w: no candidates returned by gemini", ErrInvalidResponse)
+	}
+
+	return strings.TrimSpace(geminiResp.Candidates[0].Content.Parts[0].Text), nil
+}

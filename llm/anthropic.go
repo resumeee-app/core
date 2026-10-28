@@ -175,3 +175,92 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 
 	return &genResp, nil
 }
+
+// CompleteText implements RawCompleter for Anthropic Claude.
+func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
+	if strings.TrimSpace(model) == "" {
+		model = p.defaultModel
+	}
+
+	type anthropicMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	type requestBody struct {
+		Model     string             `json:"model"`
+		System    string             `json:"system,omitempty"`
+		MaxTokens int                `json:"max_tokens"`
+		Messages  []anthropicMessage `json:"messages"`
+	}
+
+	payload := requestBody{
+		Model:     model,
+		System:    systemPrompt,
+		MaxTokens: defaultAnthropicTokens,
+		Messages: []anthropicMessage{
+			{Role: "user", Content: userPrompt},
+		},
+	}
+
+	reqBodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal anthropic request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/v1/messages", strings.TrimRight(p.baseURL, "/"))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to create http request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", p.apiKey)
+	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("anthropic http request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return "", fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+	}
+	if resp.StatusCode >= 500 {
+		return "", fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("anthropic api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	type contentBlock struct {
+		Type string `json:"type"`
+		Text string `json:"text,omitempty"`
+	}
+
+	type anthropicResponse struct {
+		Content []contentBlock `json:"content"`
+	}
+
+	var anthropicResp anthropicResponse
+	if err := json.Unmarshal(bodyBytes, &anthropicResp); err != nil {
+		return "", fmt.Errorf("%w: malformed anthropic response: %v", ErrInvalidResponse, err)
+	}
+
+	for _, block := range anthropicResp.Content {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			return strings.TrimSpace(block.Text), nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: no text content returned by anthropic", ErrInvalidResponse)
+}

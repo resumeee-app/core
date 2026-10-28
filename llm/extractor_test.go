@@ -1,0 +1,189 @@
+package llm_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"resumeee/internal/domain"
+	"resumeee/internal/llm"
+)
+
+func TestResumeExtractor_Table(t *testing.T) {
+	sampleResumeJSON := `{
+		"basics": {
+			"name": "Alex Mercer",
+			"label": "Distributed Systems Engineer",
+			"email": "alex@example.com",
+			"phone": "+1-555-0199",
+			"summary": "Specialist in consensus protocols and distributed databases.",
+			"location": {
+				"city": "Seattle",
+				"region": "WA",
+				"countryCode": "US"
+			}
+		},
+		"skills": [
+			{"name": "Go", "level": "Expert", "keywords": ["goroutines", "concurrency"]},
+			{"name": "Distributed Systems", "level": "Senior", "keywords": ["Raft", "Paxos"]}
+		],
+		"work": [
+			{
+				"name": "CloudScale Inc",
+				"position": "Staff Engineer",
+				"startDate": "2020-01-01",
+				"endDate": "2024-05-01",
+				"summary": "Led storage architecture team.",
+				"highlights": ["Built distributed lock manager", "Cut tail latency by 40%"]
+			}
+		],
+		"education": [
+			{
+				"institution": "University of Washington",
+				"area": "Computer Science",
+				"studyType": "B.S.",
+				"startDate": "2014-09-01",
+				"endDate": "2018-06-01"
+			}
+		],
+		"projects": [
+			{
+				"name": "MiniRaft",
+				"description": "Educational Raft implementation in pure Go",
+				"highlights": ["100% test coverage with Jepsen tests"]
+			}
+		]
+	}`
+
+	t.Run("Complete resume text extracts successfully", func(t *testing.T) {
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return sampleResumeJSON, nil
+		})
+		extractor := llm.NewResumeExtractor(completer)
+
+		res, err := extractor.ExtractResume(context.Background(), "Alex Mercer resume text...", "mock", "mock-model")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Basics.Name != "Alex Mercer" {
+			t.Errorf("expected name 'Alex Mercer', got: %q", res.Basics.Name)
+		}
+		if res.Basics.Email != "alex@example.com" {
+			t.Errorf("expected email 'alex@example.com', got: %q", res.Basics.Email)
+		}
+		if len(res.Skills) != 2 {
+			t.Errorf("expected 2 skills, got: %d", len(res.Skills))
+		}
+		if len(res.Work) != 1 || res.Work[0].GetCompany() != "CloudScale Inc" {
+			t.Errorf("expected 1 work at CloudScale Inc, got: %+v", res.Work)
+		}
+	})
+
+	t.Run("Markdown code fences are stripped cleanly", func(t *testing.T) {
+		fenced := "```json\n" + sampleResumeJSON + "\n```"
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return fenced, nil
+		})
+		extractor := llm.NewResumeExtractor(completer)
+
+		res, err := extractor.ExtractResume(context.Background(), "Sample raw text", "", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Basics.Name != "Alex Mercer" {
+			t.Errorf("expected name 'Alex Mercer', got: %q", res.Basics.Name)
+		}
+	})
+
+	t.Run("Empty resume text returns validation error", func(t *testing.T) {
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return sampleResumeJSON, nil
+		})
+		extractor := llm.NewResumeExtractor(completer)
+
+		_, err := extractor.ExtractResume(context.Background(), "   \n\t  ", "", "")
+		if err == nil {
+			t.Fatal("expected validation error for empty text, got nil")
+		}
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("expected ErrValidation, got: %v", err)
+		}
+	})
+
+	t.Run("Malformed JSON from LLM returns validation error", func(t *testing.T) {
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return "{ truncated json...", nil
+		})
+		extractor := llm.NewResumeExtractor(completer)
+
+		_, err := extractor.ExtractResume(context.Background(), "Valid text", "", "")
+		if err == nil {
+			t.Fatal("expected validation error for malformed JSON, got nil")
+		}
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("expected ErrValidation, got: %v", err)
+		}
+	})
+
+	t.Run("Empty response from LLM returns validation error", func(t *testing.T) {
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return "   ", nil
+		})
+		extractor := llm.NewResumeExtractor(completer)
+
+		_, err := extractor.ExtractResume(context.Background(), "Valid text", "", "")
+		if err == nil {
+			t.Fatal("expected error for empty LLM response, got nil")
+		}
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("expected ErrValidation, got: %v", err)
+		}
+	})
+
+	t.Run("Upstream completer error is propagated", func(t *testing.T) {
+		upstreamErr := errors.New("upstream connection reset")
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return "", upstreamErr
+		})
+		extractor := llm.NewResumeExtractor(completer)
+
+		_, err := extractor.ExtractResume(context.Background(), "Valid text", "", "")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, upstreamErr) {
+			t.Errorf("expected upstreamErr, got: %v", err)
+		}
+	})
+
+	t.Run("Context cancelled returns error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return sampleResumeJSON, nil
+		})
+		extractor := llm.NewResumeExtractor(completer)
+
+		_, err := extractor.ExtractResume(ctx, "Valid text", "", "")
+		if err == nil {
+			t.Fatal("expected error for cancelled context, got nil")
+		}
+	})
+
+	t.Run("Minimal resume returns valid JSONResume", func(t *testing.T) {
+		minimalJSON := `{"basics": {"name": "Only Name", "email": "only@test.com"}}`
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return minimalJSON, nil
+		})
+		extractor := llm.NewResumeExtractor(completer)
+
+		res, err := extractor.ExtractResume(context.Background(), "Only Name only@test.com", "", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Basics.Name != "Only Name" || res.Basics.Email != "only@test.com" {
+			t.Errorf("unexpected minimal resume content: %+v", res)
+		}
+	})
+}

@@ -157,3 +157,85 @@ func (p *OpenAIProvider) GenerateTailoredResume(ctx context.Context, req domain.
 
 	return &genResp, nil
 }
+
+// CompleteText implements RawCompleter for OpenAI.
+func (p *OpenAIProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
+	if strings.TrimSpace(model) == "" {
+		model = p.defaultModel
+	}
+
+	type chatMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	type requestBody struct {
+		Model    string        `json:"model"`
+		Messages []chatMessage `json:"messages"`
+	}
+
+	payload := requestBody{
+		Model: model,
+		Messages: []chatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+	}
+
+	reqBodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal openai request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/v1/chat/completions", strings.TrimRight(p.baseURL, "/"))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to create http request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("openai http request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return "", fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
+	}
+	if resp.StatusCode >= 500 {
+		return "", fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("openai api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	type openAIResponse struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	var openAIResp openAIResponse
+	if err := json.Unmarshal(bodyBytes, &openAIResp); err != nil {
+		return "", fmt.Errorf("%w: malformed openai response: %v", ErrInvalidResponse, err)
+	}
+
+	if len(openAIResp.Choices) == 0 {
+		return "", fmt.Errorf("%w: no choices returned by openai", ErrInvalidResponse)
+	}
+
+	return strings.TrimSpace(openAIResp.Choices[0].Message.Content), nil
+}

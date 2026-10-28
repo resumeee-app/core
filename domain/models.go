@@ -248,6 +248,11 @@ func (b *Branch) IsStaleRevision(currentMasterRevision int64) bool {
 	return b.LastSyncedMasterRevision < currentMasterRevision
 }
 
+// PresetName returns an empty string on domain.Branch, allowing view models to override it.
+func (b Branch) PresetName() string {
+	return ""
+}
+
 // VersionStatus represents the lifecycle state of a BranchVersion.
 type VersionStatus string
 

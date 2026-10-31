@@ -44,6 +44,7 @@ type SourceType string
 const (
 	SourceTypeLLMGeneration SourceType = "llm_generation"
 	SourceTypeManualEdit    SourceType = "manual_edit"
+	SourceTypeMasterProfile SourceType = "master_profile"
 )
 
 // Location captures standard postal and geographical location attributes.
@@ -221,11 +222,20 @@ type TemplateSet struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// Canonical default branch constants and helpers.
+const DefaultBranchName = "Master Profile (Default)"
+
+// DefaultBranchID returns the deterministic branch ID for a user's default untailored branch.
+func DefaultBranchID(userID string) string {
+	return "branch-default-" + userID
+}
+
 // Branch represents a tailored resume line (Tier-3 context + rules + version pointer).
 type Branch struct {
 	ID                       string    `json:"id" gorm:"primaryKey;type:text"`
 	UserID                   string    `json:"user_id" gorm:"index;not null"`
 	Name                     string    `json:"name" gorm:"not null"` // e.g., "Stripe - Staff Backend Engineer"
+	IsDefault                bool      `json:"is_default" gorm:"default:false;index"`
 	TargetRole               string    `json:"target_role,omitempty"`
 	TargetCompany            string    `json:"target_company,omitempty"`
 	TargetRequirements       string    `json:"target_requirements,omitempty"` // Job description or immigration criteria
@@ -241,6 +251,12 @@ type Branch struct {
 	IsStale                  bool      `json:"is_stale" gorm:"-"` // Computed: LastSyncedMasterRevision < Profile.MasterRevision
 	CreatedAt                time.Time `json:"created_at"`
 	UpdatedAt                time.Time `json:"updated_at"`
+}
+
+// CanTailor returns true if the branch can be tailored via LLM or manual bullet edits.
+// Default branches directly render the master profile and cannot be tailored.
+func (b *Branch) CanTailor() bool {
+	return !b.IsDefault
 }
 
 // IsStaleRevision returns true if the branch's last synced master revision is behind the given master revision.

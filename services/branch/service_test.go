@@ -511,3 +511,172 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 	}
 }
 
+func TestBranchService_DefaultBranch(t *testing.T) {
+	ctx := context.Background()
+	env := setupTestBranchEnv(t, 10)
+	defaultBranchID := domain.DefaultBranchID(env.defaultUser)
+
+	// Fetch default branch
+	defaultBranch, err := env.svc.GetBranch(ctx, env.defaultUser, defaultBranchID)
+	if err != nil {
+		t.Fatalf("failed to get default branch: %v", err)
+	}
+	if !defaultBranch.IsDefault {
+		t.Fatalf("expected IsDefault=true on default branch")
+	}
+
+	t.Run("GenerateVersion on default branch bypasses LLM and worker pool", func(t *testing.T) {
+		initialEnqueued := len(env.enqueuer.jobs)
+
+		ver, err := env.svc.GenerateVersion(ctx, env.defaultUser, defaultBranchID)
+		if err != nil {
+			t.Fatalf("GenerateVersion failed: %v", err)
+		}
+
+		if len(env.enqueuer.jobs) != initialEnqueued {
+			t.Errorf("expected enqueuer jobs to remain %d, got %d", initialEnqueued, len(env.enqueuer.jobs))
+		}
+		if ver.Status != domain.VersionStatusCompleted {
+			t.Errorf("expected status completed, got %s", ver.Status)
+		}
+		if ver.SourceType != domain.SourceTypeMasterProfile {
+			t.Errorf("expected SourceType %s, got %s", domain.SourceTypeMasterProfile, ver.SourceType)
+		}
+		if ver.ProviderUsed != "none" || ver.ModelUsed != "none" {
+			t.Errorf("expected provider/model to be none, got %s/%s", ver.ProviderUsed, ver.ModelUsed)
+		}
+		if ver.HTMLOutput == "" || ver.MarkdownOutput == "" || ver.PlainTextOutput == "" {
+			t.Errorf("expected non-empty rendered outputs")
+		}
+
+		// Verify branch active_version_id was updated
+		bAfter, err := env.svc.GetBranch(ctx, env.defaultUser, defaultBranchID)
+		if err != nil {
+			t.Fatalf("failed to get branch after generate: %v", err)
+		}
+		if bAfter.ActiveVersionID == nil || *bAfter.ActiveVersionID != ver.ID {
+			t.Errorf("expected active version ID to be updated to %s", ver.ID)
+		}
+	})
+
+	t.Run("GenerateVersion on tailored branch enqueues job", func(t *testing.T) {
+		initialEnqueued := len(env.enqueuer.jobs)
+
+		ver, err := env.svc.GenerateVersion(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("GenerateVersion failed: %v", err)
+		}
+
+		if len(env.enqueuer.jobs) != initialEnqueued+1 {
+			t.Errorf("expected enqueuer jobs to increase by 1, got %d (was %d)", len(env.enqueuer.jobs), initialEnqueued)
+		}
+		if ver.Status != domain.VersionStatusPending {
+			t.Errorf("expected status pending for tailored branch, got %s", ver.Status)
+		}
+	})
+
+	t.Run("UpdateBranch on default branch allows TemplateSetID and triggers direct re-render", func(t *testing.T) {
+		b, err := env.svc.GetBranch(ctx, env.defaultUser, defaultBranchID)
+		if err != nil {
+			t.Fatalf("failed to get default branch: %v", err)
+		}
+
+		oldActiveVer := ""
+		if b.ActiveVersionID != nil {
+			oldActiveVer = *b.ActiveVersionID
+		}
+
+		b.TemplateSetID = sqlite.TemplateDetailedImmigrationCVID
+		updated, err := env.svc.UpdateBranch(ctx, b)
+		if err != nil {
+			t.Fatalf("failed to update default branch template: %v", err)
+		}
+
+		if updated.TemplateSetID != sqlite.TemplateDetailedImmigrationCVID {
+			t.Errorf("expected template %s, got %s", sqlite.TemplateDetailedImmigrationCVID, updated.TemplateSetID)
+		}
+		if updated.ActiveVersionID == nil || *updated.ActiveVersionID == oldActiveVer {
+			t.Errorf("expected new active version rendered after template update")
+		}
+
+		newVer, err := env.svc.GetVersion(ctx, defaultBranchID, *updated.ActiveVersionID)
+		if err != nil {
+			t.Fatalf("failed to get new active version: %v", err)
+		}
+		if newVer.TemplateSetIDUsed != sqlite.TemplateDetailedImmigrationCVID {
+			t.Errorf("expected version to use new template, got %s", newVer.TemplateSetIDUsed)
+		}
+	})
+
+	t.Run("UpdateBranch on default branch rejects tailor fields", func(t *testing.T) {
+		b, err := env.svc.GetBranch(ctx, env.defaultUser, defaultBranchID)
+		if err != nil {
+			t.Fatalf("failed to get default branch: %v", err)
+		}
+
+		b.TargetRole = "Staff Engineer"
+		_, err = env.svc.UpdateBranch(ctx, b)
+		if err == nil {
+			t.Fatalf("expected error modifying target role on default branch, got nil")
+		}
+		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+			t.Errorf("expected ErrDefaultBranchImmutable, got: %v", err)
+		}
+	})
+
+	t.Run("DeleteBranch on default branch returns ErrDefaultBranchImmutable", func(t *testing.T) {
+		err := env.svc.DeleteBranch(ctx, env.defaultUser, defaultBranchID)
+		if err == nil {
+			t.Fatalf("expected error deleting default branch, got nil")
+		}
+		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+			t.Errorf("expected ErrDefaultBranchImmutable, got: %v", err)
+		}
+	})
+
+	t.Run("EditVersion on default branch returns ErrDefaultBranchImmutable", func(t *testing.T) {
+		b, err := env.svc.GetBranch(ctx, env.defaultUser, defaultBranchID)
+		if err != nil {
+			t.Fatalf("failed to get default branch: %v", err)
+		}
+		if b.ActiveVersionID == nil {
+			t.Fatalf("expected active version on default branch")
+		}
+
+		_, err = env.svc.EditVersion(ctx, env.defaultUser, defaultBranchID, *b.ActiveVersionID, domain.TailoredContent{})
+		if err == nil {
+			t.Fatalf("expected error editing version on default branch, got nil")
+		}
+		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+			t.Errorf("expected ErrDefaultBranchImmutable, got: %v", err)
+		}
+	})
+
+	t.Run("SyncBranches handles default branch synchronously without queueing", func(t *testing.T) {
+		initialEnqueued := len(env.enqueuer.jobs)
+
+		vIDs, err := env.svc.SyncBranches(ctx, env.defaultUser, []string{defaultBranchID, env.branchID})
+		if err != nil {
+			t.Fatalf("SyncBranches failed: %v", err)
+		}
+		if len(vIDs) != 2 {
+			t.Fatalf("expected 2 version IDs returned, got %d", len(vIDs))
+		}
+
+		// Only 1 job enqueued (for env.branchID), default branch was rendered synchronously
+		if len(env.enqueuer.jobs) != initialEnqueued+1 {
+			t.Errorf("expected exactly 1 job enqueued for tailored branch, got %d", len(env.enqueuer.jobs)-initialEnqueued)
+		}
+
+		// Default branch version should be completed
+		defVer, err := env.svc.GetVersion(ctx, defaultBranchID, vIDs[0])
+		if err != nil {
+			t.Fatalf("failed to get default branch version: %v", err)
+		}
+		if defVer.Status != domain.VersionStatusCompleted {
+			t.Errorf("expected default branch version to be completed, got %s", defVer.Status)
+		}
+	})
+}
+
+

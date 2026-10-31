@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"resumeee/internal/domain"
+	"resumeee/internal/renderer"
 	"resumeee/internal/validator"
 	"resumeee/internal/worker"
 )
@@ -117,6 +118,47 @@ func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*dom
 }
 
 func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error) {
+	existing, err := s.branchRepo.GetBranch(ctx, branch.UserID, branch.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	if existing.IsDefault {
+		// Enforce default branch immutability: disallow tailor fields
+		if branch.TargetRole != "" || branch.TargetCompany != "" || branch.TargetRequirements != "" ||
+			branch.BranchInstructions != "" || branch.PresetID != nil || branch.ProviderOverride != "" ||
+			branch.ModelOverride != "" || len(branch.PinnedEntityIDs) > 0 || len(branch.ExcludedEntityIDs) > 0 {
+			return nil, fmt.Errorf("%w: default branch cannot be tailored with custom roles, presets, or instructions", domain.ErrDefaultBranchImmutable)
+		}
+		if branch.Name != "" && branch.Name != domain.DefaultBranchName {
+			return nil, fmt.Errorf("%w: default branch name cannot be altered", domain.ErrDefaultBranchImmutable)
+		}
+
+		branch.IsDefault = true
+		branch.Name = domain.DefaultBranchName
+
+		templateChanged := branch.TemplateSetID != "" && branch.TemplateSetID != existing.TemplateSetID
+		if templateChanged {
+			if s.templateRepo != nil {
+				if _, err := s.templateRepo.GetTemplate(ctx, branch.UserID, branch.TemplateSetID); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if err := s.branchRepo.UpdateBranch(ctx, branch); err != nil {
+			return nil, err
+		}
+
+		if templateChanged {
+			if _, err := s.renderDefaultBranchVersion(ctx, branch.UserID, branch); err != nil {
+				return nil, err
+			}
+		}
+
+		return s.branchRepo.GetBranch(ctx, branch.UserID, branch.ID)
+	}
+
 	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" {
 		ver, err := s.branchRepo.GetVersion(ctx, "", *branch.ActiveVersionID)
 		if err != nil {
@@ -141,6 +183,10 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 }
 
 func (s *service) DeleteBranch(ctx context.Context, userID, id string) error {
+	branch, err := s.branchRepo.GetBranch(ctx, userID, id)
+	if err == nil && branch != nil && branch.IsDefault {
+		return fmt.Errorf("%w: cannot delete default branch", domain.ErrDefaultBranchImmutable)
+	}
 	return s.branchRepo.DeleteBranch(ctx, userID, id)
 }
 
@@ -169,6 +215,10 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
+	}
+
+	if branch.IsDefault {
+		return s.renderDefaultBranchVersion(ctx, userID, branch)
 	}
 
 	var masterRevision int64 = 1
@@ -259,6 +309,15 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 
 	var enqueuedIDs []string
 	for _, b := range targetBranches {
+		if b.IsDefault {
+			ver, err := s.renderDefaultBranchVersion(ctx, userID, &b)
+			if err != nil {
+				return enqueuedIDs, err
+			}
+			enqueuedIDs = append(enqueuedIDs, ver.ID)
+			continue
+		}
+
 		provider := b.ProviderOverride
 		if provider == "" {
 			provider = defaultProvider
@@ -312,6 +371,10 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
+	}
+
+	if branch.IsDefault {
+		return nil, fmt.Errorf("%w: default branch cannot be manually edited", domain.ErrDefaultBranchImmutable)
 	}
 
 	parentVer, err := s.GetVersion(ctx, branchID, parentVersionNumOrID)
@@ -380,4 +443,77 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	}
 
 	return newVer, nil
+}
+
+func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string, branch *domain.Branch) (*domain.BranchVersion, error) {
+	if s.profileRepo == nil {
+		return nil, errors.New("profile repository required for default branch rendering")
+	}
+	snapshot, err := s.profileRepo.GetSnapshot(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("getting profile snapshot for default branch: %w", err)
+	}
+	prof, err := s.profileRepo.GetProfile(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("getting profile for default branch: %w", err)
+	}
+
+	tmplID := branch.TemplateSetID
+	if tmplID == "" {
+		tmplID = renderer.TemplateStandardCleanID
+		branch.TemplateSetID = tmplID
+	}
+
+	if s.templateRepo == nil {
+		return nil, errors.New("template repository required for default branch rendering")
+	}
+	tmpl, err := s.templateRepo.GetTemplate(ctx, userID, tmplID)
+	if err != nil {
+		return nil, fmt.Errorf("getting template %s for default branch: %w", tmplID, err)
+	}
+
+	tailoredContent := domain.SnapshotToTailoredContent(snapshot)
+
+	var rendered *domain.RenderOutput
+	if s.renderer != nil {
+		r, err := s.renderer.Render(ctx, tmpl, prof, tailoredContent)
+		if err != nil {
+			return nil, fmt.Errorf("rendering default branch: %w", err)
+		}
+		rendered = r
+	} else {
+		rendered = &domain.RenderOutput{}
+	}
+
+	now := time.Now().UTC()
+	ver := &domain.BranchVersion{
+		ID:                 "ver-" + uuid.New().String(),
+		BranchID:           branch.ID,
+		Status:             domain.VersionStatusCompleted,
+		MasterRevisionUsed: snapshot.MasterRevision,
+		TemplateSetIDUsed:  branch.TemplateSetID,
+		ProviderUsed:       "none",
+		ModelUsed:          "none",
+		SourceType:         domain.SourceTypeMasterProfile,
+		ParentVersionID:    branch.ActiveVersionID,
+		TailoredContent:    tailoredContent,
+		HTMLOutput:         rendered.HTML,
+		MarkdownOutput:     rendered.Markdown,
+		PlainTextOutput:    rendered.PlainText,
+		CreatedAt:          now,
+		CompletedAt:        &now,
+	}
+
+	if err := s.branchRepo.CreateVersion(ctx, ver); err != nil {
+		return nil, fmt.Errorf("creating default branch version: %w", err)
+	}
+
+	if err := s.branchRepo.CompleteVersion(ctx, ver); err != nil {
+		return nil, fmt.Errorf("completing default branch version: %w", err)
+	}
+
+	branch.ActiveVersionID = &ver.ID
+	branch.LastSyncedMasterRevision = snapshot.MasterRevision
+
+	return ver, nil
 }

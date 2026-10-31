@@ -18,4 +18,7 @@ var (
 
 	// ErrQueueFull is returned when asynchronous worker pool job capacity is saturated.
 	ErrQueueFull = errors.New("worker queue full")
+
+	// ErrDefaultBranchImmutable is returned when attempting to delete or tailor the default branch.
+	ErrDefaultBranchImmutable = errors.New("default branch cannot be deleted or tailored")
 )

@@ -868,3 +868,83 @@ func TestProfileService_ExportJSONResume_WithVersionID(t *testing.T) {
 		t.Errorf("expected ErrNotFound for nonexistent version_id, got %v", err)
 	}
 }
+
+func TestJSONResume_Import_GeneratesShortIDs(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	ctx := context.Background()
+	userID := "import-user-shortids"
+
+	raw := sampleOfficialJSONResume()
+	snap, err := svc.ImportJSONResume(ctx, userID, []byte(raw))
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+
+	if len(snap.Skills) == 0 {
+		t.Fatalf("expected imported skills")
+	}
+	for _, s := range snap.Skills {
+		if s.ShortID == "" {
+			t.Errorf("expected skill %q to have non-empty ShortID", s.Name)
+		}
+		if !strings.HasPrefix(s.ShortID, "skill-") {
+			t.Errorf("expected skill short_id to start with 'skill-', got %q", s.ShortID)
+		}
+	}
+
+	if len(snap.Experiences) == 0 {
+		t.Fatalf("expected imported experiences")
+	}
+	for _, exp := range snap.Experiences {
+		if exp.ShortID == "" {
+			t.Errorf("expected experience %q to have non-empty ShortID", exp.Company)
+		}
+		if !strings.HasPrefix(exp.ShortID, "exp-") {
+			t.Errorf("expected exp short_id to start with 'exp-', got %q", exp.ShortID)
+		}
+		for _, f := range exp.Facts {
+			if f.ShortID == "" {
+				t.Errorf("expected fact to have non-empty ShortID")
+			}
+			if !strings.HasPrefix(f.ShortID, "fact-") {
+				t.Errorf("expected fact short_id to start with 'fact-', got %q", f.ShortID)
+			}
+		}
+	}
+
+	if len(snap.Projects) == 0 {
+		t.Fatalf("expected imported projects")
+	}
+	for _, proj := range snap.Projects {
+		if proj.ShortID == "" {
+			t.Errorf("expected project %q to have non-empty ShortID", proj.Name)
+		}
+		if !strings.HasPrefix(proj.ShortID, "proj-") {
+			t.Errorf("expected proj short_id to start with 'proj-', got %q", proj.ShortID)
+		}
+	}
+
+	if len(snap.Education) == 0 {
+		t.Fatalf("expected imported education")
+	}
+	for _, edu := range snap.Education {
+		if edu.ShortID == "" {
+			t.Errorf("expected education %q to have non-empty ShortID", edu.Institution)
+		}
+		if !strings.HasPrefix(edu.ShortID, "edu-") {
+			t.Errorf("expected edu short_id to start with 'edu-', got %q", edu.ShortID)
+		}
+	}
+
+	if len(snap.Certifications) == 0 {
+		t.Fatalf("expected imported certifications")
+	}
+	for _, cert := range snap.Certifications {
+		if cert.ShortID == "" {
+			t.Errorf("expected cert %q to have non-empty ShortID", cert.Name)
+		}
+		if !strings.HasPrefix(cert.ShortID, "cert-") {
+			t.Errorf("expected cert short_id to start with 'cert-', got %q", cert.ShortID)
+		}
+	}
+}

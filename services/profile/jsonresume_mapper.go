@@ -7,14 +7,22 @@ import (
 	"time"
 
 	"resumeee/internal/domain"
-
-	"github.com/google/uuid"
 )
 
 const defaultSchemaURL = "https://raw.githubusercontent.com/jsonresume/resume-schema/v1.0.0/schema.json"
 
 // ToSnapshot converts a parsed JSONResume document into a domain MasterProfileSnapshot,
-// generating relational entities, child facts with skill associations, and preserving unmapped sections.
+// generating relational entities with compact short IDs, child facts with skill associations,
+// and preserving unmapped sections.
+//
+// Parameters:
+//   - resume: The parsed JSONResume document structure.
+//   - userID: Tenant identifier scoping the profile snapshot (defaults to "default").
+//   - existingProfile: Baseline profile to inherit configuration and metadata from (optional).
+//   - revision: Master revision sequence number.
+//
+// Returns:
+//   - Pointer to MasterProfileSnapshot with generated IDs and short IDs, or domain.ErrValidation.
 func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64) (*domain.MasterProfileSnapshot, error) {
 	if resume == nil {
 		return nil, domain.ErrValidation
@@ -24,7 +32,7 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	}
 
 	// 1. Construct Profile root
-	profileID := "prof-" + uuid.New().String()
+	profileID := domain.GenerateID("prof")
 	rules := ""
 	provider := "gemini"
 	model := "gemini-3.8-flash"
@@ -126,7 +134,8 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	skills := make([]domain.Skill, len(resume.Skills))
 	for i, s := range resume.Skills {
 		skills[i] = domain.Skill{
-			ID:          "skill-" + uuid.New().String(),
+			ID:          domain.GenerateID("skill"),
+			ShortID:     domain.GenerateShortID("skill"),
 			UserID:      userID,
 			Name:        s.Name,
 			Proficiency: s.Level,
@@ -142,7 +151,8 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	// 3. Map Work Experiences and child Facts
 	experiences := make([]domain.WorkExperience, len(resume.Work))
 	for i, w := range resume.Work {
-		expID := "exp-" + uuid.New().String()
+		expID := domain.GenerateID("exp")
+		expShortID := domain.GenerateShortID("exp")
 		company := w.GetCompany()
 		var endDate *string
 		isCurrent := true
@@ -164,7 +174,8 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 		for _, h := range w.Highlights {
 			matched := matcher.findMatchingSkills(h)
 			fact := domain.Fact{
-				ID:        "fact-" + uuid.New().String(),
+				ID:        domain.GenerateID("fact"),
+				ShortID:   domain.GenerateShortID("fact"),
 				UserID:    userID,
 				OwnerID:   expID,
 				OwnerType: domain.OwnerTypeWorkExperience,
@@ -185,6 +196,7 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 
 		experiences[i] = domain.WorkExperience{
 			ID:             expID,
+			ShortID:        expShortID,
 			UserID:         userID,
 			Company:        company,
 			RoleTitle:      w.Position,
@@ -207,7 +219,8 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	// 4. Map Projects and child Facts
 	projects := make([]domain.Project, len(resume.Projects))
 	for i, p := range resume.Projects {
-		projID := "proj-" + uuid.New().String()
+		projID := domain.GenerateID("proj")
+		projShortID := domain.GenerateShortID("proj")
 		var endDate *string
 		if p.EndDate != "" {
 			ed := p.EndDate
@@ -236,7 +249,8 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 		for _, h := range p.Highlights {
 			matched := matcher.findMatchingSkills(h)
 			fact := domain.Fact{
-				ID:        "fact-" + uuid.New().String(),
+				ID:        domain.GenerateID("fact"),
+				ShortID:   domain.GenerateShortID("fact"),
 				UserID:    userID,
 				OwnerID:   projID,
 				OwnerType: domain.OwnerTypeProject,
@@ -256,6 +270,7 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 
 		projects[i] = domain.Project{
 			ID:        projID,
+			ShortID:   projShortID,
 			UserID:    userID,
 			Name:      p.Name,
 			Role:      role,
@@ -274,7 +289,8 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	// 5. Map Education
 	educations := make([]domain.Education, len(resume.Education))
 	for i, e := range resume.Education {
-		eduID := "edu-" + uuid.New().String()
+		eduID := domain.GenerateID("edu")
+		eduShortID := domain.GenerateShortID("edu")
 		var endDate *string
 		if e.EndDate != "" {
 			ed := e.EndDate
@@ -290,6 +306,7 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 
 		educations[i] = domain.Education{
 			ID:          eduID,
+			ShortID:     eduShortID,
 			UserID:      userID,
 			Institution: e.Institution,
 			Degree:      e.StudyType,
@@ -306,9 +323,11 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	// 6. Map Certifications
 	certifications := make([]domain.Certification, len(resume.Certificates))
 	for i, c := range resume.Certificates {
-		certID := "cert-" + uuid.New().String()
+		certID := domain.GenerateID("cert")
+		certShortID := domain.GenerateShortID("cert")
 		certifications[i] = domain.Certification{
 			ID:        certID,
+			ShortID:   certShortID,
 			UserID:    userID,
 			Name:      c.Name,
 			Issuer:    c.Issuer,

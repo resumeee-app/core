@@ -49,7 +49,11 @@ func ExtractJSON(s string) string {
 }
 
 // GenerationResponseSchema returns the canonical JSON Schema for domain.GenerationResponse
-// (TailoredContent and GapReport), enforcing strict validation keywords (required, additionalProperties: false).
+// (TailoredContent and GapReport), enforcing strict validation keywords (required, additionalProperties: false)
+// and directing the LLM to output compact short identifiers for all entity and provenance citation references.
+//
+// Returns:
+//   - A map[string]any representing the JSON Schema draft-07 compatible structure for structured LLM decoding.
 func GenerationResponseSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -72,8 +76,9 @@ func GenerationResponseSchema() map[string]any {
 									"items": map[string]any{"type": "string"},
 								},
 								"source_skill_ids": map[string]any{
-									"type":  "array",
-									"items": map[string]any{"type": "string"},
+									"type":        "array",
+									"items":       map[string]any{"type": "string"},
+									"description": "Short identifiers of cited Skills (e.g. skill-1)",
 								},
 							},
 							"required":             []string{"category", "skills"},
@@ -87,7 +92,7 @@ func GenerationResponseSchema() map[string]any {
 							"properties": map[string]any{
 								"source_entity_id": map[string]any{
 									"type":        "string",
-									"description": "Exact UUID of the Master WorkExperience",
+									"description": "Short identifier of the Master WorkExperience (e.g. exp-1)",
 								},
 								"company":    map[string]any{"type": "string"},
 								"role_title": map[string]any{"type": "string"},
@@ -117,11 +122,12 @@ func GenerationResponseSchema() map[string]any {
 											"source_fact_ids": map[string]any{
 												"type":        "array",
 												"items":       map[string]any{"type": "string"},
-												"description": "UUIDs of Facts under this WorkExperience that justify this bullet",
+												"description": "Short identifiers of Facts under this WorkExperience that justify this bullet (e.g. fact-1)",
 											},
 											"source_skill_ids": map[string]any{
-												"type":  "array",
-												"items": map[string]any{"type": "string"},
+												"type":        "array",
+												"items":       map[string]any{"type": "string"},
+												"description": "Short identifiers of Skills (e.g. skill-1)",
 											},
 										},
 										"required":             []string{"text", "source_fact_ids"},
@@ -138,21 +144,24 @@ func GenerationResponseSchema() map[string]any {
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-								"source_entity_id": map[string]any{"type": "string"},
-								"name":             map[string]any{"type": "string"},
-								"role":             map[string]any{"type": "string"},
-								"url":              map[string]any{"type": "string"},
-								"start_date":       map[string]any{"type": "string"},
-								"end_date":         map[string]any{"type": "string"},
-								"summary":          map[string]any{"type": "string"},
+								"source_entity_id": map[string]any{
+									"type":        "string",
+									"description": "Short identifier of the Master Project (e.g. proj-1)",
+								},
+								"name":       map[string]any{"type": "string"},
+								"role":       map[string]any{"type": "string"},
+								"url":        map[string]any{"type": "string"},
+								"start_date": map[string]any{"type": "string"},
+								"end_date":   map[string]any{"type": "string"},
+								"summary":    map[string]any{"type": "string"},
 								"bullets": map[string]any{
 									"type": "array",
 									"items": map[string]any{
 										"type": "object",
 										"properties": map[string]any{
 											"text":             map[string]any{"type": "string"},
-											"source_fact_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-											"source_skill_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+											"source_fact_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Short identifiers of Facts under this Project (e.g. fact-1)"},
+											"source_skill_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Short identifiers of Skills (e.g. skill-1)"},
 										},
 										"required":             []string{"text", "source_fact_ids"},
 										"additionalProperties": false,
@@ -168,13 +177,16 @@ func GenerationResponseSchema() map[string]any {
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-								"source_entity_id": map[string]any{"type": "string"},
-								"institution":      map[string]any{"type": "string"},
-								"degree":           map[string]any{"type": "string"},
-								"field":            map[string]any{"type": "string"},
-								"start_date":       map[string]any{"type": "string"},
-								"end_date":         map[string]any{"type": "string"},
-								"score":            map[string]any{"type": "string"},
+								"source_entity_id": map[string]any{
+									"type":        "string",
+									"description": "Short identifier of the Master Education (e.g. edu-1)",
+								},
+								"institution": map[string]any{"type": "string"},
+								"degree":      map[string]any{"type": "string"},
+								"field":       map[string]any{"type": "string"},
+								"start_date":  map[string]any{"type": "string"},
+								"end_date":    map[string]any{"type": "string"},
+								"score":       map[string]any{"type": "string"},
 							},
 							"required":             []string{"source_entity_id", "institution", "degree", "field", "start_date"},
 							"additionalProperties": false,
@@ -185,11 +197,14 @@ func GenerationResponseSchema() map[string]any {
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-								"source_entity_id": map[string]any{"type": "string"},
-								"name":             map[string]any{"type": "string"},
-								"issuer":           map[string]any{"type": "string"},
-								"date":             map[string]any{"type": "string"},
-								"url":              map[string]any{"type": "string"},
+								"source_entity_id": map[string]any{
+									"type":        "string",
+									"description": "Short identifier of the Master Certification (e.g. cert-1)",
+								},
+								"name":   map[string]any{"type": "string"},
+								"issuer": map[string]any{"type": "string"},
+								"date":   map[string]any{"type": "string"},
+								"url":    map[string]any{"type": "string"},
 							},
 							"required":             []string{"source_entity_id", "name", "issuer", "date"},
 							"additionalProperties": false,

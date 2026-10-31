@@ -83,9 +83,17 @@ type Profile struct {
 	UpdatedAt          time.Time      `json:"updated_at"`
 }
 
+// ShortIdentifiable is implemented by career domain entities that provide a compact short identifier.
+// Types implementing this interface can be rendered into LLM prompts or UI badges using EffectiveShortID.
+type ShortIdentifiable interface {
+	// EffectiveShortID returns the clean short identifier, falling back to deterministic shortening if empty.
+	EffectiveShortID() string
+}
+
 // Skill is a first-class entity linked across experiences, projects, and individual facts.
 type Skill struct {
 	ID              string         `json:"id" gorm:"primaryKey;type:text"`
+	ShortID         string         `json:"short_id,omitempty" gorm:"index"`
 	UserID          string         `json:"user_id" gorm:"index;not null"`
 	Name            string         `json:"name" gorm:"not null;index"`
 	Category        string         `json:"category"` // e.g., "Languages", "Distributed Systems", "Cloud"
@@ -97,9 +105,22 @@ type Skill struct {
 	UpdatedAt       time.Time      `json:"updated_at"`
 }
 
+// EffectiveShortID returns the explicit ShortID if populated; otherwise it deterministically
+// derives a compact representation from the canonical ID via ShortenID.
+//
+// Returns:
+//   - A compact identifier string for the skill.
+func (s Skill) EffectiveShortID() string {
+	if s.ShortID != "" {
+		return s.ShortID
+	}
+	return ShortenID(s.ID)
+}
+
 // WorkExperience captures both standard resume fields and detailed administrative fields.
 type WorkExperience struct {
 	ID                string         `json:"id" gorm:"primaryKey;type:text"`
+	ShortID           string         `json:"short_id,omitempty" gorm:"index"`
 	UserID            string         `json:"user_id" gorm:"index;not null"`
 	Company           string         `json:"company" gorm:"not null"`
 	RoleTitle         string         `json:"role_title" gorm:"not null"`
@@ -121,9 +142,22 @@ type WorkExperience struct {
 	UpdatedAt         time.Time      `json:"updated_at"`
 }
 
+// EffectiveShortID returns the explicit ShortID if populated; otherwise it deterministically
+// derives a compact representation from the canonical ID via ShortenID.
+//
+// Returns:
+//   - A compact identifier string for the work experience.
+func (e WorkExperience) EffectiveShortID() string {
+	if e.ShortID != "" {
+		return e.ShortID
+	}
+	return ShortenID(e.ID)
+}
+
 // Project represents a professional, open-source, or academic project.
 type Project struct {
 	ID        string         `json:"id" gorm:"primaryKey;type:text"`
+	ShortID   string         `json:"short_id,omitempty" gorm:"index"`
 	UserID    string         `json:"user_id" gorm:"index;not null"`
 	Name      string         `json:"name" gorm:"not null"`
 	Role      string         `json:"role,omitempty"`
@@ -138,9 +172,22 @@ type Project struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 }
 
+// EffectiveShortID returns the explicit ShortID if populated; otherwise it deterministically
+// derives a compact representation from the canonical ID via ShortenID.
+//
+// Returns:
+//   - A compact identifier string for the project.
+func (p Project) EffectiveShortID() string {
+	if p.ShortID != "" {
+		return p.ShortID
+	}
+	return ShortenID(p.ID)
+}
+
 // Education captures academic credentials without excessive/unrequired course lists.
 type Education struct {
 	ID          string         `json:"id" gorm:"primaryKey;type:text"`
+	ShortID     string         `json:"short_id,omitempty" gorm:"index"`
 	UserID      string         `json:"user_id" gorm:"index;not null"`
 	Institution string         `json:"institution" gorm:"not null"`
 	Degree      string         `json:"degree"` // StudyType in JSONResume
@@ -155,9 +202,22 @@ type Education struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
+// EffectiveShortID returns the explicit ShortID if populated; otherwise it deterministically
+// derives a compact representation from the canonical ID via ShortenID.
+//
+// Returns:
+//   - A compact identifier string for the education record.
+func (d Education) EffectiveShortID() string {
+	if d.ShortID != "" {
+		return d.ShortID
+	}
+	return ShortenID(d.ID)
+}
+
 // Certification represents professional licenses, awards, or publications.
 type Certification struct {
 	ID        string         `json:"id" gorm:"primaryKey;type:text"`
+	ShortID   string         `json:"short_id,omitempty" gorm:"index"`
 	UserID    string         `json:"user_id" gorm:"index;not null"`
 	Name      string         `json:"name" gorm:"not null"`
 	Issuer    string         `json:"issuer,omitempty"`
@@ -169,9 +229,22 @@ type Certification struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 }
 
+// EffectiveShortID returns the explicit ShortID if populated; otherwise it deterministically
+// derives a compact representation from the canonical ID via ShortenID.
+//
+// Returns:
+//   - A compact identifier string for the certification.
+func (c Certification) EffectiveShortID() string {
+	if c.ShortID != "" {
+		return c.ShortID
+	}
+	return ShortenID(c.ID)
+}
+
 // Fact is an atomic, verifiable achievement, responsibility, or metric belonging to an entity.
 type Fact struct {
 	ID        string    `json:"id" gorm:"primaryKey;type:text"`
+	ShortID   string    `json:"short_id,omitempty" gorm:"index"`
 	UserID    string    `json:"user_id" gorm:"index;not null"`
 	OwnerID   string    `json:"owner_id" gorm:"index;not null"`
 	OwnerType OwnerType `json:"owner_type" gorm:"index;not null"` // work_experience, project, education
@@ -180,6 +253,18 @@ type Fact struct {
 	Skills    []Skill   `json:"skills,omitempty" gorm:"many2many:fact_skills;"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// EffectiveShortID returns the explicit ShortID if populated; otherwise it deterministically
+// derives a compact representation from the canonical ID via ShortenID.
+//
+// Returns:
+//   - A compact identifier string for the fact.
+func (f Fact) EffectiveShortID() string {
+	if f.ShortID != "" {
+		return f.ShortID
+	}
+	return ShortenID(f.ID)
 }
 
 // Preset represents Tier-2 reusable LLM and formatting configurations.

@@ -38,11 +38,23 @@ func ValidateStrict(content *domain.TailoredContent, snapshot *domain.MasterProf
 }
 
 type factMetadata struct {
-	OwnerID   string
-	OwnerType domain.OwnerType
+	OwnerID      string
+	OwnerShortID string
+	OwnerType    domain.OwnerType
 }
 
 // Validate audits and sanitizes TailoredContent against MasterProfileSnapshot and Branch rules.
+// It verifies fact and skill citations using dual-key resolution (matching both canonical UUIDs and short IDs),
+// strips ungrounded or cross-entity spoofed claims, filters excluded entities, and checks for pinned omissions.
+//
+// Parameters:
+//   - content: The candidate TailoredContent produced by the LLM.
+//   - snapshot: The authoritative MasterProfileSnapshot against which citations are verified.
+//   - branch: Branch configuration containing PinnedEntityIDs and ExcludedEntityIDs (optional).
+//
+// Returns:
+//   - ValidationResult containing SanitizedContent, list of Warnings, and IsValid boolean flag.
+//   - Error if content or snapshot is nil.
 func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.MasterProfileSnapshot, branch *domain.Branch) (*ValidationResult, error) {
 	if content == nil {
 		return nil, fmt.Errorf("%w: content cannot be nil", domain.ErrValidation)
@@ -51,37 +63,47 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		return nil, fmt.Errorf("%w: master profile snapshot cannot be nil", domain.ErrValidation)
 	}
 
-	validSkills := make(map[string]domain.Skill, len(snapshot.Skills))
+	validSkills := make(map[string]domain.Skill, len(snapshot.Skills)*2)
 	for _, s := range snapshot.Skills {
 		validSkills[s.ID] = s
+		if s.EffectiveShortID() != "" {
+			validSkills[s.EffectiveShortID()] = s
+		}
 	}
 
-	validExperiences := make(map[string]domain.WorkExperience, len(snapshot.Experiences))
-	validProjects := make(map[string]domain.Project, len(snapshot.Projects))
-	validEducation := make(map[string]domain.Education, len(snapshot.Education))
-	validCertifications := make(map[string]domain.Certification, len(snapshot.Certifications))
+	validExperiences := make(map[string]domain.WorkExperience, len(snapshot.Experiences)*2)
+	validProjects := make(map[string]domain.Project, len(snapshot.Projects)*2)
+	validEducation := make(map[string]domain.Education, len(snapshot.Education)*2)
+	validCertifications := make(map[string]domain.Certification, len(snapshot.Certifications)*2)
 	factRegistry := make(map[string]factMetadata)
 
 	for _, exp := range snapshot.Experiences {
 		validExperiences[exp.ID] = exp
+		if exp.EffectiveShortID() != "" {
+			validExperiences[exp.EffectiveShortID()] = exp
+		}
 		for _, s := range exp.Skills {
-			if _, exists := validSkills[s.ID]; !exists {
-				validSkills[s.ID] = s
+			validSkills[s.ID] = s
+			if s.EffectiveShortID() != "" {
+				validSkills[s.EffectiveShortID()] = s
 			}
 		}
 		for _, f := range exp.Facts {
-			ownerID := f.OwnerID
-			if ownerID == "" {
-				ownerID = exp.ID
-			}
+			ownerID := exp.ID
+			ownerShortID := exp.EffectiveShortID()
 			ownerType := f.OwnerType
 			if ownerType == "" {
 				ownerType = domain.OwnerTypeWorkExperience
 			}
-			factRegistry[f.ID] = factMetadata{OwnerID: ownerID, OwnerType: ownerType}
+			meta := factMetadata{OwnerID: ownerID, OwnerShortID: ownerShortID, OwnerType: ownerType}
+			factRegistry[f.ID] = meta
+			if f.EffectiveShortID() != "" {
+				factRegistry[f.EffectiveShortID()] = meta
+			}
 			for _, s := range f.Skills {
-				if _, exists := validSkills[s.ID]; !exists {
-					validSkills[s.ID] = s
+				validSkills[s.ID] = s
+				if s.EffectiveShortID() != "" {
+					validSkills[s.EffectiveShortID()] = s
 				}
 			}
 		}
@@ -89,24 +111,31 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 	for _, proj := range snapshot.Projects {
 		validProjects[proj.ID] = proj
+		if proj.EffectiveShortID() != "" {
+			validProjects[proj.EffectiveShortID()] = proj
+		}
 		for _, s := range proj.Skills {
-			if _, exists := validSkills[s.ID]; !exists {
-				validSkills[s.ID] = s
+			validSkills[s.ID] = s
+			if s.EffectiveShortID() != "" {
+				validSkills[s.EffectiveShortID()] = s
 			}
 		}
 		for _, f := range proj.Facts {
-			ownerID := f.OwnerID
-			if ownerID == "" {
-				ownerID = proj.ID
-			}
+			ownerID := proj.ID
+			ownerShortID := proj.EffectiveShortID()
 			ownerType := f.OwnerType
 			if ownerType == "" {
 				ownerType = domain.OwnerTypeProject
 			}
-			factRegistry[f.ID] = factMetadata{OwnerID: ownerID, OwnerType: ownerType}
+			meta := factMetadata{OwnerID: ownerID, OwnerShortID: ownerShortID, OwnerType: ownerType}
+			factRegistry[f.ID] = meta
+			if f.EffectiveShortID() != "" {
+				factRegistry[f.EffectiveShortID()] = meta
+			}
 			for _, s := range f.Skills {
-				if _, exists := validSkills[s.ID]; !exists {
-					validSkills[s.ID] = s
+				validSkills[s.ID] = s
+				if s.EffectiveShortID() != "" {
+					validSkills[s.EffectiveShortID()] = s
 				}
 			}
 		}
@@ -114,19 +143,25 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 	for _, edu := range snapshot.Education {
 		validEducation[edu.ID] = edu
+		if edu.EffectiveShortID() != "" {
+			validEducation[edu.EffectiveShortID()] = edu
+		}
 		for _, f := range edu.Facts {
-			ownerID := f.OwnerID
-			if ownerID == "" {
-				ownerID = edu.ID
-			}
+			ownerID := edu.ID
+			ownerShortID := edu.EffectiveShortID()
 			ownerType := f.OwnerType
 			if ownerType == "" {
 				ownerType = domain.OwnerTypeEducation
 			}
-			factRegistry[f.ID] = factMetadata{OwnerID: ownerID, OwnerType: ownerType}
+			meta := factMetadata{OwnerID: ownerID, OwnerShortID: ownerShortID, OwnerType: ownerType}
+			factRegistry[f.ID] = meta
+			if f.EffectiveShortID() != "" {
+				factRegistry[f.EffectiveShortID()] = meta
+			}
 			for _, s := range f.Skills {
-				if _, exists := validSkills[s.ID]; !exists {
-					validSkills[s.ID] = s
+				validSkills[s.ID] = s
+				if s.EffectiveShortID() != "" {
+					validSkills[s.EffectiveShortID()] = s
 				}
 			}
 		}
@@ -134,13 +169,33 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 	for _, cert := range snapshot.Certifications {
 		validCertifications[cert.ID] = cert
+		if cert.EffectiveShortID() != "" {
+			validCertifications[cert.EffectiveShortID()] = cert
+		}
 	}
 
 	for _, f := range snapshot.Facts {
-		factRegistry[f.ID] = factMetadata{OwnerID: f.OwnerID, OwnerType: f.OwnerType}
+		ownerID := f.OwnerID
+		ownerShortID := f.OwnerID
+		if origExp, exists := validExperiences[f.OwnerID]; exists {
+			ownerID = origExp.ID
+			ownerShortID = origExp.EffectiveShortID()
+		} else if origProj, exists := validProjects[f.OwnerID]; exists {
+			ownerID = origProj.ID
+			ownerShortID = origProj.EffectiveShortID()
+		} else if origEdu, exists := validEducation[f.OwnerID]; exists {
+			ownerID = origEdu.ID
+			ownerShortID = origEdu.EffectiveShortID()
+		}
+		meta := factMetadata{OwnerID: ownerID, OwnerShortID: ownerShortID, OwnerType: f.OwnerType}
+		factRegistry[f.ID] = meta
+		if f.EffectiveShortID() != "" {
+			factRegistry[f.EffectiveShortID()] = meta
+		}
 		for _, s := range f.Skills {
-			if _, exists := validSkills[s.ID]; !exists {
-				validSkills[s.ID] = s
+			validSkills[s.ID] = s
+			if s.EffectiveShortID() != "" {
+				validSkills[s.EffectiveShortID()] = s
 			}
 		}
 	}
@@ -149,6 +204,36 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 	if branch != nil {
 		for _, id := range branch.ExcludedEntityIDs {
 			excludedSet[id] = true
+			if orig, exists := validExperiences[id]; exists {
+				excludedSet[orig.ID] = true
+				if orig.EffectiveShortID() != "" {
+					excludedSet[orig.EffectiveShortID()] = true
+				}
+			}
+			if orig, exists := validProjects[id]; exists {
+				excludedSet[orig.ID] = true
+				if orig.EffectiveShortID() != "" {
+					excludedSet[orig.EffectiveShortID()] = true
+				}
+			}
+			if orig, exists := validEducation[id]; exists {
+				excludedSet[orig.ID] = true
+				if orig.EffectiveShortID() != "" {
+					excludedSet[orig.EffectiveShortID()] = true
+				}
+			}
+			if orig, exists := validCertifications[id]; exists {
+				excludedSet[orig.ID] = true
+				if orig.EffectiveShortID() != "" {
+					excludedSet[orig.EffectiveShortID()] = true
+				}
+			}
+			if orig, exists := validSkills[id]; exists {
+				excludedSet[orig.ID] = true
+				if orig.EffectiveShortID() != "" {
+					excludedSet[orig.EffectiveShortID()] = true
+				}
+			}
 		}
 	}
 
@@ -169,6 +254,12 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				sanitizedGroups = append(sanitizedGroups, sg)
 				for _, sid := range sg.SourceSkillIDs {
 					retainedEntityIDs[sid] = true
+					if s, exists := validSkills[sid]; exists {
+						retainedEntityIDs[s.ID] = true
+						if s.EffectiveShortID() != "" {
+							retainedEntityIDs[s.EffectiveShortID()] = true
+						}
+					}
 				}
 			}
 		}
@@ -193,6 +284,11 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 			origExp, ok := validExperiences[exp.SourceEntityID]
 			if !ok {
 				warnings = append(warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded experience '%s'", exp.SourceEntityID))
+				continue
+			}
+
+			if excludedSet[origExp.ID] || (origExp.EffectiveShortID() != "" && excludedSet[origExp.EffectiveShortID()]) {
+				warnings = append(warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded experience '%s' (%s)", exp.SourceEntityID, origExp.Company))
 				continue
 			}
 
@@ -229,6 +325,10 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 			sanitizedExperiences = append(sanitizedExperiences, sanitizedExp)
 			retainedEntityIDs[exp.SourceEntityID] = true
+			retainedEntityIDs[origExp.ID] = true
+			if origExp.EffectiveShortID() != "" {
+				retainedEntityIDs[origExp.EffectiveShortID()] = true
+			}
 		}
 		sanitized.Experiences = sanitizedExperiences
 	}
@@ -254,6 +354,11 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				continue
 			}
 
+			if excludedSet[origProj.ID] || (origProj.EffectiveShortID() != "" && excludedSet[origProj.EffectiveShortID()]) {
+				warnings = append(warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded project '%s' (%s)", proj.SourceEntityID, origProj.Name))
+				continue
+			}
+
 			sanitizedBullets := sanitizeBullets("project", proj.SourceEntityID, proj.Bullets, factRegistry, validSkills, &warnings)
 
 			sanitizedProj := domain.TailoredProject{
@@ -276,6 +381,10 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 			sanitizedProjects = append(sanitizedProjects, sanitizedProj)
 			retainedEntityIDs[proj.SourceEntityID] = true
+			retainedEntityIDs[origProj.ID] = true
+			if origProj.EffectiveShortID() != "" {
+				retainedEntityIDs[origProj.EffectiveShortID()] = true
+			}
 		}
 		sanitized.Projects = sanitizedProjects
 	}
@@ -301,6 +410,11 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				continue
 			}
 
+			if excludedSet[origEdu.ID] || (origEdu.EffectiveShortID() != "" && excludedSet[origEdu.EffectiveShortID()]) {
+				warnings = append(warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded education '%s' (%s)", edu.SourceEntityID, origEdu.Institution))
+				continue
+			}
+
 			sanitizedBullets := sanitizeBullets("education", edu.SourceEntityID, edu.Bullets, factRegistry, validSkills, &warnings)
 
 			sanitizedEdu := domain.TailoredEducation{
@@ -319,6 +433,10 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 			sanitizedEducation = append(sanitizedEducation, sanitizedEdu)
 			retainedEntityIDs[edu.SourceEntityID] = true
+			retainedEntityIDs[origEdu.ID] = true
+			if origEdu.EffectiveShortID() != "" {
+				retainedEntityIDs[origEdu.EffectiveShortID()] = true
+			}
 		}
 		sanitized.Education = sanitizedEducation
 	}
@@ -344,6 +462,11 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				continue
 			}
 
+			if excludedSet[origCert.ID] || (origCert.EffectiveShortID() != "" && excludedSet[origCert.EffectiveShortID()]) {
+				warnings = append(warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded certification '%s' (%s)", cert.SourceEntityID, origCert.Name))
+				continue
+			}
+
 			sanitizedCert := domain.TailoredCert{
 				SourceEntityID: origCert.ID,
 				Name:           origCert.Name,
@@ -354,6 +477,10 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 			sanitizedCerts = append(sanitizedCerts, sanitizedCert)
 			retainedEntityIDs[cert.SourceEntityID] = true
+			retainedEntityIDs[origCert.ID] = true
+			if origCert.EffectiveShortID() != "" {
+				retainedEntityIDs[origCert.EffectiveShortID()] = true
+			}
 		}
 		sanitized.Certifications = sanitizedCerts
 	}
@@ -442,6 +569,21 @@ func sanitizeSkillGroup(group domain.TailoredSkillGroup, validSkills map[string]
 	}, warnings, true
 }
 
+// sanitizeBullets evaluates candidate accomplishment bullets for an experience, project, or education item.
+// It verifies that each bullet cites at least one fact, verifies that cited facts exist in the master profile,
+// validates that the fact belongs to the parent entity under dual-key resolution (matching either canonical ID or short ID),
+// and strips ungrounded skill citations.
+//
+// Parameters:
+//   - entityType: Descriptor of the parent entity (e.g. "experience", "project").
+//   - entityID: Canonical ID or short ID of the enclosing parent entity.
+//   - bullets: Slice of candidate TailoredBullet items to audit.
+//   - factRegistry: Dual-key registry mapping fact IDs (canonical and short) to owner metadata.
+//   - validSkills: Dual-key map of recognized skills.
+//   - warnings: Pointer to slice of warning strings accumulator.
+//
+// Returns:
+//   - Slice of sanitized, fully grounded TailoredBullet items.
 func sanitizeBullets(entityType, entityID string, bullets []domain.TailoredBullet, factRegistry map[string]factMetadata, validSkills map[string]domain.Skill, warnings *[]string) []domain.TailoredBullet {
 	if bullets == nil {
 		return nil
@@ -463,7 +605,7 @@ func sanitizeBullets(entityType, entityID string, bullets []domain.TailoredBulle
 				grounded = false
 				break
 			}
-			if meta.OwnerID != entityID {
+			if meta.OwnerID != entityID && meta.OwnerShortID != entityID {
 				*warnings = append(*warnings, fmt.Sprintf("[CROSS_ENTITY_SPOOF] pruned bullet in %s '%s': fact '%s' belongs to owner '%s', not '%s'", entityType, entityID, factID, meta.OwnerID, entityID))
 				grounded = false
 				break

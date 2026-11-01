@@ -39,6 +39,25 @@ type RenderContext struct {
 // TemplateContext is an alias to RenderContext for unified naming across domain contracts.
 type TemplateContext = RenderContext
 
+// AllSkills returns a deduplicated, flattened slice of non-empty skills across all skill groups.
+func (rc *RenderContext) AllSkills() []string {
+	if rc == nil {
+		return nil
+	}
+	var res []string
+	seen := make(map[string]bool)
+	for _, sg := range rc.SkillGroups {
+		for _, s := range sg.Skills {
+			trimmed := strings.TrimSpace(s)
+			if trimmed != "" && !seen[trimmed] {
+				seen[trimmed] = true
+				res = append(res, trimmed)
+			}
+		}
+	}
+	return res
+}
+
 // NewRenderContext builds a populated RenderContext combining Profile, TailoredContent, and TemplateSet styles.
 func NewRenderContext(tmpl *domain.TemplateSet, profile *domain.Profile, content *domain.TailoredContent) *RenderContext {
 	ctx := &RenderContext{

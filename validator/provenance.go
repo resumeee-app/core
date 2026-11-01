@@ -512,6 +512,7 @@ func (v *Validator) ValidateStrict(content *domain.TailoredContent, snapshot *do
 	return nil
 }
 
+// sanitizeSkillGroup verifies skill IDs against valid snapshot skills and removes ungrounded entries.
 func sanitizeSkillGroup(group domain.TailoredSkillGroup, validSkills map[string]domain.Skill) (domain.TailoredSkillGroup, []string, bool) {
 	var warnings []string
 	if len(group.SourceSkillIDs) == 0 {

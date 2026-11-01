@@ -60,6 +60,7 @@ func NewRegistryCompleter(registry *Registry) Completer {
 	return &registryCompleter{registry: registry}
 }
 
+// Complete delegates raw text completion to the resolved LLM provider from the registry.
 func (rc *registryCompleter) Complete(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, error) {
 	if rc.registry == nil {
 		return "", ErrNoProviders

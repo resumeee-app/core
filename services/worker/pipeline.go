@@ -7,6 +7,7 @@ import (
 	"resumeee/internal/domain"
 )
 
+// processJob coordinates end-to-end execution of a background resume generation pipeline job.
 func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 	if p.branchRepo == nil {
 		return
@@ -191,6 +192,7 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 	}
 }
 
+// failJob records a failed execution status and error diagnostics for a version.
 func (p *Pool) failJob(ctx context.Context, versionID, errMsg string) {
 	if p.logger != nil {
 		p.logger.Error("generation job failed", "version_id", versionID, "error", errMsg)

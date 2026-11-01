@@ -198,6 +198,7 @@ func (r *Registry) Resolve(req domain.GenerationRequest, preset *domain.Preset, 
 	return provider, modelName, nil
 }
 
+// defaultModelForProvider returns the recommended fallback model identifier for a given provider name.
 func defaultModelForProvider(name string) string {
 	switch strings.ToLower(name) {
 	case ProviderGemini:

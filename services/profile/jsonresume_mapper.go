@@ -825,6 +825,7 @@ type skillMatcher struct {
 	entries []skillEntry
 }
 
+// newSkillMatcher compiles regex boundary patterns for skill names and keywords to associate skills with bullet text.
 func newSkillMatcher(skills []domain.Skill) *skillMatcher {
 	var entries []skillEntry
 	for _, s := range skills {
@@ -853,6 +854,7 @@ func newSkillMatcher(skills []domain.Skill) *skillMatcher {
 	return &skillMatcher{entries: entries}
 }
 
+// findMatchingSkills scans text against compiled skill patterns and returns matched unique skills.
 func (m *skillMatcher) findMatchingSkills(text string) []domain.Skill {
 	if m == nil || strings.TrimSpace(text) == "" {
 		return nil
@@ -872,6 +874,7 @@ func (m *skillMatcher) findMatchingSkills(text string) []domain.Skill {
 	return matched
 }
 
+// mergeUniqueSkills combines two skill slices and removes duplicates by skill ID.
 func mergeUniqueSkills(a, b []domain.Skill) []domain.Skill {
 	seen := make(map[string]bool)
 	var merged []domain.Skill
@@ -890,6 +893,7 @@ func mergeUniqueSkills(a, b []domain.Skill) []domain.Skill {
 	return merged
 }
 
+// extractStringSlice safely extracts a slice of strings from either []string or []any.
 func extractStringSlice(val any) []string {
 	if val == nil {
 		return nil

@@ -47,6 +47,7 @@ func (s *profileService) GetSnapshot(ctx context.Context, userID string) (*domai
 	return s.profileRepo.GetSnapshot(ctx, userID)
 }
 
+// ImportJSONResume parses JSON Resume bytes and atomically replaces the user's master career graph.
 func (s *profileService) ImportJSONResume(ctx context.Context, userID string, payload []byte) (*domain.MasterProfileSnapshot, error) {
 	if len(payload) == 0 {
 		return nil, fmt.Errorf("%w: empty JSON payload", domain.ErrValidation)
@@ -79,6 +80,7 @@ func (s *profileService) ImportJSONResume(ctx context.Context, userID string, pa
 	return s.profileRepo.GetSnapshot(ctx, userID)
 }
 
+// ExportJSONResume exports either the master profile snapshot or a specific branch version into JSON Resume format.
 func (s *profileService) ExportJSONResume(ctx context.Context, userID string, versionID *string) (*JSONResume, error) {
 	if versionID == nil || *versionID == "" {
 		snapshot, err := s.profileRepo.GetSnapshot(ctx, userID)

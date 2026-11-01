@@ -291,6 +291,7 @@ func (p *CompatProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 	return strings.TrimSpace(openAIResp.Choices[0].Message.Content), nil
 }
 
+// buildCompatURL normalizes baseURL and ensures the /chat/completions path suffix is present.
 func buildCompatURL(baseURL string) string {
 	cleaned := strings.TrimRight(baseURL, "/")
 	if strings.HasSuffix(cleaned, "/chat/completions") {

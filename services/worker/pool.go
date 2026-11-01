@@ -150,6 +150,7 @@ func (p *Pool) RecoverStaleJobs(ctx context.Context, reason string) error {
 	return p.branchRepo.FailInterruptedVersions(ctx, reason)
 }
 
+// workerLoop drains jobs from the jobQueue channel until it is closed during shutdown.
 func (p *Pool) workerLoop(ctx context.Context, workerID int) {
 	defer p.wg.Done()
 

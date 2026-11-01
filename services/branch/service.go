@@ -69,6 +69,7 @@ func NewService(cfg Config) Service {
 	}
 }
 
+// ListBranches returns all branches for the user, optionally filtering for stale branches whose synced revision is behind master.
 func (s *service) ListBranches(ctx context.Context, userID string, staleOnly bool) ([]domain.Branch, error) {
 	branches, err := s.branchRepo.ListBranches(ctx, userID)
 	if err != nil {
@@ -94,10 +95,12 @@ func (s *service) ListBranches(ctx context.Context, userID string, staleOnly boo
 	return branches, nil
 }
 
+// GetBranch retrieves a branch record by its identifier.
 func (s *service) GetBranch(ctx context.Context, userID, id string) (*domain.Branch, error) {
 	return s.branchRepo.GetBranch(ctx, userID, id)
 }
 
+// CreateBranch initializes and saves a new resume branch with master revision synchronization.
 func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error) {
 	if branch.ID == "" {
 		branch.ID = "branch-" + uuid.New().String()
@@ -117,6 +120,7 @@ func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*dom
 	return s.branchRepo.GetBranch(ctx, branch.UserID, branch.ID)
 }
 
+// UpdateBranch modifies branch configuration while preserving default branch immutability invariants.
 func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error) {
 	existing, err := s.branchRepo.GetBranch(ctx, branch.UserID, branch.ID)
 	if err != nil {
@@ -182,6 +186,7 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 	return s.branchRepo.GetBranch(ctx, branch.UserID, branch.ID)
 }
 
+// DeleteBranch removes a branch if it is not the immutable default branch.
 func (s *service) DeleteBranch(ctx context.Context, userID, id string) error {
 	branch, err := s.branchRepo.GetBranch(ctx, userID, id)
 	if err == nil && branch != nil && branch.IsDefault {
@@ -190,6 +195,7 @@ func (s *service) DeleteBranch(ctx context.Context, userID, id string) error {
 	return s.branchRepo.DeleteBranch(ctx, userID, id)
 }
 
+// ListVersions returns all generated and edited versions belonging to a branch.
 func (s *service) ListVersions(ctx context.Context, branchID string) ([]domain.BranchVersion, error) {
 	versions, err := s.branchRepo.ListVersions(ctx, branchID)
 	if err != nil {
@@ -201,6 +207,7 @@ func (s *service) ListVersions(ctx context.Context, branchID string) ([]domain.B
 	return versions, nil
 }
 
+// GetVersion resolves a version by either sequential version number (1, 2, ...) or version UUID.
 func (s *service) GetVersion(ctx context.Context, branchID, versionNumOrID string) (*domain.BranchVersion, error) {
 	if num, err := strconv.Atoi(versionNumOrID); err == nil && num > 0 {
 		ver, err := s.branchRepo.GetVersionByNumber(ctx, branchID, num)
@@ -211,6 +218,7 @@ func (s *service) GetVersion(ctx context.Context, branchID, versionNumOrID strin
 	return s.branchRepo.GetVersion(ctx, branchID, versionNumOrID)
 }
 
+// GenerateVersion enqueues an asynchronous generation job or synchronously renders default branch versions.
 func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) (*domain.BranchVersion, error) {
 	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
 	if err != nil {
@@ -272,6 +280,7 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 	return ver, nil
 }
 
+// SyncBranches regenerates specified branches or all stale branches when branchIDs is empty.
 func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []string) ([]string, error) {
 	var masterRevision int64 = 1
 	var defaultProvider, defaultModel string
@@ -367,6 +376,7 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 	return enqueuedIDs, nil
 }
 
+// EditVersion applies provenance validation to manual edits, renders templates, and appends a new immutable version.
 func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersionNumOrID string, editedContent domain.TailoredContent) (*domain.BranchVersion, error) {
 	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
 	if err != nil {
@@ -445,6 +455,7 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	return newVer, nil
 }
 
+// renderDefaultBranchVersion synchronously renders a resume version for the default branch directly from the master profile.
 func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string, branch *domain.Branch) (*domain.BranchVersion, error) {
 	if s.profileRepo == nil {
 		return nil, errors.New("profile repository required for default branch rendering")

@@ -28,6 +28,7 @@ var dateParseLayouts = []string{
 
 var fourDigitsRegex = regexp.MustCompile(`\b(19\d\d|20\d\d)\b`)
 
+// parseDate attempts to parse a date string using common ISO and human-readable formats.
 func parseDate(s string) (time.Time, error) {
 	for _, layout := range dateParseLayouts {
 		if t, err := time.Parse(layout, s); err == nil {
@@ -37,6 +38,7 @@ func parseDate(s string) (time.Time, error) {
 	return time.Time{}, errors.New("cannot parse date")
 }
 
+// formatAutoDate formats a date string as YYYY or Jan 2006 depending on input precision.
 func formatAutoDate(s string) string {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
@@ -52,6 +54,7 @@ func formatAutoDate(s string) string {
 	return t.Format("Jan 2006")
 }
 
+// formatDate formats a given date string using a standard Go time layout.
 func formatDate(layout, dateStr string) string {
 	if strings.TrimSpace(dateStr) == "" {
 		return ""
@@ -63,6 +66,7 @@ func formatDate(layout, dateStr string) string {
 	return t.Format(layout)
 }
 
+// formatDateRange formats a start and end date interval with an optional present label.
 func formatDateRange(start string, end any, presentLabel string) string {
 	if strings.TrimSpace(presentLabel) == "" {
 		presentLabel = "Present"
@@ -111,6 +115,7 @@ func formatDateRange(start string, end any, presentLabel string) string {
 	return endFormatted
 }
 
+// year extracts a 4-digit calendar year from a date string.
 func year(dateStr string) string {
 	trimmed := strings.TrimSpace(dateStr)
 	if trimmed == "" {
@@ -129,6 +134,7 @@ func titleCase(s string) string {
 	return cases.Title(language.Und).String(s)
 }
 
+// joinHelper joins elements of a slice or array into a string using the provided delimiter.
 func joinHelper(elems any, sep string) string {
 	if elems == nil {
 		return ""
@@ -148,6 +154,7 @@ func joinHelper(elems any, sep string) string {
 	return fmt.Sprint(elems)
 }
 
+// firstHelper returns the first string representation from a slice or array.
 func firstHelper(items any) string {
 	if items == nil {
 		return ""
@@ -168,6 +175,7 @@ func firstHelper(items any) string {
 	return fmt.Sprint(items)
 }
 
+// lastHelper returns the final string element from a slice or array.
 func lastHelper(items any) string {
 	if items == nil {
 		return ""
@@ -188,6 +196,7 @@ func lastHelper(items any) string {
 	return fmt.Sprint(items)
 }
 
+// defaultHelper returns fallback if val is nil, empty, or a zero value.
 func defaultHelper(fallback, val any) any {
 	if val == nil {
 		return fallback
@@ -210,6 +219,7 @@ func defaultHelper(fallback, val any) any {
 	return val
 }
 
+// coalesceHelper returns the first non-empty string among the provided arguments.
 func coalesceHelper(vals ...any) string {
 	for _, v := range vals {
 		if v == nil {

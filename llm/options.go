@@ -51,6 +51,7 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// applyOptions initializes adapterOptions with defaults and applies any custom Option functions.
 func applyOptions(opts []Option, defaultBaseURL, defaultModel string) adapterOptions {
 	cfg := adapterOptions{
 		baseURL:      defaultBaseURL,

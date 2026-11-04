@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"resumeee/internal/domain"
 )
@@ -21,22 +20,24 @@ const (
 
 // OpenAIProvider implements domain.LLMProvider for OpenAI models using Structured Outputs.
 type OpenAIProvider struct {
-	apiKey       string
-	baseURL      string
-	httpClient   *http.Client
-	defaultModel string
-	logger       *slog.Logger
+	apiKey         string
+	baseURL        string
+	httpClient     *http.Client
+	defaultModel   string
+	logger         *slog.Logger
+	promptDebugger PromptDebugger
 }
 
 // NewOpenAIProvider creates an OpenAI adapter with the specified API key.
 func NewOpenAIProvider(apiKey string, opts ...Option) *OpenAIProvider {
 	cfg := applyOptions(opts, defaultOpenAIBaseURL, defaultOpenAIModel)
 	return &OpenAIProvider{
-		apiKey:       apiKey,
-		baseURL:      cfg.baseURL,
-		httpClient:   cfg.httpClient,
-		defaultModel: cfg.defaultModel,
-		logger:       cfg.logger,
+		apiKey:         apiKey,
+		baseURL:        cfg.baseURL,
+		httpClient:     cfg.httpClient,
+		defaultModel:   cfg.defaultModel,
+		logger:         cfg.logger,
+		promptDebugger: cfg.promptDebugger,
 	}
 }
 
@@ -57,13 +58,12 @@ func (p *OpenAIProvider) GenerateTailoredResume(ctx context.Context, req domain.
 		model = p.defaultModel
 	}
 
-	logLLMRequest(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", prompts.SystemPrompt, prompts.UserPrompt)
+	trace := logLLMRequest(ctx, p.logger, p.promptDebugger, p.Name(), model, "GenerateTailoredResume", prompts.SystemPrompt, prompts.UserPrompt)
 
-	start := time.Now()
 	var statusCode int
 	var rawResp string
 	defer func() {
-		logLLMResponse(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", time.Since(start), statusCode, rawResp, retErr)
+		logLLMResponse(ctx, p.logger, trace, statusCode, rawResp, retErr)
 	}()
 
 	type chatMessage struct {
@@ -178,13 +178,12 @@ func (p *OpenAIProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 		model = p.defaultModel
 	}
 
-	logLLMRequest(ctx, p.logger, p.Name(), model, "CompleteText", systemPrompt, userPrompt)
+	trace := logLLMRequest(ctx, p.logger, p.promptDebugger, p.Name(), model, "CompleteText", systemPrompt, userPrompt)
 
-	start := time.Now()
 	var statusCode int
 	var rawResp string
 	defer func() {
-		logLLMResponse(ctx, p.logger, p.Name(), model, "CompleteText", time.Since(start), statusCode, rawResp, retErr)
+		logLLMResponse(ctx, p.logger, trace, statusCode, rawResp, retErr)
 	}()
 
 	type chatMessage struct {

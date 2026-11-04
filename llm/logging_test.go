@@ -8,10 +8,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"resumeee/internal/config"
+	"resumeee/internal/domain"
 )
 
 type parsedLogRecord struct {
@@ -564,4 +567,275 @@ func TestLLMLogging_RegistryOptionPropagation(t *testing.T) {
 	if len(logs) != 2 {
 		t.Fatalf("expected 2 log records propagated via registry option, got %d", len(logs))
 	}
+}
+
+func TestLLMPromptDebugging_Integration(t *testing.T) {
+	respBytes, err := json.Marshal(sampleResponse)
+	if err != nil {
+		t.Fatalf("failed to marshal sample response: %v", err)
+	}
+	sampleRespStr := string(respBytes)
+
+	t.Run("creates prompt and output markdown files for providers", func(t *testing.T) {
+		providerCases := []struct {
+			name          string
+			serverHandler http.HandlerFunc
+			makeProvider  func(baseURL, dir string) (domain.LLMProvider, RawCompleter)
+		}{
+			{
+				name: "OpenAI",
+				serverHandler: func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"choices": []map[string]any{
+							{"message": map[string]any{"content": sampleRespStr}},
+						},
+					})
+				},
+				makeProvider: func(baseURL, dir string) (domain.LLMProvider, RawCompleter) {
+					p := NewOpenAIProvider("test-key", WithBaseURL(baseURL), WithDebugDir(dir))
+					return p, p
+				},
+			},
+			{
+				name: "Gemini",
+				serverHandler: func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"candidates": []map[string]any{
+							{
+								"content": map[string]any{
+									"parts": []map[string]any{{"text": sampleRespStr}},
+								},
+							},
+						},
+					})
+				},
+				makeProvider: func(baseURL, dir string) (domain.LLMProvider, RawCompleter) {
+					p := NewGeminiProvider("test-key", WithBaseURL(baseURL), WithDebugDir(dir))
+					return p, p
+				},
+			},
+			{
+				name: "Anthropic",
+				serverHandler: func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"id": "msg_test",
+						"content": []map[string]any{
+							{
+								"type":  "tool_use",
+								"name":  anthropicToolName,
+								"input": sampleResponse,
+							},
+							{
+								"type": "text",
+								"text": sampleRespStr,
+							},
+						},
+					})
+				},
+				makeProvider: func(baseURL, dir string) (domain.LLMProvider, RawCompleter) {
+					p := NewAnthropicProvider("test-key", WithBaseURL(baseURL), WithDebugDir(dir))
+					return p, p
+				},
+			},
+			{
+				name: "Compat",
+				serverHandler: func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"choices": []map[string]any{
+							{"message": map[string]any{"content": sampleRespStr}},
+						},
+					})
+				},
+				makeProvider: func(baseURL, dir string) (domain.LLMProvider, RawCompleter) {
+					p := NewCompatProvider(baseURL, "test-key", WithDebugDir(dir))
+					return p, p
+				},
+			},
+		}
+
+		for _, tc := range providerCases {
+			t.Run(tc.name, func(t *testing.T) {
+				tmpDir := t.TempDir()
+				server := httptest.NewServer(tc.serverHandler)
+				defer server.Close()
+
+				prov, raw := tc.makeProvider(server.URL, tmpDir)
+
+				// 1. Verify GenerateTailoredResume creates tailor_*.md and tailor_*_output.md
+				res, err := prov.GenerateTailoredResume(context.Background(), sampleRequest())
+				if err != nil {
+					t.Fatalf("unexpected error from GenerateTailoredResume: %v", err)
+				}
+				if res == nil {
+					t.Fatal("expected non-nil generation response")
+				}
+
+				entries, err := os.ReadDir(tmpDir)
+				if err != nil {
+					t.Fatalf("failed to read debug dir: %v", err)
+				}
+				if len(entries) != 2 {
+					t.Fatalf("expected 2 files after GenerateTailoredResume, got %d", len(entries))
+				}
+
+				var promptTailor, outputTailor string
+				for _, e := range entries {
+					if strings.HasSuffix(e.Name(), "_output.md") {
+						outputTailor = e.Name()
+					} else if strings.HasSuffix(e.Name(), ".md") {
+						promptTailor = e.Name()
+					}
+				}
+
+				if !strings.HasPrefix(promptTailor, "tailor_") || !strings.HasPrefix(outputTailor, "tailor_") {
+					t.Errorf("expected tailor files, got prompt=%q, output=%q", promptTailor, outputTailor)
+				}
+
+				promptData, _ := os.ReadFile(filepath.Join(tmpDir, promptTailor))
+				outputData, _ := os.ReadFile(filepath.Join(tmpDir, outputTailor))
+
+				if !strings.Contains(string(promptData), "# LLM Prompt: tailor") {
+					t.Errorf("prompt missing tailor header: %s", string(promptData))
+				}
+				if !strings.Contains(string(outputData), "# LLM Response: tailor") {
+					t.Errorf("output missing tailor header: %s", string(outputData))
+				}
+
+				// 2. Verify CompleteText creates extract_*.md and extract_*_output.md
+				text, err := raw.CompleteText(context.Background(), "sys extract", "user extract", "")
+				if err != nil {
+					t.Fatalf("unexpected error from CompleteText: %v", err)
+				}
+				if text == "" {
+					t.Fatal("expected non-empty text response")
+				}
+
+				entriesAll, err := os.ReadDir(tmpDir)
+				if err != nil {
+					t.Fatalf("failed to read debug dir: %v", err)
+				}
+				if len(entriesAll) != 4 {
+					t.Fatalf("expected 4 files after CompleteText, got %d", len(entriesAll))
+				}
+
+				var foundExtractPrompt, foundExtractOutput bool
+				for _, e := range entriesAll {
+					if strings.HasPrefix(e.Name(), "extract_") && strings.HasSuffix(e.Name(), "_output.md") {
+						foundExtractOutput = true
+					} else if strings.HasPrefix(e.Name(), "extract_") && strings.HasSuffix(e.Name(), ".md") {
+						foundExtractPrompt = true
+					}
+				}
+				if !foundExtractPrompt || !foundExtractOutput {
+					t.Errorf("expected extract prompt and output files in %s", tmpDir)
+				}
+			})
+		}
+	})
+
+	t.Run("zero files created when debugging is disabled", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]any{"content": "done"}},
+				},
+			})
+		}))
+		defer server.Close()
+
+		provider := NewOpenAIProvider("test-key", WithBaseURL(server.URL))
+		_, err := provider.CompleteText(context.Background(), "sys", "user", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		entries, _ := os.ReadDir(tmpDir)
+		if len(entries) != 0 {
+			t.Errorf("expected 0 files, got %d", len(entries))
+		}
+	})
+
+	t.Run("registry automatically enables debug dir from config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]any{"content": "extracted"}},
+				},
+			})
+		}))
+		defer server.Close()
+
+		cfg := &config.Config{
+			OpenAIAPIKey:    "openai-test-key",
+			LLMDebugPrompts: true,
+			LLMDebugDir:     tmpDir,
+		}
+
+		reg := NewRegistry(cfg, WithBaseURL(server.URL))
+		prov, err := reg.Get(ProviderOpenAI)
+		if err != nil {
+			t.Fatalf("failed to get provider: %v", err)
+		}
+
+		raw, ok := prov.(RawCompleter)
+		if !ok {
+			t.Fatalf("expected RawCompleter")
+		}
+
+		_, err = raw.CompleteText(context.Background(), "system instruction", "user content", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		entries, err := os.ReadDir(tmpDir)
+		if err != nil {
+			t.Fatalf("failed to read debug dir: %v", err)
+		}
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 files from registry-configured provider, got %d", len(entries))
+		}
+	})
+
+	t.Run("graceful degradation when directory is not writeable", func(t *testing.T) {
+		// Use a file path where MkdirAll fails because a file already exists at that path
+		tmpFile := filepath.Join(t.TempDir(), "not-a-dir")
+		if err := os.WriteFile(tmpFile, []byte("blocker"), 0600); err != nil {
+			t.Fatalf("failed to create blocker file: %v", err)
+		}
+		invalidDir := filepath.Join(tmpFile, "cannot-create-dir")
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]any{"content": "ok"}},
+				},
+			})
+		}))
+		defer server.Close()
+
+		provider := NewOpenAIProvider("test-key",
+			WithBaseURL(server.URL),
+			WithDebugDir(invalidDir),
+		)
+
+		// Call should still succeed even though debug file cannot be written
+		text, err := provider.CompleteText(context.Background(), "sys", "user", "")
+		if err != nil {
+			t.Fatalf("expected CompleteText to succeed despite debug write failure, got: %v", err)
+		}
+		if text != "ok" {
+			t.Errorf("expected 'ok', got %q", text)
+		}
+	})
 }

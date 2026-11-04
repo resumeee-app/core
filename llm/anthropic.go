@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"resumeee/internal/domain"
 )
@@ -24,22 +23,24 @@ const (
 
 // AnthropicProvider implements domain.LLMProvider for Anthropic Claude models via Messages API tool use.
 type AnthropicProvider struct {
-	apiKey       string
-	baseURL      string
-	httpClient   *http.Client
-	defaultModel string
-	logger       *slog.Logger
+	apiKey         string
+	baseURL        string
+	httpClient     *http.Client
+	defaultModel   string
+	logger         *slog.Logger
+	promptDebugger PromptDebugger
 }
 
 // NewAnthropicProvider creates an Anthropic adapter with the specified API key.
 func NewAnthropicProvider(apiKey string, opts ...Option) *AnthropicProvider {
 	cfg := applyOptions(opts, defaultAnthropicBaseURL, defaultAnthropicModel)
 	return &AnthropicProvider{
-		apiKey:       apiKey,
-		baseURL:      cfg.baseURL,
-		httpClient:   cfg.httpClient,
-		defaultModel: cfg.defaultModel,
-		logger:       cfg.logger,
+		apiKey:         apiKey,
+		baseURL:        cfg.baseURL,
+		httpClient:     cfg.httpClient,
+		defaultModel:   cfg.defaultModel,
+		logger:         cfg.logger,
+		promptDebugger: cfg.promptDebugger,
 	}
 }
 
@@ -60,13 +61,12 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 		model = p.defaultModel
 	}
 
-	logLLMRequest(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", prompts.SystemPrompt, prompts.UserPrompt)
+	trace := logLLMRequest(ctx, p.logger, p.promptDebugger, p.Name(), model, "GenerateTailoredResume", prompts.SystemPrompt, prompts.UserPrompt)
 
-	start := time.Now()
 	var statusCode int
 	var rawResp string
 	defer func() {
-		logLLMResponse(ctx, p.logger, p.Name(), model, "GenerateTailoredResume", time.Since(start), statusCode, rawResp, retErr)
+		logLLMResponse(ctx, p.logger, trace, statusCode, rawResp, retErr)
 	}()
 
 	type anthropicMessage struct {
@@ -196,13 +196,12 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 		model = p.defaultModel
 	}
 
-	logLLMRequest(ctx, p.logger, p.Name(), model, "CompleteText", systemPrompt, userPrompt)
+	trace := logLLMRequest(ctx, p.logger, p.promptDebugger, p.Name(), model, "CompleteText", systemPrompt, userPrompt)
 
-	start := time.Now()
 	var statusCode int
 	var rawResp string
 	defer func() {
-		logLLMResponse(ctx, p.logger, p.Name(), model, "CompleteText", time.Since(start), statusCode, rawResp, retErr)
+		logLLMResponse(ctx, p.logger, trace, statusCode, rawResp, retErr)
 	}()
 
 	type anthropicMessage struct {

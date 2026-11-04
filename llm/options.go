@@ -21,10 +21,11 @@ var defaultLLMHTTPClient = &http.Client{
 }
 
 type adapterOptions struct {
-	baseURL      string
-	httpClient   *http.Client
-	defaultModel string
-	logger       *slog.Logger
+	baseURL        string
+	httpClient     *http.Client
+	defaultModel   string
+	logger         *slog.Logger
+	promptDebugger PromptDebugger
 }
 
 // Option represents a configuration option for LLM adapters.
@@ -66,6 +67,36 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithPromptDebugger configures an explicit PromptDebugger instance for persisting prompt and response artifacts.
+func WithPromptDebugger(debugger PromptDebugger) Option {
+	return func(o *adapterOptions) {
+		o.promptDebugger = debugger
+	}
+}
+
+// WithDebugDir configures a FilePromptDebugger targeting the specified directory.
+func WithDebugDir(dir string) Option {
+	return func(o *adapterOptions) {
+		if dir != "" {
+			o.promptDebugger = NewFilePromptDebugger(dir, o.logger)
+		}
+	}
+}
+
+// WithDebugPrompts enables or disables prompt debugging targeting dir (defaulting to "data/llm" if dir is empty).
+func WithDebugPrompts(enabled bool, dir string) Option {
+	return func(o *adapterOptions) {
+		if enabled {
+			if dir == "" {
+				dir = "data/llm"
+			}
+			o.promptDebugger = NewFilePromptDebugger(dir, o.logger)
+		} else {
+			o.promptDebugger = nil
+		}
+	}
+}
+
 // applyOptions initializes adapterOptions with defaults and applies any custom Option functions.
 func applyOptions(opts []Option, defaultBaseURL, defaultModel string) adapterOptions {
 	cfg := adapterOptions{
@@ -81,6 +112,9 @@ func applyOptions(opts []Option, defaultBaseURL, defaultModel string) adapterOpt
 	}
 	if cfg.logger == nil {
 		cfg.logger = slog.Default()
+	}
+	if fpd, ok := cfg.promptDebugger.(*FilePromptDebugger); ok && fpd != nil {
+		fpd.logger = cfg.logger
 	}
 	return cfg
 }

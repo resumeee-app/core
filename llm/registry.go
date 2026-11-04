@@ -31,17 +31,28 @@ func NewRegistry(cfg *config.Config, opts ...Option) *Registry {
 		return r
 	}
 
+	effectiveOpts := opts
+	if cfg.LLMDebugPrompts {
+		dir := cfg.LLMDebugDir
+		if strings.TrimSpace(dir) == "" {
+			dir = config.DefaultLLMDebugDir
+		}
+		baseOpts := applyOptions(opts, "", "")
+		debugger := NewFilePromptDebugger(dir, baseOpts.logger)
+		effectiveOpts = append([]Option{WithPromptDebugger(debugger)}, opts...)
+	}
+
 	if cfg.GeminiAPIKey != "" {
-		r.Register(NewGeminiProvider(cfg.GeminiAPIKey, opts...))
+		r.Register(NewGeminiProvider(cfg.GeminiAPIKey, effectiveOpts...))
 	}
 	if cfg.OpenAIAPIKey != "" {
-		r.Register(NewOpenAIProvider(cfg.OpenAIAPIKey, opts...))
+		r.Register(NewOpenAIProvider(cfg.OpenAIAPIKey, effectiveOpts...))
 	}
 	if cfg.AnthropicAPIKey != "" {
-		r.Register(NewAnthropicProvider(cfg.AnthropicAPIKey, opts...))
+		r.Register(NewAnthropicProvider(cfg.AnthropicAPIKey, effectiveOpts...))
 	}
 	if cfg.OpenAICompatBaseURL != "" {
-		r.Register(NewCompatProvider(cfg.OpenAICompatBaseURL, cfg.OpenAICompatAPIKey, opts...))
+		r.Register(NewCompatProvider(cfg.OpenAICompatBaseURL, cfg.OpenAICompatAPIKey, effectiveOpts...))
 	}
 
 	// Establish system default provider hierarchy

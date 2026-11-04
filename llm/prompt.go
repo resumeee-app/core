@@ -14,6 +14,28 @@ type PromptPayload struct {
 	UserPrompt   string
 }
 
+func recordShortID(idMap map[string]string, id, shortID string) {
+	if id != "" {
+		idMap[id] = shortID
+	}
+	if shortID != "" {
+		idMap[shortID] = shortID
+	}
+}
+
+func recordSkills(idMap map[string]string, skills []domain.Skill) {
+	for _, s := range skills {
+		recordShortID(idMap, s.ID, s.EffectiveShortID())
+	}
+}
+
+func recordFacts(idMap map[string]string, facts []domain.Fact) {
+	for _, f := range facts {
+		recordShortID(idMap, f.ID, f.EffectiveShortID())
+		recordSkills(idMap, f.Skills)
+	}
+}
+
 // BuildPrompt constructs a structured prompt payload enforcing the 3-tier rules hierarchy,
 // anti-hallucination grounding constraints ("No Lies" invariant), prior active version continuity (ADR-002),
 // and serialized Master Profile snapshot data projected with compact short identifiers.
@@ -28,85 +50,30 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 	// 1. Build idMap for projecting snapshot, pinned/excluded entities, and prior version
 	idMap := make(map[string]string)
 	if req.MasterProfile != nil {
-		for _, s := range req.MasterProfile.Skills {
-			short := s.EffectiveShortID()
-			idMap[s.ID] = short
-			idMap[short] = short
-		}
+		recordSkills(idMap, req.MasterProfile.Skills)
 		for _, exp := range req.MasterProfile.Experiences {
-			short := exp.EffectiveShortID()
-			idMap[exp.ID] = short
-			idMap[short] = short
-			for _, s := range exp.Skills {
-				sShort := s.EffectiveShortID()
-				idMap[s.ID] = sShort
-				idMap[sShort] = sShort
-			}
-			for _, f := range exp.Facts {
-				fShort := f.EffectiveShortID()
-				idMap[f.ID] = fShort
-				idMap[fShort] = fShort
-				for _, s := range f.Skills {
-					sShort := s.EffectiveShortID()
-					idMap[s.ID] = sShort
-					idMap[sShort] = sShort
-				}
-			}
+			recordShortID(idMap, exp.ID, exp.EffectiveShortID())
+			recordSkills(idMap, exp.Skills)
+			recordFacts(idMap, exp.Facts)
 		}
 		for _, proj := range req.MasterProfile.Projects {
-			short := proj.EffectiveShortID()
-			idMap[proj.ID] = short
-			idMap[short] = short
-			for _, s := range proj.Skills {
-				sShort := s.EffectiveShortID()
-				idMap[s.ID] = sShort
-				idMap[sShort] = sShort
-			}
-			for _, f := range proj.Facts {
-				fShort := f.EffectiveShortID()
-				idMap[f.ID] = fShort
-				idMap[fShort] = fShort
-				for _, s := range f.Skills {
-					sShort := s.EffectiveShortID()
-					idMap[s.ID] = sShort
-					idMap[sShort] = sShort
-				}
-			}
+			recordShortID(idMap, proj.ID, proj.EffectiveShortID())
+			recordSkills(idMap, proj.Skills)
+			recordFacts(idMap, proj.Facts)
 		}
 		for _, edu := range req.MasterProfile.Education {
-			short := edu.EffectiveShortID()
-			idMap[edu.ID] = short
-			idMap[short] = short
-			for _, f := range edu.Facts {
-				fShort := f.EffectiveShortID()
-				idMap[f.ID] = fShort
-				idMap[fShort] = fShort
-				for _, s := range f.Skills {
-					sShort := s.EffectiveShortID()
-					idMap[s.ID] = sShort
-					idMap[sShort] = sShort
-				}
-			}
+			recordShortID(idMap, edu.ID, edu.EffectiveShortID())
+			recordFacts(idMap, edu.Facts)
 		}
 		for _, cert := range req.MasterProfile.Certifications {
-			short := cert.EffectiveShortID()
-			idMap[cert.ID] = short
-			idMap[short] = short
+			recordShortID(idMap, cert.ID, cert.EffectiveShortID())
 		}
-		for _, f := range req.MasterProfile.Facts {
-			fShort := f.EffectiveShortID()
-			idMap[f.ID] = fShort
-			idMap[fShort] = fShort
-			for _, s := range f.Skills {
-				sShort := s.EffectiveShortID()
-				idMap[s.ID] = sShort
-				idMap[sShort] = sShort
-			}
-		}
+		recordFacts(idMap, req.MasterProfile.Facts)
 	}
 
 	// 2. Build System Prompt
 	var sysBuilder strings.Builder
+	sysBuilder.Grow(2048)
 	sysBuilder.WriteString("You are Resumeee AI, an expert career strategist and resume compiler.\n")
 	sysBuilder.WriteString("Your task is to tailor a candidate's resume to a specific target role by selecting, highlighting, ")
 	sysBuilder.WriteString("and phrasing achievements grounded STRICTLY in the candidate's verified Master Profile.\n\n")
@@ -132,6 +99,7 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 
 	// 3. Build User Prompt with 3-tier rules hierarchy, prior context, and profile data
 	var userBuilder strings.Builder
+	userBuilder.Grow(8192)
 
 	userBuilder.WriteString("<rules_hierarchy>\n")
 	userBuilder.WriteString("Tier 1: Global Writing Rules:\n")
@@ -391,6 +359,42 @@ func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string)
 	return &projected
 }
 
+// projectSkillsToShortIDs projects a slice of skills to their EffectiveShortID.
+func projectSkillsToShortIDs(skills []domain.Skill) []domain.Skill {
+	if len(skills) == 0 {
+		return nil
+	}
+	res := make([]domain.Skill, len(skills))
+	for i, s := range skills {
+		res[i] = s
+		shortID := s.EffectiveShortID()
+		res[i].ID = shortID
+		res[i].ShortID = shortID
+	}
+	return res
+}
+
+// projectFactsToShortIDs projects a slice of facts and their child skills to their EffectiveShortIDs.
+func projectFactsToShortIDs(facts []domain.Fact, ownerShortID string) []domain.Fact {
+	if len(facts) == 0 {
+		return nil
+	}
+	res := make([]domain.Fact, len(facts))
+	for i, f := range facts {
+		res[i] = f
+		fShort := f.EffectiveShortID()
+		res[i].ID = fShort
+		res[i].ShortID = fShort
+		if ownerShortID != "" {
+			res[i].OwnerID = ownerShortID
+		}
+		if len(f.Skills) > 0 {
+			res[i].Skills = projectSkillsToShortIDs(f.Skills)
+		}
+	}
+	return res
+}
+
 // projectMasterProfileSnapshot clones and transforms a MasterProfileSnapshot so that all entities
 // and facts (skills, experiences, projects, education, certifications, and child facts) use their
 // EffectiveShortID as their primary ID in the prompt payload serialized to the LLM.
@@ -408,14 +412,7 @@ func projectMasterProfileSnapshot(snap *domain.MasterProfileSnapshot, idMap map[
 	projected := *snap
 
 	if len(snap.Skills) > 0 {
-		skills := make([]domain.Skill, len(snap.Skills))
-		for i, s := range snap.Skills {
-			shortID := s.EffectiveShortID()
-			skills[i] = s
-			skills[i].ID = shortID
-			skills[i].ShortID = shortID
-		}
-		projected.Skills = skills
+		projected.Skills = projectSkillsToShortIDs(snap.Skills)
 	}
 
 	if len(snap.Experiences) > 0 {
@@ -426,35 +423,10 @@ func projectMasterProfileSnapshot(snap *domain.MasterProfileSnapshot, idMap map[
 			exps[i].ID = shortID
 			exps[i].ShortID = shortID
 			if len(exp.Skills) > 0 {
-				expSkills := make([]domain.Skill, len(exp.Skills))
-				for j, s := range exp.Skills {
-					expSkills[j] = s
-					sShort := s.EffectiveShortID()
-					expSkills[j].ID = sShort
-					expSkills[j].ShortID = sShort
-				}
-				exps[i].Skills = expSkills
+				exps[i].Skills = projectSkillsToShortIDs(exp.Skills)
 			}
 			if len(exp.Facts) > 0 {
-				facts := make([]domain.Fact, len(exp.Facts))
-				for j, f := range exp.Facts {
-					facts[j] = f
-					fShort := f.EffectiveShortID()
-					facts[j].ID = fShort
-					facts[j].ShortID = fShort
-					facts[j].OwnerID = shortID
-					if len(f.Skills) > 0 {
-						factSkills := make([]domain.Skill, len(f.Skills))
-						for k, s := range f.Skills {
-							factSkills[k] = s
-							sShort := s.EffectiveShortID()
-							factSkills[k].ID = sShort
-							factSkills[k].ShortID = sShort
-						}
-						facts[j].Skills = factSkills
-					}
-				}
-				exps[i].Facts = facts
+				exps[i].Facts = projectFactsToShortIDs(exp.Facts, shortID)
 			}
 		}
 		projected.Experiences = exps
@@ -468,35 +440,10 @@ func projectMasterProfileSnapshot(snap *domain.MasterProfileSnapshot, idMap map[
 			projs[i].ID = shortID
 			projs[i].ShortID = shortID
 			if len(proj.Skills) > 0 {
-				projSkills := make([]domain.Skill, len(proj.Skills))
-				for j, s := range proj.Skills {
-					projSkills[j] = s
-					sShort := s.EffectiveShortID()
-					projSkills[j].ID = sShort
-					projSkills[j].ShortID = sShort
-				}
-				projs[i].Skills = projSkills
+				projs[i].Skills = projectSkillsToShortIDs(proj.Skills)
 			}
 			if len(proj.Facts) > 0 {
-				facts := make([]domain.Fact, len(proj.Facts))
-				for j, f := range proj.Facts {
-					facts[j] = f
-					fShort := f.EffectiveShortID()
-					facts[j].ID = fShort
-					facts[j].ShortID = fShort
-					facts[j].OwnerID = shortID
-					if len(f.Skills) > 0 {
-						factSkills := make([]domain.Skill, len(f.Skills))
-						for k, s := range f.Skills {
-							factSkills[k] = s
-							sShort := s.EffectiveShortID()
-							factSkills[k].ID = sShort
-							factSkills[k].ShortID = sShort
-						}
-						facts[j].Skills = factSkills
-					}
-				}
-				projs[i].Facts = facts
+				projs[i].Facts = projectFactsToShortIDs(proj.Facts, shortID)
 			}
 		}
 		projected.Projects = projs
@@ -510,25 +457,7 @@ func projectMasterProfileSnapshot(snap *domain.MasterProfileSnapshot, idMap map[
 			edus[i].ID = shortID
 			edus[i].ShortID = shortID
 			if len(edu.Facts) > 0 {
-				facts := make([]domain.Fact, len(edu.Facts))
-				for j, f := range edu.Facts {
-					facts[j] = f
-					fShort := f.EffectiveShortID()
-					facts[j].ID = fShort
-					facts[j].ShortID = fShort
-					facts[j].OwnerID = shortID
-					if len(f.Skills) > 0 {
-						factSkills := make([]domain.Skill, len(f.Skills))
-						for k, s := range f.Skills {
-							factSkills[k] = s
-							sShort := s.EffectiveShortID()
-							factSkills[k].ID = sShort
-							factSkills[k].ShortID = sShort
-						}
-						facts[j].Skills = factSkills
-					}
-				}
-				edus[i].Facts = facts
+				edus[i].Facts = projectFactsToShortIDs(edu.Facts, shortID)
 			}
 		}
 		projected.Education = edus
@@ -554,14 +483,7 @@ func projectMasterProfileSnapshot(snap *domain.MasterProfileSnapshot, idMap map[
 			facts[i].ShortID = fShort
 			facts[i].OwnerID = resolveShortID(f.OwnerID, idMap)
 			if len(f.Skills) > 0 {
-				factSkills := make([]domain.Skill, len(f.Skills))
-				for k, s := range f.Skills {
-					factSkills[k] = s
-					sShort := s.EffectiveShortID()
-					factSkills[k].ID = sShort
-					factSkills[k].ShortID = sShort
-				}
-				facts[i].Skills = factSkills
+				facts[i].Skills = projectSkillsToShortIDs(f.Skills)
 			}
 		}
 		projected.Facts = facts

@@ -1,3 +1,5 @@
+// Package profile implements career graph domain services, master profile management,
+// and JSON Resume schema import/export interoperability.
 package profile
 
 import (

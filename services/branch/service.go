@@ -1,3 +1,5 @@
+// Package branch provides domain services for managing targeted resume branches,
+// version lifecycles, iterative refinements, and asynchronous generation coordination.
 package branch
 
 import (

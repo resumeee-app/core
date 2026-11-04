@@ -5,19 +5,24 @@ import "strings"
 // SnapshotToTailoredContent deterministically projects a MasterProfileSnapshot into TailoredContent
 // preserving 100% fidelity with zero LLM alteration, omissions, or prompt overrides.
 func SnapshotToTailoredContent(snapshot *MasterProfileSnapshot) *TailoredContent {
-	tc := &TailoredContent{
-		SkillGroups:    []TailoredSkillGroup{},
-		Experiences:    []TailoredExperience{},
-		Projects:       []TailoredProject{},
-		Education:      []TailoredEducation{},
-		Certifications: []TailoredCert{},
-	}
-
 	if snapshot == nil {
-		return tc
+		return &TailoredContent{
+			SkillGroups:    []TailoredSkillGroup{},
+			Experiences:    []TailoredExperience{},
+			Projects:       []TailoredProject{},
+			Education:      []TailoredEducation{},
+			Certifications: []TailoredCert{},
+		}
 	}
 
-	tc.Summary = snapshot.Profile.Summary
+	tc := &TailoredContent{
+		Summary:        snapshot.Profile.Summary,
+		SkillGroups:    make([]TailoredSkillGroup, 0, len(snapshot.Skills)),
+		Experiences:    make([]TailoredExperience, 0, len(snapshot.Experiences)),
+		Projects:       make([]TailoredProject, 0, len(snapshot.Projects)),
+		Education:      make([]TailoredEducation, 0, len(snapshot.Education)),
+		Certifications: make([]TailoredCert, 0, len(snapshot.Certifications)),
+	}
 
 	// 1. Group skills by Category, preserving order of appearance.
 	type groupEntry struct {
@@ -25,8 +30,8 @@ func SnapshotToTailoredContent(snapshot *MasterProfileSnapshot) *TailoredContent
 		skills   []string
 		skillIDs []string
 	}
-	var groupOrder []string
-	groups := make(map[string]*groupEntry)
+	groupOrder := make([]string, 0, len(snapshot.Skills))
+	groups := make(map[string]*groupEntry, len(snapshot.Skills))
 
 	for _, skill := range snapshot.Skills {
 		cat := strings.TrimSpace(skill.Category)
@@ -37,8 +42,8 @@ func SnapshotToTailoredContent(snapshot *MasterProfileSnapshot) *TailoredContent
 			groupOrder = append(groupOrder, cat)
 			groups[cat] = &groupEntry{
 				category: cat,
-				skills:   []string{},
-				skillIDs: []string{},
+				skills:   make([]string, 0, 4),
+				skillIDs: make([]string, 0, 4),
 			}
 		}
 		groups[cat].skills = append(groups[cat].skills, skill.Name)
@@ -55,7 +60,7 @@ func SnapshotToTailoredContent(snapshot *MasterProfileSnapshot) *TailoredContent
 	}
 
 	// 2. Index snapshot.Facts by OwnerID as fallback if entity child facts are not preloaded.
-	factsByOwner := make(map[string][]Fact)
+	factsByOwner := make(map[string][]Fact, len(snapshot.Facts))
 	for _, f := range snapshot.Facts {
 		factsByOwner[f.OwnerID] = append(factsByOwner[f.OwnerID], f)
 	}

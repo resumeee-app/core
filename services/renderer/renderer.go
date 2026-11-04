@@ -1,3 +1,5 @@
+// Package renderer executes multi-format resume templates across HTML, Markdown, and Plain Text
+// in a sandboxed, memory-efficient environment with built-in AST validation and custom func maps.
 package renderer
 
 import (
@@ -7,10 +9,33 @@ import (
 	htmltemplate "html/template"
 	"io"
 	"strings"
+	"sync"
 	texttemplate "text/template"
 
 	"resumeee/internal/domain"
 )
+
+// bufferPool recycles bytes.Buffer instances to eliminate allocations during frequent template rendering passes.
+var bufferPool = sync.Pool{
+	New: func() any {
+		// Preallocate 16KB which comfortably fits typical rendered resume output.
+		return bytes.NewBuffer(make([]byte, 0, 16*1024))
+	},
+}
+
+func getBuffer() *bytes.Buffer {
+	b := bufferPool.Get().(*bytes.Buffer)
+	b.Reset()
+	return b
+}
+
+func putBuffer(b *bytes.Buffer) {
+	// Discard abnormally bloated buffers (e.g., > 512KB) to prevent unbounded memory retention.
+	if b.Cap() <= 512*1024 {
+		b.Reset()
+		bufferPool.Put(b)
+	}
+}
 
 // RenderContext binds the Master Profile, Tailored Content, and template styling into a unified execution context.
 type RenderContext struct {
@@ -228,23 +253,21 @@ func Validate(tmpl *domain.TemplateSet) error {
 		}
 	}
 
-	if tmpl.MarkdownTemplate != "" {
-		mt, err := texttemplate.New("markdown").Funcs(SafeFuncMap).Parse(tmpl.MarkdownTemplate)
-		if err != nil {
-			return fmt.Errorf("%w in markdown_template: %v", domain.ErrTemplateSyntax, err)
-		}
-		if err := mt.Execute(io.Discard, synth); err != nil {
-			return fmt.Errorf("%w in markdown_template evaluation: %v", domain.ErrTemplateSyntax, err)
-		}
-	}
-
-	if tmpl.TextTemplate != "" {
-		tt, err := texttemplate.New("text").Funcs(SafeFuncMap).Parse(tmpl.TextTemplate)
-		if err != nil {
-			return fmt.Errorf("%w in text_template: %v", domain.ErrTemplateSyntax, err)
-		}
-		if err := tt.Execute(io.Discard, synth); err != nil {
-			return fmt.Errorf("%w in text_template evaluation: %v", domain.ErrTemplateSyntax, err)
+	for _, textTmpl := range []struct {
+		name string
+		body string
+	}{
+		{"markdown_template", tmpl.MarkdownTemplate},
+		{"text_template", tmpl.TextTemplate},
+	} {
+		if textTmpl.body != "" {
+			tt, err := texttemplate.New(textTmpl.name).Funcs(SafeFuncMap).Parse(textTmpl.body)
+			if err != nil {
+				return fmt.Errorf("%w in %s: %v", domain.ErrTemplateSyntax, textTmpl.name, err)
+			}
+			if err := tt.Execute(io.Discard, synth); err != nil {
+				return fmt.Errorf("%w in %s evaluation: %v", domain.ErrTemplateSyntax, textTmpl.name, err)
+			}
 		}
 	}
 
@@ -257,37 +280,31 @@ func RenderFormat(format domain.OutputFormat, tmplStr string, data any) (string,
 		return "", nil
 	}
 
+	buf := getBuffer()
+	defer putBuffer(buf)
+
 	switch format {
 	case domain.OutputFormatHTML:
 		t, err := htmltemplate.New("html").Funcs(SafeFuncMap).Parse(tmplStr)
 		if err != nil {
 			return "", fmt.Errorf("%w in html template: %v", domain.ErrTemplateSyntax, err)
 		}
-		var buf bytes.Buffer
-		if err := t.Execute(&buf, data); err != nil {
+		if err := t.Execute(buf, data); err != nil {
 			return "", fmt.Errorf("%w in html template execution: %v", domain.ErrTemplateSyntax, err)
 		}
 		return buf.String(), nil
 
-	case domain.OutputFormatMarkdown:
-		t, err := texttemplate.New("markdown").Funcs(SafeFuncMap).Parse(tmplStr)
+	case domain.OutputFormatMarkdown, domain.OutputFormatPlainText:
+		name := "markdown"
+		if format == domain.OutputFormatPlainText {
+			name = "text"
+		}
+		t, err := texttemplate.New(name).Funcs(SafeFuncMap).Parse(tmplStr)
 		if err != nil {
-			return "", fmt.Errorf("%w in markdown template: %v", domain.ErrTemplateSyntax, err)
+			return "", fmt.Errorf("%w in %s template: %v", domain.ErrTemplateSyntax, name, err)
 		}
-		var buf bytes.Buffer
-		if err := t.Execute(&buf, data); err != nil {
-			return "", fmt.Errorf("%w in markdown template execution: %v", domain.ErrTemplateSyntax, err)
-		}
-		return buf.String(), nil
-
-	case domain.OutputFormatPlainText:
-		t, err := texttemplate.New("text").Funcs(SafeFuncMap).Parse(tmplStr)
-		if err != nil {
-			return "", fmt.Errorf("%w in text template: %v", domain.ErrTemplateSyntax, err)
-		}
-		var buf bytes.Buffer
-		if err := t.Execute(&buf, data); err != nil {
-			return "", fmt.Errorf("%w in text template execution: %v", domain.ErrTemplateSyntax, err)
+		if err := t.Execute(buf, data); err != nil {
+			return "", fmt.Errorf("%w in %s template execution: %v", domain.ErrTemplateSyntax, name, err)
 		}
 		return buf.String(), nil
 

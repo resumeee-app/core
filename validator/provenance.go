@@ -1,3 +1,5 @@
+// Package validator implements anti-hallucination provenance validation ("No Lies" invariant),
+// verifying that all tailored achievements cite verified Master Profile facts and skills.
 package validator
 
 import (
@@ -43,6 +45,30 @@ type factMetadata struct {
 	OwnerType    domain.OwnerType
 }
 
+func registerSkills(validSkills map[string]domain.Skill, skills []domain.Skill) {
+	for _, s := range skills {
+		validSkills[s.ID] = s
+		if short := s.EffectiveShortID(); short != "" {
+			validSkills[short] = s
+		}
+	}
+}
+
+func registerFacts(factRegistry map[string]factMetadata, validSkills map[string]domain.Skill, facts []domain.Fact, ownerID, ownerShortID string, defaultOwnerType domain.OwnerType) {
+	for _, f := range facts {
+		ownerType := f.OwnerType
+		if ownerType == "" {
+			ownerType = defaultOwnerType
+		}
+		meta := factMetadata{OwnerID: ownerID, OwnerShortID: ownerShortID, OwnerType: ownerType}
+		factRegistry[f.ID] = meta
+		if short := f.EffectiveShortID(); short != "" {
+			factRegistry[short] = meta
+		}
+		registerSkills(validSkills, f.Skills)
+	}
+}
+
 // Validate audits and sanitizes TailoredContent against MasterProfileSnapshot and Branch rules.
 // It verifies fact and skill citations using dual-key resolution (matching both canonical UUIDs and short IDs),
 // strips ungrounded or cross-entity spoofed claims, filters excluded entities, and checks for pinned omissions.
@@ -64,12 +90,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 	}
 
 	validSkills := make(map[string]domain.Skill, len(snapshot.Skills)*2)
-	for _, s := range snapshot.Skills {
-		validSkills[s.ID] = s
-		if s.EffectiveShortID() != "" {
-			validSkills[s.EffectiveShortID()] = s
-		}
-	}
+	registerSkills(validSkills, snapshot.Skills)
 
 	validExperiences := make(map[string]domain.WorkExperience, len(snapshot.Experiences)*2)
 	validProjects := make(map[string]domain.Project, len(snapshot.Projects)*2)
@@ -82,31 +103,8 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if exp.EffectiveShortID() != "" {
 			validExperiences[exp.EffectiveShortID()] = exp
 		}
-		for _, s := range exp.Skills {
-			validSkills[s.ID] = s
-			if s.EffectiveShortID() != "" {
-				validSkills[s.EffectiveShortID()] = s
-			}
-		}
-		for _, f := range exp.Facts {
-			ownerID := exp.ID
-			ownerShortID := exp.EffectiveShortID()
-			ownerType := f.OwnerType
-			if ownerType == "" {
-				ownerType = domain.OwnerTypeWorkExperience
-			}
-			meta := factMetadata{OwnerID: ownerID, OwnerShortID: ownerShortID, OwnerType: ownerType}
-			factRegistry[f.ID] = meta
-			if f.EffectiveShortID() != "" {
-				factRegistry[f.EffectiveShortID()] = meta
-			}
-			for _, s := range f.Skills {
-				validSkills[s.ID] = s
-				if s.EffectiveShortID() != "" {
-					validSkills[s.EffectiveShortID()] = s
-				}
-			}
-		}
+		registerSkills(validSkills, exp.Skills)
+		registerFacts(factRegistry, validSkills, exp.Facts, exp.ID, exp.EffectiveShortID(), domain.OwnerTypeWorkExperience)
 	}
 
 	for _, proj := range snapshot.Projects {
@@ -114,31 +112,8 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if proj.EffectiveShortID() != "" {
 			validProjects[proj.EffectiveShortID()] = proj
 		}
-		for _, s := range proj.Skills {
-			validSkills[s.ID] = s
-			if s.EffectiveShortID() != "" {
-				validSkills[s.EffectiveShortID()] = s
-			}
-		}
-		for _, f := range proj.Facts {
-			ownerID := proj.ID
-			ownerShortID := proj.EffectiveShortID()
-			ownerType := f.OwnerType
-			if ownerType == "" {
-				ownerType = domain.OwnerTypeProject
-			}
-			meta := factMetadata{OwnerID: ownerID, OwnerShortID: ownerShortID, OwnerType: ownerType}
-			factRegistry[f.ID] = meta
-			if f.EffectiveShortID() != "" {
-				factRegistry[f.EffectiveShortID()] = meta
-			}
-			for _, s := range f.Skills {
-				validSkills[s.ID] = s
-				if s.EffectiveShortID() != "" {
-					validSkills[s.EffectiveShortID()] = s
-				}
-			}
-		}
+		registerSkills(validSkills, proj.Skills)
+		registerFacts(factRegistry, validSkills, proj.Facts, proj.ID, proj.EffectiveShortID(), domain.OwnerTypeProject)
 	}
 
 	for _, edu := range snapshot.Education {
@@ -146,25 +121,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if edu.EffectiveShortID() != "" {
 			validEducation[edu.EffectiveShortID()] = edu
 		}
-		for _, f := range edu.Facts {
-			ownerID := edu.ID
-			ownerShortID := edu.EffectiveShortID()
-			ownerType := f.OwnerType
-			if ownerType == "" {
-				ownerType = domain.OwnerTypeEducation
-			}
-			meta := factMetadata{OwnerID: ownerID, OwnerShortID: ownerShortID, OwnerType: ownerType}
-			factRegistry[f.ID] = meta
-			if f.EffectiveShortID() != "" {
-				factRegistry[f.EffectiveShortID()] = meta
-			}
-			for _, s := range f.Skills {
-				validSkills[s.ID] = s
-				if s.EffectiveShortID() != "" {
-					validSkills[s.EffectiveShortID()] = s
-				}
-			}
-		}
+		registerFacts(factRegistry, validSkills, edu.Facts, edu.ID, edu.EffectiveShortID(), domain.OwnerTypeEducation)
 	}
 
 	for _, cert := range snapshot.Certifications {
@@ -192,12 +149,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if f.EffectiveShortID() != "" {
 			factRegistry[f.EffectiveShortID()] = meta
 		}
-		for _, s := range f.Skills {
-			validSkills[s.ID] = s
-			if s.EffectiveShortID() != "" {
-				validSkills[s.EffectiveShortID()] = s
-			}
-		}
+		registerSkills(validSkills, f.Skills)
 	}
 
 	excludedSet := make(map[string]bool)

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"resumeee/internal/domain"
 )
@@ -193,11 +194,18 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 }
 
 // failJob records a failed execution status and error diagnostics for a version.
+// It uses a detached, bounded timeout context to ensure persistence even if the parent job context is canceled.
 func (p *Pool) failJob(ctx context.Context, versionID, errMsg string) {
 	if p.logger != nil {
 		p.logger.Error("generation job failed", "version_id", versionID, "error", errMsg)
 	}
 	if p.branchRepo != nil {
-		_ = p.branchRepo.UpdateVersionStatus(ctx, versionID, domain.VersionStatusFailed, errMsg)
+		failCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := p.branchRepo.UpdateVersionStatus(failCtx, versionID, domain.VersionStatusFailed, errMsg); err != nil {
+			if p.logger != nil {
+				p.logger.Error("failed to record version failure status in repository", "version_id", versionID, "error", err)
+			}
+		}
 	}
 }

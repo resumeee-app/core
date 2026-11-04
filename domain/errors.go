@@ -21,4 +21,7 @@ var (
 
 	// ErrDefaultBranchImmutable is returned when attempting to delete or tailor the default branch.
 	ErrDefaultBranchImmutable = errors.New("default branch cannot be deleted or tailored")
+
+	// ErrConflict is returned when an entity violates a unique constraint or concurrency version precondition.
+	ErrConflict = errors.New("resource conflict")
 )

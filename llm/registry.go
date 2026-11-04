@@ -19,6 +19,7 @@ type Registry struct {
 	providers       map[string]domain.LLMProvider
 	defaultProvider string
 	defaultModel    string
+	debugger        PromptDebugger
 }
 
 // NewRegistry initializes an LLM registry based on 12-factor environment configuration.
@@ -39,7 +40,8 @@ func NewRegistry(cfg *config.Config, opts ...Option) *Registry {
 		}
 		baseOpts := applyOptions(opts, "", "")
 		debugger := NewFilePromptDebugger(dir, baseOpts.logger)
-		effectiveOpts = append([]Option{WithPromptDebugger(debugger)}, opts...)
+		r.debugger = debugger
+		effectiveOpts = append(append([]Option{}, opts...), WithPromptDebugger(debugger))
 	}
 
 	if cfg.GeminiAPIKey != "" {
@@ -140,6 +142,13 @@ func (r *Registry) DefaultModel() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.defaultModel
+}
+
+// PromptDebugger returns the configured PromptDebugger instance, or nil if prompt debugging is disabled.
+func (r *Registry) PromptDebugger() PromptDebugger {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.debugger
 }
 
 // SetDefault explicitly overrides the default provider and model.

@@ -51,6 +51,14 @@ func NewDefaultResumeExtractor(registry *Registry) ResumeExtractor {
 	}
 }
 
+// AvailableModels returns available configured models if the completer is backed by a Registry.
+func (e *resumeExtractor) AvailableModels() []domain.ModelOption {
+	if rc, ok := e.completer.(*registryCompleter); ok && rc.registry != nil {
+		return rc.registry.AvailableModels()
+	}
+	return nil
+}
+
 type registryCompleter struct {
 	registry *Registry
 }
@@ -81,7 +89,11 @@ func (rc *registryCompleter) Complete(ctx context.Context, systemPrompt, userPro
 
 	targetModel := model
 	if strings.TrimSpace(targetModel) == "" {
-		targetModel = rc.registry.DefaultModel()
+		if strings.EqualFold(targetProvider, rc.registry.DefaultProvider()) {
+			targetModel = rc.registry.DefaultModel()
+		} else {
+			targetModel = defaultModelForProvider(targetProvider)
+		}
 	}
 
 	if raw, ok := p.(RawCompleter); ok {

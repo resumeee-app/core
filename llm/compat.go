@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -128,7 +127,7 @@ func (p *CompatProvider) GenerateTailoredResume(ctx context.Context, req domain.
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := readBoundedBody(resp.Body)
 	if err != nil {
 		retErr = fmt.Errorf("failed to read response body: %w", err)
 		return nil, retErr
@@ -137,20 +136,8 @@ func (p *CompatProvider) GenerateTailoredResume(ctx context.Context, req domain.
 	statusCode = resp.StatusCode
 	rawResp = string(bodyBytes)
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		retErr = fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
-		return nil, retErr
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		retErr = fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
-		return nil, retErr
-	}
-	if resp.StatusCode >= 500 {
-		retErr = fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
-		return nil, retErr
-	}
-	if resp.StatusCode != http.StatusOK {
-		retErr = fmt.Errorf("compat api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	if err := checkStatusError("compat", resp.StatusCode, bodyBytes); err != nil {
+		retErr = err
 		return nil, retErr
 	}
 
@@ -243,7 +230,7 @@ func (p *CompatProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := readBoundedBody(resp.Body)
 	if err != nil {
 		retErr = fmt.Errorf("failed to read response body: %w", err)
 		return "", retErr
@@ -252,20 +239,8 @@ func (p *CompatProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 	statusCode = resp.StatusCode
 	rawResp = string(bodyBytes)
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		retErr = fmt.Errorf("%w: status %d: %s", ErrUnauthorized, resp.StatusCode, string(bodyBytes))
-		return "", retErr
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		retErr = fmt.Errorf("%w: status 429: %s", ErrRateLimited, string(bodyBytes))
-		return "", retErr
-	}
-	if resp.StatusCode >= 500 {
-		retErr = fmt.Errorf("%w: status %d: %s", ErrUpstream, resp.StatusCode, string(bodyBytes))
-		return "", retErr
-	}
-	if resp.StatusCode != http.StatusOK {
-		retErr = fmt.Errorf("compat api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	if err := checkStatusError("compat", resp.StatusCode, bodyBytes); err != nil {
+		retErr = err
 		return "", retErr
 	}
 

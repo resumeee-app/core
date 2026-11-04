@@ -1366,4 +1366,67 @@ func TestGeminiProvider_ErrorParsing(t *testing.T) {
 	}
 }
 
+func TestReadBoundedBody(t *testing.T) {
+	t.Run("within bounds", func(t *testing.T) {
+		payload := strings.Repeat("a", 1024)
+		data, err := readBoundedBody(strings.NewReader(payload))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(data) != 1024 {
+			t.Errorf("expected 1024 bytes, got %d", len(data))
+		}
+	})
+
+	t.Run("truncates at max boundary", func(t *testing.T) {
+		// Create a reader larger than maxLLMResponseBodyBytes
+		oversized := io.MultiReader(
+			strings.NewReader(strings.Repeat("b", maxLLMResponseBodyBytes)),
+			strings.NewReader("overflow-bytes-that-should-not-be-read"),
+		)
+		data, err := readBoundedBody(oversized)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(data) != maxLLMResponseBodyBytes {
+			t.Errorf("expected exactly %d bytes, got %d", maxLLMResponseBodyBytes, len(data))
+		}
+	})
+}
+
+func TestCheckStatusError(t *testing.T) {
+	testCases := []struct {
+		statusCode  int
+		expectedErr error
+	}{
+		{http.StatusOK, nil},
+		{http.StatusUnauthorized, ErrUnauthorized},
+		{http.StatusForbidden, ErrUnauthorized},
+		{http.StatusTooManyRequests, ErrRateLimited},
+		{http.StatusInternalServerError, ErrUpstream},
+		{http.StatusBadGateway, ErrUpstream},
+		{http.StatusServiceUnavailable, ErrUpstream},
+		{http.StatusTeapot, nil},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("status_%d", tc.statusCode), func(t *testing.T) {
+			err := checkStatusError("test-provider", tc.statusCode, []byte("error payload"))
+			if tc.statusCode == http.StatusOK {
+				if err != nil {
+					t.Fatalf("expected nil error for 200 OK, got: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error for status %d, got nil", tc.statusCode)
+			}
+			if tc.expectedErr != nil && !errors.Is(err, tc.expectedErr) {
+				t.Errorf("expected error to wrap %v, got %v", tc.expectedErr, err)
+			}
+		})
+	}
+}
+
+
 

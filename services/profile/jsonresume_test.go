@@ -867,6 +867,12 @@ func TestProfileService_ExportJSONResume_WithVersionID(t *testing.T) {
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("expected ErrNotFound for nonexistent version_id, got %v", err)
 	}
+
+	// 6. Cross-tenant access: Querying valid version_id with different user returns ErrNotFound
+	_, err = svc.ExportJSONResume(ctx, "different-user-id", &verID)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("expected ErrNotFound for other user's version_id, got %v", err)
+	}
 }
 
 func TestJSONResume_Import_GeneratesShortIDs(t *testing.T) {

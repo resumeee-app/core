@@ -5,6 +5,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -157,6 +158,25 @@ func (p *Pool) workerLoop(ctx context.Context, workerID int) {
 	defer p.wg.Done()
 
 	for job := range p.jobQueue {
-		p.processJob(ctx, job)
+		p.safeProcessJob(ctx, job)
 	}
+}
+
+// safeProcessJob executes a generation job with panic recovery to prevent worker goroutines from terminating
+// and to guarantee that the offending job is transitioned to a failed state.
+func (p *Pool) safeProcessJob(ctx context.Context, job GenerationJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			errStr := fmt.Sprintf("panic recovered in worker: %v", r)
+			if p.logger != nil {
+				p.logger.Error("panic recovered during job execution",
+					"version_id", job.VersionID,
+					"panic", r,
+				)
+			}
+			p.failJob(ctx, job.VersionID, errStr)
+		}
+	}()
+
+	p.processJob(ctx, job)
 }

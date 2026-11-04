@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -123,7 +122,7 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := readBoundedBody(resp.Body)
 	if err != nil {
 		retErr = fmt.Errorf("failed to read response body: %w", err)
 		return nil, retErr
@@ -234,7 +233,7 @@ func (p *GeminiProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := readBoundedBody(resp.Body)
 	if err != nil {
 		retErr = fmt.Errorf("failed to read response body: %w", err)
 		return "", retErr

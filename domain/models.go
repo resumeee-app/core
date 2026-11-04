@@ -246,8 +246,8 @@ type Fact struct {
 	ID        string    `json:"id" gorm:"primaryKey;type:text"`
 	ShortID   string    `json:"short_id,omitempty" gorm:"index"`
 	UserID    string    `json:"user_id" gorm:"index;not null"`
-	OwnerID   string    `json:"owner_id" gorm:"index;not null"`
-	OwnerType OwnerType `json:"owner_type" gorm:"index;not null"` // work_experience, project, education
+	OwnerID   string    `json:"owner_id" gorm:"index;index:idx_fact_owner;not null"`
+	OwnerType OwnerType `json:"owner_type" gorm:"index;index:idx_fact_owner;not null"` // work_experience, project, education
 	Statement string    `json:"statement" gorm:"not null"`        // Raw factual description
 	Impact    string    `json:"impact,omitempty"`                 // Verifiable outcome / metric
 	Skills    []Skill   `json:"skills,omitempty" gorm:"many2many:fact_skills;"`
@@ -274,7 +274,7 @@ type Preset struct {
 	Name               string    `json:"name" gorm:"not null"`
 	Description        string    `json:"description,omitempty"`
 	SystemInstructions string    `json:"system_instructions" gorm:"not null"` // Tier 2 LLM instructions
-	TemplateSetID      string    `json:"template_set_id" gorm:"not null"`
+	TemplateSetID      string    `json:"template_set_id" gorm:"index;not null"`
 	ProviderOverride   string    `json:"provider_override,omitempty"`
 	ModelOverride      string    `json:"model_override,omitempty"`
 	IncludeAdminFields bool      `json:"include_admin_fields"` // True for immigration/government presets
@@ -325,13 +325,13 @@ type Branch struct {
 	TargetCompany            string    `json:"target_company,omitempty"`
 	TargetRequirements       string    `json:"target_requirements,omitempty"` // Job description or immigration criteria
 	BranchInstructions       string    `json:"branch_instructions,omitempty"` // Tier 3 custom LLM instructions
-	PresetID                 *string   `json:"preset_id,omitempty"`
-	TemplateSetID            string    `json:"template_set_id" gorm:"not null"`
+	PresetID                 *string   `json:"preset_id,omitempty" gorm:"index"`
+	TemplateSetID            string    `json:"template_set_id" gorm:"index;not null"`
 	ProviderOverride         string    `json:"provider_override,omitempty"`
 	ModelOverride            string    `json:"model_override,omitempty"`
 	PinnedEntityIDs          []string  `json:"pinned_entity_ids,omitempty" gorm:"serializer:json"`   // Force-included Master IDs
 	ExcludedEntityIDs        []string  `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"` // Force-excluded Master IDs
-	ActiveVersionID          *string   `json:"active_version_id,omitempty"`
+	ActiveVersionID          *string   `json:"active_version_id,omitempty" gorm:"index"`
 	LastSyncedMasterRevision int64     `json:"last_synced_master_revision"`
 	IsStale                  bool      `json:"is_stale" gorm:"-"` // Computed: LastSyncedMasterRevision < Profile.MasterRevision
 	CreatedAt                time.Time `json:"created_at"`
@@ -376,7 +376,7 @@ type BranchVersion struct {
 	ProviderUsed       string           `json:"provider_used"`
 	ModelUsed          string           `json:"model_used"`
 	SourceType         SourceType       `json:"source_type"` // "llm_generation" or "manual_edit"
-	ParentVersionID    *string          `json:"parent_version_id,omitempty"`
+	ParentVersionID    *string          `json:"parent_version_id,omitempty" gorm:"index"`
 	TailoredContent    *TailoredContent `json:"tailored_content,omitempty" gorm:"serializer:json"`
 	GapReport          *GapReport       `json:"gap_report,omitempty" gorm:"serializer:json"`
 	ValidationWarnings []string         `json:"validation_warnings,omitempty" gorm:"serializer:json"`

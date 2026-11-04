@@ -96,21 +96,16 @@ func (s *profileService) ExportJSONResume(ctx context.Context, userID string, ve
 		return nil, fmt.Errorf("%w: branch repository not configured", domain.ErrNotFound)
 	}
 
-	branches, err := s.branchRepo.ListBranches(ctx, userID)
+	targetVersion, err := s.branchRepo.GetVersion(ctx, "", *versionID)
 	if err != nil {
 		return nil, err
 	}
 
-	var targetVersion *domain.BranchVersion
-	for _, b := range branches {
-		v, err := s.branchRepo.GetVersion(ctx, b.ID, *versionID)
-		if err == nil && v != nil {
-			targetVersion = v
-			break
-		}
+	targetBranch, err := s.branchRepo.GetBranch(ctx, userID, targetVersion.BranchID)
+	if err != nil {
+		return nil, err
 	}
-
-	if targetVersion == nil {
+	if targetBranch.UserID != userID {
 		return nil, domain.ErrNotFound
 	}
 

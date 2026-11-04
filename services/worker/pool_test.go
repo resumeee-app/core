@@ -22,6 +22,8 @@ type mockLLM struct {
 	delay        time.Duration
 	fail         bool
 	failErrMsg   string
+	shouldPanic  bool
+	panicVal     any
 	customResp   *domain.GenerationResponse
 	requestCount int
 }
@@ -32,8 +34,14 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req domain.Generat
 	delay := m.delay
 	fail := m.fail
 	failErrMsg := m.failErrMsg
+	shouldPanic := m.shouldPanic
+	panicVal := m.panicVal
 	custom := m.customResp
 	m.mu.Unlock()
+
+	if shouldPanic {
+		panic(panicVal)
+	}
 
 	if delay > 0 {
 		select {
@@ -663,4 +671,109 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 		t.Errorf("expected v2 status failed, got %s", refetched2.Status)
 	}
 }
+
+// TestPool_WorkerPanicRecovery verifies that a panic during job execution is caught,
+// records the version as failed with panic diagnostics, and does not crash the worker goroutine,
+// allowing subsequent enqueued jobs to process successfully.
+func TestPool_WorkerPanicRecovery(t *testing.T) {
+	env := setupTestWorkerEnv(t)
+	env.llm.mu.Lock()
+	env.llm.shouldPanic = true
+	env.llm.panicVal = "unexpected runtime nil pointer during model invocation"
+	env.llm.mu.Unlock()
+
+	// Single concurrency to prove the single worker survives the panic
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:  1,
+		QueueSize:    5,
+		BranchRepo:   env.branchRepo,
+		ProfileRepo:  env.profileRepo,
+		PresetRepo:   env.presetRepo,
+		TemplateRepo: env.templateRepo,
+		LLMService:   env.llm,
+		Validator:    env.validator,
+		Renderer:     env.renderer,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	// 1. Enqueue job that panics
+	verPanic := &domain.BranchVersion{
+		ID:                 "ver-panic-1",
+		BranchID:           env.branchID,
+		Status:             domain.VersionStatusPending,
+		MasterRevisionUsed: 1,
+		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, verPanic); err != nil {
+		t.Fatalf("failed to create panic version: %v", err)
+	}
+
+	if err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verPanic.ID}); err != nil {
+		t.Fatalf("failed to enqueue panic job: %v", err)
+	}
+
+	// Wait for panic version to fail
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		v, err := env.branchRepo.GetVersion(ctx, env.branchID, verPanic.ID)
+		if err != nil {
+			t.Fatalf("failed to get panic version: %v", err)
+		}
+		if v.Status == domain.VersionStatusFailed {
+			if v.ErrorMessage == "" {
+				t.Errorf("expected non-empty error message on panic failure")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for panic version to fail, current status: %s", v.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 2. Clear panic condition and enqueue a second job to prove worker survived
+	env.llm.mu.Lock()
+	env.llm.shouldPanic = false
+	env.llm.panicVal = nil
+	env.llm.mu.Unlock()
+
+	verSuccess := &domain.BranchVersion{
+		ID:                 "ver-success-2",
+		BranchID:           env.branchID,
+		Status:             domain.VersionStatusPending,
+		MasterRevisionUsed: 1,
+		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, verSuccess); err != nil {
+		t.Fatalf("failed to create success version: %v", err)
+	}
+
+	if err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verSuccess.ID}); err != nil {
+		t.Fatalf("failed to enqueue second job: %v", err)
+	}
+
+	// Wait for second job to complete successfully
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		v, err := env.branchRepo.GetVersion(ctx, env.branchID, verSuccess.ID)
+		if err != nil {
+			t.Fatalf("failed to get success version: %v", err)
+		}
+		if v.Status == domain.VersionStatusCompleted {
+			break
+		}
+		if v.Status == domain.VersionStatusFailed {
+			t.Fatalf("second job unexpectedly failed: %s", v.ErrorMessage)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for second job to complete, current status: %s", v.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 

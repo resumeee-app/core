@@ -3,7 +3,22 @@ package llm
 import (
 	"log/slog"
 	"net/http"
+	"time"
 )
+
+// defaultLLMHTTPClient provides a production-tuned HTTP client for LLM provider adapters
+// with connection pooling and an upper timeout to prevent stalled requests from hanging workers.
+var defaultLLMHTTPClient = &http.Client{
+	Timeout: 3 * time.Minute,
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          50,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 type adapterOptions struct {
 	baseURL      string
@@ -55,7 +70,7 @@ func WithLogger(logger *slog.Logger) Option {
 func applyOptions(opts []Option, defaultBaseURL, defaultModel string) adapterOptions {
 	cfg := adapterOptions{
 		baseURL:      defaultBaseURL,
-		httpClient:   http.DefaultClient,
+		httpClient:   defaultLLMHTTPClient,
 		defaultModel: defaultModel,
 		logger:       slog.Default(),
 	}

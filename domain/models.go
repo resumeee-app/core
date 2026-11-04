@@ -277,6 +277,8 @@ type Preset struct {
 	TemplateSetID      string    `json:"template_set_id" gorm:"index;not null"`
 	ProviderOverride   string    `json:"provider_override,omitempty"`
 	ModelOverride      string    `json:"model_override,omitempty"`
+	// ReasoningLevel defines the optional reasoning effort or depth constraint for thinking models (enum: "none", "low", "medium", "high").
+	ReasoningLevel     string    `json:"reasoning_level,omitempty"`
 	IncludeAdminFields bool      `json:"include_admin_fields"` // True for immigration/government presets
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`

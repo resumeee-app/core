@@ -24,16 +24,17 @@ func SnapshotToTailoredContent(snapshot *MasterProfileSnapshot) *TailoredContent
 		Certifications: make([]TailoredCert, 0, len(snapshot.Certifications)),
 	}
 
-	// 1. Group skills by Category, preserving order of appearance.
+	// 1. Group skills by Category using all consolidated skills across the snapshot.
 	type groupEntry struct {
 		category string
 		skills   []string
 		skillIDs []string
 	}
-	groupOrder := make([]string, 0, len(snapshot.Skills))
-	groups := make(map[string]*groupEntry, len(snapshot.Skills))
+	allSkills := snapshot.AllSkills()
+	groupOrder := make([]string, 0, len(allSkills))
+	groups := make(map[string]*groupEntry, len(allSkills))
 
-	for _, skill := range snapshot.Skills {
+	for _, skill := range allSkills {
 		cat := strings.TrimSpace(skill.Category)
 		if cat == "" {
 			cat = "General Skills"

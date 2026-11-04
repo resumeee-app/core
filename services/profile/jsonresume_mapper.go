@@ -537,9 +537,10 @@ func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
 		}
 	}
 
-	// 6. Skills
-	skillList := make([]JSONResumeSkill, len(snapshot.Skills))
-	for i, skill := range snapshot.Skills {
+	// 6. Skills: export all consolidated skills from the snapshot
+	allSnapshotSkills := snapshot.AllSkills()
+	skillList := make([]JSONResumeSkill, len(allSnapshotSkills))
+	for i, skill := range allSnapshotSkills {
 		skillList[i] = JSONResumeSkill{
 			Name:     skill.Name,
 			Level:    skill.Proficiency,
@@ -874,23 +875,9 @@ func (m *skillMatcher) findMatchingSkills(text string) []domain.Skill {
 	return matched
 }
 
-// mergeUniqueSkills combines two skill slices and removes duplicates by skill ID.
+// mergeUniqueSkills combines two skill slices and removes duplicates by skill ID using domain.MergeUniqueSkills.
 func mergeUniqueSkills(a, b []domain.Skill) []domain.Skill {
-	seen := make(map[string]bool)
-	var merged []domain.Skill
-	for _, s := range a {
-		if !seen[s.ID] {
-			seen[s.ID] = true
-			merged = append(merged, s)
-		}
-	}
-	for _, s := range b {
-		if !seen[s.ID] {
-			seen[s.ID] = true
-			merged = append(merged, s)
-		}
-	}
-	return merged
+	return domain.MergeUniqueSkills(a, b)
 }
 
 // extractStringSlice safely extracts a slice of strings from either []string or []any.

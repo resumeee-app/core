@@ -54,7 +54,7 @@ func registerSkills(validSkills map[string]domain.Skill, skills []domain.Skill) 
 	}
 }
 
-func registerFacts(factRegistry map[string]factMetadata, validSkills map[string]domain.Skill, facts []domain.Fact, ownerID, ownerShortID string, defaultOwnerType domain.OwnerType) {
+func registerFacts(factRegistry map[string]factMetadata, facts []domain.Fact, ownerID, ownerShortID string, defaultOwnerType domain.OwnerType) {
 	for _, f := range facts {
 		ownerType := f.OwnerType
 		if ownerType == "" {
@@ -65,7 +65,6 @@ func registerFacts(factRegistry map[string]factMetadata, validSkills map[string]
 		if short := f.EffectiveShortID(); short != "" {
 			factRegistry[short] = meta
 		}
-		registerSkills(validSkills, f.Skills)
 	}
 }
 
@@ -89,8 +88,9 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		return nil, fmt.Errorf("%w: master profile snapshot cannot be nil", domain.ErrValidation)
 	}
 
-	validSkills := make(map[string]domain.Skill, len(snapshot.Skills)*2)
-	registerSkills(validSkills, snapshot.Skills)
+	allSkills := snapshot.AllSkills()
+	validSkills := make(map[string]domain.Skill, len(allSkills)*2)
+	registerSkills(validSkills, allSkills)
 
 	validExperiences := make(map[string]domain.WorkExperience, len(snapshot.Experiences)*2)
 	validProjects := make(map[string]domain.Project, len(snapshot.Projects)*2)
@@ -103,8 +103,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if exp.EffectiveShortID() != "" {
 			validExperiences[exp.EffectiveShortID()] = exp
 		}
-		registerSkills(validSkills, exp.Skills)
-		registerFacts(factRegistry, validSkills, exp.Facts, exp.ID, exp.EffectiveShortID(), domain.OwnerTypeWorkExperience)
+		registerFacts(factRegistry, exp.Facts, exp.ID, exp.EffectiveShortID(), domain.OwnerTypeWorkExperience)
 	}
 
 	for _, proj := range snapshot.Projects {
@@ -112,8 +111,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if proj.EffectiveShortID() != "" {
 			validProjects[proj.EffectiveShortID()] = proj
 		}
-		registerSkills(validSkills, proj.Skills)
-		registerFacts(factRegistry, validSkills, proj.Facts, proj.ID, proj.EffectiveShortID(), domain.OwnerTypeProject)
+		registerFacts(factRegistry, proj.Facts, proj.ID, proj.EffectiveShortID(), domain.OwnerTypeProject)
 	}
 
 	for _, edu := range snapshot.Education {
@@ -121,7 +119,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if edu.EffectiveShortID() != "" {
 			validEducation[edu.EffectiveShortID()] = edu
 		}
-		registerFacts(factRegistry, validSkills, edu.Facts, edu.ID, edu.EffectiveShortID(), domain.OwnerTypeEducation)
+		registerFacts(factRegistry, edu.Facts, edu.ID, edu.EffectiveShortID(), domain.OwnerTypeEducation)
 	}
 
 	for _, cert := range snapshot.Certifications {
@@ -149,7 +147,6 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if f.EffectiveShortID() != "" {
 			factRegistry[f.EffectiveShortID()] = meta
 		}
-		registerSkills(validSkills, f.Skills)
 	}
 
 	excludedSet := make(map[string]bool)

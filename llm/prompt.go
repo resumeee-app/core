@@ -50,15 +50,13 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 	// 1. Build idMap for projecting snapshot, pinned/excluded entities, and prior version
 	idMap := make(map[string]string)
 	if req.MasterProfile != nil {
-		recordSkills(idMap, req.MasterProfile.Skills)
+		recordSkills(idMap, req.MasterProfile.AllSkills())
 		for _, exp := range req.MasterProfile.Experiences {
 			recordShortID(idMap, exp.ID, exp.EffectiveShortID())
-			recordSkills(idMap, exp.Skills)
 			recordFacts(idMap, exp.Facts)
 		}
 		for _, proj := range req.MasterProfile.Projects {
 			recordShortID(idMap, proj.ID, proj.EffectiveShortID())
-			recordSkills(idMap, proj.Skills)
 			recordFacts(idMap, proj.Facts)
 		}
 		for _, edu := range req.MasterProfile.Education {

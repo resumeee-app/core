@@ -316,4 +316,43 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 			t.Errorf("unexpected source fact IDs: %+v", res.Experiences[0].Bullets[0].SourceFactIDs)
 		}
 	})
+
+	t.Run("nested skills from experiences and facts are consolidated into SkillGroups", func(t *testing.T) {
+		snap := &domain.MasterProfileSnapshot{
+			Skills: []domain.Skill{
+				{ID: "sk-top", Name: "Go", Category: "Backend"},
+			},
+			Experiences: []domain.WorkExperience{
+				{
+					ID:        "exp-1",
+					Company:   "Acme",
+					RoleTitle: "Dev",
+					StartDate: "2020-01-01",
+					Skills: []domain.Skill{
+						{ID: "sk-exp", Name: "gRPC", Category: "Backend"},
+					},
+					Facts: []domain.Fact{
+						{
+							ID:        "fact-1",
+							Statement: "Built microservices",
+							Skills: []domain.Skill{
+								{ID: "sk-fact", Name: "PostgreSQL", Category: "Database"},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		res := domain.SnapshotToTailoredContent(snap)
+		if len(res.SkillGroups) != 2 {
+			t.Fatalf("expected 2 skill groups, got %d", len(res.SkillGroups))
+		}
+		if res.SkillGroups[0].Category != "Backend" || !reflect.DeepEqual(res.SkillGroups[0].Skills, []string{"Go", "gRPC"}) {
+			t.Errorf("backend skill group mismatch: %+v", res.SkillGroups[0])
+		}
+		if res.SkillGroups[1].Category != "Database" || !reflect.DeepEqual(res.SkillGroups[1].Skills, []string{"PostgreSQL"}) {
+			t.Errorf("database skill group mismatch: %+v", res.SkillGroups[1])
+		}
+	})
 }

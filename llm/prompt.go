@@ -14,10 +14,12 @@ import (
 var templateFS embed.FS
 
 var (
-	tailorSystemTmpl      = template.Must(template.ParseFS(templateFS, "templates/tailor_system.tmpl"))
-	tailorUserTmpl        = template.Must(template.ParseFS(templateFS, "templates/tailor_user.tmpl"))
-	gapAnalysisSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_system.tmpl"))
-	gapAnalysisUserTmpl   = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_user.tmpl"))
+	tailorSystemTmpl        = template.Must(template.ParseFS(templateFS, "templates/tailor_system.tmpl"))
+	tailorUserTmpl          = template.Must(template.ParseFS(templateFS, "templates/tailor_user.tmpl"))
+	gapAnalysisSystemTmpl   = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_system.tmpl"))
+	gapAnalysisUserTmpl     = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_user.tmpl"))
+	resumeExtractSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/resume_extract_system.tmpl"))
+	resumeExtractUserTmpl   = template.Must(template.ParseFS(templateFS, "templates/resume_extract_user.tmpl"))
 )
 
 // ReadTemplateFile reads a template file by name from the embedded templates directory.
@@ -186,6 +188,35 @@ func BuildGapAnalysisPrompt(req domain.GenerationRequest) (*PromptPayload, error
 	userBuilder.Grow(4096)
 	if err := gapAnalysisUserTmpl.Execute(&userBuilder, ctx); err != nil {
 		return nil, fmt.Errorf("failed to render gap analysis user prompt template: %w", err)
+	}
+
+	return &PromptPayload{
+		SystemPrompt: sysBuilder.String(),
+		UserPrompt:   userBuilder.String(),
+	}, nil
+}
+
+type resumeExtractPromptContext struct {
+	RawText string
+}
+
+// BuildResumeExtractPrompt constructs structured system and user prompts for extracting unstructured resume text
+// into standard JSON Resume format, rendering prompts from embedded template files.
+func BuildResumeExtractPrompt(rawText string) (*PromptPayload, error) {
+	var sysBuilder strings.Builder
+	sysBuilder.Grow(1024)
+	if err := resumeExtractSystemTmpl.Execute(&sysBuilder, nil); err != nil {
+		return nil, fmt.Errorf("failed to render resume extract system prompt template: %w", err)
+	}
+
+	ctx := resumeExtractPromptContext{
+		RawText: strings.TrimSpace(rawText),
+	}
+
+	var userBuilder strings.Builder
+	userBuilder.Grow(2048 + len(rawText))
+	if err := resumeExtractUserTmpl.Execute(&userBuilder, ctx); err != nil {
+		return nil, fmt.Errorf("failed to render resume extract user prompt template: %w", err)
 	}
 
 	return &PromptPayload{

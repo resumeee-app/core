@@ -20,3 +20,410 @@ Your task is to tailor a candidate's resume to a specific target role by selecti
    - Do NOT invent or extrapolate requirements that were not stated or clearly implied by the Target Requirements.
    - For every gap, provide a "missing_area" category, an "importance" ("critical", "preferred", or "nice_to_have"), a "clarifying_prompt", and an actionable "recommended_action".
 </grounding_and_provenance_rules>
+
+<schema_and_tailoring_hints>
+1. Executive Summary ("tailored_content.summary"):
+   - Produce a concise, impactful 2-4 sentence executive summary.
+   - Synthesize candidate's verified background, core domain competencies, and direct relevance to the target role.
+2. Skill Groups ("tailored_content.skill_groups"):
+   - Organize skills into cohesive categories (e.g., "Languages", "Cloud & Infrastructure", "Frameworks & Libraries", "Data & Storage").
+   - Populate "source_skill_ids" with verified short IDs from the Master Profile.
+3. Experience Bullets ("tailored_content.experiences[].bullets"):
+   - Formulate bullets using strong action verbs, problem context, and quantified impact (XYZ / STAR structure).
+   - Only include metrics and technologies directly supported by cited "source_fact_ids".
+4. Projects ("tailored_content.projects"):
+   - Highlight key technical architecture, problems solved, and outcomes with valid "source_fact_ids".
+5. Gap Report Calibration ("gap_report"):
+   - "importance": "critical" for core non-negotiable job requirements; "preferred" for strong differentiators; "nice_to_have" for supplementary skills.
+   - "clarifying_prompt": Write targeted, conversational discovery questions to uncover unrecorded candidate experience.
+   - "recommended_action": Provide tactical framing or preparation recommendations.
+</schema_and_tailoring_hints>
+
+<response_schema>
+The expected response must be a valid JSON object conforming strictly to the following JSON Schema:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "gap_report": {
+      "additionalProperties": false,
+      "description": "Objective gap analysis evaluating candidate profile alignment with target requirements",
+      "properties": {
+        "missing_requirements": {
+          "description": "Specific required or preferred qualifications missing from candidate profile",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "clarifying_prompt": {
+                "description": "Question to prompt user for missing experience or facts",
+                "type": "string"
+              },
+              "importance": {
+                "description": "Severity rating: critical (must-have blocker), preferred (strong differentiator), or nice_to_have (bonus)",
+                "enum": [
+                  "critical",
+                  "preferred",
+                  "nice_to_have"
+                ],
+                "type": "string"
+              },
+              "missing_area": {
+                "description": "Functional domain or skill area (e.g. Distributed Systems, Frontend)",
+                "type": "string"
+              },
+              "recommended_action": {
+                "description": "Suggested action or resume framing strategy to address this gap",
+                "type": "string"
+              },
+              "requirement": {
+                "description": "Target requirement or qualification missing from master profile",
+                "type": "string"
+              }
+            },
+            "required": [
+              "requirement",
+              "missing_area",
+              "importance",
+              "clarifying_prompt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "overall_match_summary": {
+          "description": "Concise summary of alignment against target requirements",
+          "type": "string"
+        },
+        "strategic_recommendations": {
+          "description": "Actionable strategic recommendations for tailoring and interview preparation",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "overall_match_summary",
+        "missing_requirements"
+      ],
+      "type": "object"
+    },
+    "tailored_content": {
+      "additionalProperties": false,
+      "description": "Curated and customized resume content matching the target role, grounded strictly in the candidate's master profile",
+      "properties": {
+        "certifications": {
+          "description": "Professional certifications and technical credentials",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "date": {
+                "description": "Date obtained or renewed in YYYY-MM or YYYY format",
+                "type": "string"
+              },
+              "issuer": {
+                "description": "Issuing organization or authority (e.g. AWS, CNCF, Google Cloud)",
+                "type": "string"
+              },
+              "name": {
+                "description": "Certification or credential title",
+                "type": "string"
+              },
+              "source_entity_id": {
+                "description": "Short identifier of the Master Certification (e.g. cert-1)",
+                "type": "string"
+              },
+              "url": {
+                "description": "Credential verification URL or badge link",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_entity_id",
+              "name",
+              "issuer",
+              "date"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "education": {
+          "description": "Academic degrees, diplomas, and relevant higher education",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "degree": {
+                "description": "Degree type or credential (e.g. Bachelor of Science, Master of Science, Ph.D.)",
+                "type": "string"
+              },
+              "end_date": {
+                "description": "Graduation or completion date in YYYY-MM or YYYY format, or 'Expected YYYY'",
+                "type": "string"
+              },
+              "field": {
+                "description": "Academic major, discipline, or field of study",
+                "type": "string"
+              },
+              "institution": {
+                "description": "Name of university, college, or school",
+                "type": "string"
+              },
+              "score": {
+                "description": "Academic GPA, graduation honors, or class rank",
+                "type": "string"
+              },
+              "source_entity_id": {
+                "description": "Short identifier of the Master Education (e.g. edu-1)",
+                "type": "string"
+              },
+              "start_date": {
+                "description": "Start date in YYYY-MM or YYYY format",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_entity_id",
+              "institution",
+              "degree",
+              "field",
+              "start_date"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "experiences": {
+          "description": "Chronological employment history tailored to target role",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "bullets": {
+                "description": "Tailored accomplishment statements with metrics and impact",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_fact_ids": {
+                      "description": "Short identifiers of Facts under this WorkExperience that justify this bullet (e.g. fact-1)",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "source_skill_ids": {
+                      "description": "Short identifiers of Skills (e.g. skill-1)",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "text": {
+                      "description": "Tailored accomplishment bullet phrased with action verb, technical context, and quantifiable results",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "source_fact_ids"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "company": {
+                "description": "Official employer or company name",
+                "type": "string"
+              },
+              "duties_summary": {
+                "description": "High-level summary of responsibilities and scope of the role",
+                "type": "string"
+              },
+              "end_date": {
+                "description": "End date of employment in YYYY-MM or YYYY format, or 'Present'",
+                "type": "string"
+              },
+              "hours_per_week": {
+                "description": "Average hours worked per week",
+                "type": "integer"
+              },
+              "location": {
+                "description": "Workplace location",
+                "properties": {
+                  "city": {
+                    "description": "City where work was performed",
+                    "type": "string"
+                  },
+                  "country_code": {
+                    "description": "ISO 3166-1 alpha-2 two-letter country code (e.g. US, CA, GB)",
+                    "type": "string"
+                  },
+                  "region": {
+                    "description": "State, province, or region",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "role_title": {
+                "description": "Professional job title or position held",
+                "type": "string"
+              },
+              "source_entity_id": {
+                "description": "Short identifier of the Master WorkExperience (e.g. exp-1)",
+                "type": "string"
+              },
+              "start_date": {
+                "description": "Start date of employment in YYYY-MM or YYYY format",
+                "type": "string"
+              },
+              "supervisor_contact": {
+                "description": "Contact email or phone number for supervisor",
+                "type": "string"
+              },
+              "supervisor_name": {
+                "description": "Name of supervisor or reporting manager",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_entity_id",
+              "company",
+              "role_title",
+              "start_date",
+              "bullets"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "projects": {
+          "description": "Key technical projects, open-source initiatives, or deliverables tailored to target role",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "bullets": {
+                "description": "Accomplishment statements detailing implementation and measurable impact",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "source_fact_ids": {
+                      "description": "Short identifiers of Facts under this Project (e.g. fact-1)",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "source_skill_ids": {
+                      "description": "Short identifiers of Skills (e.g. skill-1)",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "text": {
+                      "description": "Accomplishment bullet detailing implementation, architectural decisions, and impact",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text",
+                    "source_fact_ids"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "end_date": {
+                "description": "Project completion date in YYYY-MM or YYYY format, or 'Present'",
+                "type": "string"
+              },
+              "name": {
+                "description": "Project title or initiative name",
+                "type": "string"
+              },
+              "role": {
+                "description": "Role or contribution of candidate in project",
+                "type": "string"
+              },
+              "source_entity_id": {
+                "description": "Short identifier of the Master Project (e.g. proj-1)",
+                "type": "string"
+              },
+              "start_date": {
+                "description": "Project start date in YYYY-MM or YYYY format",
+                "type": "string"
+              },
+              "summary": {
+                "description": "Brief synopsis of project scope and architecture",
+                "type": "string"
+              },
+              "url": {
+                "description": "Live URL, repository, or documentation link",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_entity_id",
+              "name",
+              "bullets"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "skill_groups": {
+          "description": "Categorized groups of technical and domain skills relevant to target role",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "category": {
+                "description": "Functional skill category title (e.g. Programming Languages, Cloud Infrastructure, Databases)",
+                "type": "string"
+              },
+              "skills": {
+                "description": "Array of candidate skill names belonging to this category",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "source_skill_ids": {
+                "description": "Short identifiers of cited Skills (e.g. skill-1)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "category",
+              "skills"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "Professional executive summary tailored to target role (2-4 sentences highlighting candidate strengths, key domains, and role fit)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "skill_groups",
+        "experiences",
+        "projects",
+        "education",
+        "certifications"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "tailored_content",
+    "gap_report"
+  ],
+  "type": "object"
+}
+```
+</response_schema>

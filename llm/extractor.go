@@ -103,8 +103,6 @@ func (rc *registryCompleter) Complete(ctx context.Context, systemPrompt, userPro
 	return "", fmt.Errorf("%w: provider %s does not support raw completion", ErrInvalidResponse, p.Name())
 }
 
-const resumeExtractionSystemPrompt = `You are an expert resume parsing engine. Your task is to extract all structured career information from the provided resume text into standard JSON Resume format (v1.0.0). Output strict, valid JSON matching the schema with basics (name, label, email, phone, url, summary, location), work (name/company, position, startDate, endDate, summary, highlights), education (institution, area, studyType, startDate, endDate, courses), skills (name, level, keywords), projects (name, description, highlights, keywords), certificates (name, issuer, date, url). Do not include any explanations or commentary outside of the JSON structure.`
-
 // ExtractResume parses unstructured resume text into a structured JSONResume document.
 func (e *resumeExtractor) ExtractResume(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, error) {
 	if err := ctx.Err(); err != nil {
@@ -120,9 +118,12 @@ func (e *resumeExtractor) ExtractResume(ctx context.Context, text string, provid
 		return nil, fmt.Errorf("%w: no completer configured", domain.ErrValidation)
 	}
 
-	userPrompt := "Extract the following resume text into standard JSON Resume format:\n\n" + trimmedText
+	prompts, err := BuildResumeExtractPrompt(trimmedText)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build resume extraction prompt: %w", err)
+	}
 
-	rawResponse, err := e.completer.Complete(ctx, resumeExtractionSystemPrompt, userPrompt, provider, model)
+	rawResponse, err := e.completer.Complete(ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model)
 	if err != nil {
 		return nil, err
 	}

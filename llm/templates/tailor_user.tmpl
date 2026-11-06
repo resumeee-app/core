@@ -27,4 +27,4 @@ Excluded Entity IDs (Must Omit): {{if .ExcludedEntities}}{{.ExcludedEntities}}{{
 {{else}}{}
 {{end}}</master_profile_data>
 
-Produce a valid JSON object matching the required schema with tailored_content and gap_report. Adhere strictly to the No Lies grounding rules.
+Produce a valid JSON object matching the required schema with top-level keys "tailored_content" (containing "summary", "skill_groups", "experiences", "projects", "education", "certifications") and "gap_report" (containing "overall_match_summary", "missing_requirements", and "strategic_recommendations"). Adhere strictly to the No Lies grounding rules. Output valid JSON only.

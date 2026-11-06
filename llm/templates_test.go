@@ -1,6 +1,8 @@
 package llm_test
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,8 @@ func TestPromptTemplates_EmbeddedFilesExist(t *testing.T) {
 		"tailor_user.tmpl",
 		"gap_analysis_system.tmpl",
 		"gap_analysis_user.tmpl",
+		"resume_extract_system.tmpl",
+		"resume_extract_user.tmpl",
 	}
 
 	for _, file := range requiredFiles {
@@ -61,6 +65,21 @@ func TestBuildGapAnalysisPrompt_Composition(t *testing.T) {
 	if !strings.Contains(payload.SystemPrompt, "Do NOT flag a qualification as missing if it is present or directly implied") {
 		t.Errorf("gap analysis system prompt missing gap grounding rule")
 	}
+	if !strings.Contains(payload.SystemPrompt, "<gap_analysis_guidelines>") {
+		t.Errorf("gap analysis system prompt missing <gap_analysis_guidelines> tag")
+	}
+	if !strings.Contains(payload.SystemPrompt, "Importance Calibration:") {
+		t.Errorf("gap analysis system prompt missing Importance Calibration section")
+	}
+	if !strings.Contains(payload.SystemPrompt, "<response_schema>") {
+		t.Errorf("gap analysis system prompt missing <response_schema> tag")
+	}
+	if !strings.Contains(payload.SystemPrompt, "```json") {
+		t.Errorf("gap analysis system prompt missing ```json schema block")
+	}
+	if !strings.Contains(payload.SystemPrompt, "\"gap_report\": {") {
+		t.Errorf("gap analysis system prompt missing gap_report schema definition")
+	}
 
 	// User prompt checks
 	if !strings.Contains(payload.UserPrompt, "<target_context>") {
@@ -83,6 +102,9 @@ func TestBuildGapAnalysisPrompt_Composition(t *testing.T) {
 	}
 	if !strings.Contains(payload.UserPrompt, "Jane Doe") {
 		t.Errorf("gap analysis user prompt missing candidate full name")
+	}
+	if !strings.Contains(payload.UserPrompt, "Produce a valid JSON object with top-level key \"gap_report\"") {
+		t.Errorf("gap analysis user prompt missing specific top-level key instructions")
 	}
 }
 
@@ -144,6 +166,21 @@ func TestBuildPrompt_Composition(t *testing.T) {
 	if !strings.Contains(payload.SystemPrompt, "source_fact_ids") {
 		t.Errorf("system prompt missing source_fact_ids requirement")
 	}
+	if !strings.Contains(payload.SystemPrompt, "<schema_and_tailoring_hints>") {
+		t.Errorf("system prompt missing <schema_and_tailoring_hints> tag")
+	}
+	if !strings.Contains(payload.SystemPrompt, "Executive Summary (\"tailored_content.summary\"):") {
+		t.Errorf("system prompt missing executive summary tailoring hints")
+	}
+	if !strings.Contains(payload.SystemPrompt, "<response_schema>") {
+		t.Errorf("system prompt missing <response_schema> tag")
+	}
+	if !strings.Contains(payload.SystemPrompt, "```json") {
+		t.Errorf("system prompt missing ```json schema block")
+	}
+	if !strings.Contains(payload.SystemPrompt, "\"tailored_content\": {") {
+		t.Errorf("system prompt missing tailored_content schema definition")
+	}
 
 	// 2. User Prompt - 3-Tier Rules Hierarchy
 	if !strings.Contains(payload.UserPrompt, "<rules_hierarchy>") {
@@ -189,4 +226,120 @@ func TestBuildPrompt_Composition(t *testing.T) {
 	if !strings.Contains(payload.UserPrompt, "f-1") {
 		t.Errorf("user prompt missing projected short ID in profile data")
 	}
+	if !strings.Contains(payload.UserPrompt, "Produce a valid JSON object matching the required schema with top-level keys \"tailored_content\"") {
+		t.Errorf("user prompt missing specific top-level keys instructions")
+	}
 }
+
+func TestPromptTemplates_EmbeddedJSONSchemas(t *testing.T) {
+	tests := []struct {
+		name          string
+		templateFile  string
+		schemaGetter  func() map[string]any
+		expectedProp  string
+	}{
+		{
+			name:         "tailor system prompt contains GenerationResponseSchema",
+			templateFile: "tailor_system.tmpl",
+			schemaGetter: llm.GenerationResponseSchema,
+			expectedProp: "tailored_content",
+		},
+		{
+			name:         "gap analysis system prompt contains GapAnalysisResponseSchema",
+			templateFile: "gap_analysis_system.tmpl",
+			schemaGetter: llm.GapAnalysisResponseSchema,
+			expectedProp: "gap_report",
+		},
+		{
+			name:         "resume extract system prompt contains ResumeExtractResponseSchema",
+			templateFile: "resume_extract_system.tmpl",
+			schemaGetter: llm.ResumeExtractResponseSchema,
+			expectedProp: "basics",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			content, err := llm.ReadTemplateFile(tc.templateFile)
+			if err != nil {
+				t.Fatalf("failed to read template %s: %v", tc.templateFile, err)
+			}
+
+			// Must contain markdown json code block
+			if !strings.Contains(content, "```json") || !strings.Contains(content, "```") {
+				t.Fatalf("template %s missing ```json code fence block", tc.templateFile)
+			}
+
+			// Extract json from code fence
+			extracted := llm.ExtractJSON(content)
+			if strings.TrimSpace(extracted) == "" {
+				t.Fatalf("template %s: ExtractJSON found no JSON inside code fence", tc.templateFile)
+			}
+
+			expectedSchema := tc.schemaGetter()
+			expectedBytes, err := json.Marshal(expectedSchema)
+			if err != nil {
+				t.Fatalf("failed to marshal expected schema: %v", err)
+			}
+
+			var parsedTemplateSchema map[string]any
+			if err := json.Unmarshal([]byte(extracted), &parsedTemplateSchema); err != nil {
+				t.Fatalf("template %s contained invalid JSON in code fence: %v", tc.templateFile, err)
+			}
+
+			var parsedExpectedSchema map[string]any
+			if err := json.Unmarshal(expectedBytes, &parsedExpectedSchema); err != nil {
+				t.Fatalf("failed to unmarshal expected schema bytes: %v", err)
+			}
+
+			if !reflect.DeepEqual(parsedTemplateSchema, parsedExpectedSchema) {
+				t.Errorf("template %s embedded JSON schema does not match canonical schema in code", tc.templateFile)
+			}
+
+			// Verify expected property exists at top level of schema
+			props, ok := parsedTemplateSchema["properties"].(map[string]any)
+			if !ok {
+				t.Fatalf("template %s schema missing properties map", tc.templateFile)
+			}
+			if _, ok := props[tc.expectedProp]; !ok {
+				t.Errorf("template %s schema missing expected property %q", tc.templateFile, tc.expectedProp)
+			}
+		})
+	}
+}
+
+func TestPromptTemplates_SpecificSchemaInstructions(t *testing.T) {
+	// Tailor user prompt
+	tailorContent, err := llm.ReadTemplateFile("tailor_user.tmpl")
+	if err != nil {
+		t.Fatalf("failed to read tailor_user.tmpl: %v", err)
+	}
+	if !strings.Contains(tailorContent, "tailored_content") || !strings.Contains(tailorContent, "gap_report") {
+		t.Errorf("tailor_user.tmpl must explicitly specify expected top-level keys 'tailored_content' and 'gap_report'")
+	}
+	if !strings.Contains(tailorContent, "summary") || !strings.Contains(tailorContent, "experiences") {
+		t.Errorf("tailor_user.tmpl must explicitly specify required schema fields")
+	}
+
+	// Gap analysis user prompt
+	gapContent, err := llm.ReadTemplateFile("gap_analysis_user.tmpl")
+	if err != nil {
+		t.Fatalf("failed to read gap_analysis_user.tmpl: %v", err)
+	}
+	if !strings.Contains(gapContent, "gap_report") {
+		t.Errorf("gap_analysis_user.tmpl must explicitly specify expected top-level key 'gap_report'")
+	}
+	if !strings.Contains(gapContent, "overall_match_summary") || !strings.Contains(gapContent, "missing_requirements") {
+		t.Errorf("gap_analysis_user.tmpl must explicitly specify expected gap report fields")
+	}
+
+	// Resume extract user prompt
+	extractContent, err := llm.ReadTemplateFile("resume_extract_user.tmpl")
+	if err != nil {
+		t.Fatalf("failed to read resume_extract_user.tmpl: %v", err)
+	}
+	if !strings.Contains(extractContent, "basics") || !strings.Contains(extractContent, "work") {
+		t.Errorf("resume_extract_user.tmpl must explicitly specify expected schema fields")
+	}
+}
+

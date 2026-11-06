@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"resumeee/internal/domain"
 )
@@ -17,23 +18,27 @@ var ErrPoolClosed = errors.New("worker pool closed")
 
 // PoolConfig specifies construction parameters for a worker pool.
 type PoolConfig struct {
-	Concurrency  int
-	QueueSize    int
-	BranchRepo   domain.BranchRepository
-	ProfileRepo  domain.ProfileRepository
-	PresetRepo   domain.PresetRepository
-	TemplateRepo domain.TemplateRepository
-	LLMService   LLMService
-	Validator    ProvenanceValidator
-	Renderer     TemplateRenderer
-	Logger       *slog.Logger
+	Concurrency     int
+	QueueSize       int
+	BranchRepo      domain.BranchRepository
+	ProfileRepo     domain.ProfileRepository
+	PresetRepo      domain.PresetRepository
+	TemplateRepo    domain.TemplateRepository
+	PDFJobRepo      domain.PDFParseJobRepository
+	ResumeExtractor ResumeExtractor
+	LLMTimeout      time.Duration
+	LLMService      LLMService
+	Validator       ProvenanceValidator
+	Renderer        TemplateRenderer
+	Logger          *slog.Logger
 }
 
-// Pool implements an in-memory concurrent worker pool processing GenerationJobs from a bounded buffered channel.
+// Pool implements an in-memory concurrent worker pool processing GenerationJobs and PDFParseJobTasks from bounded buffered channels.
 type Pool struct {
 	concurrency int
 	queueSize   int
 	jobQueue    chan GenerationJob
+	pdfJobQueue chan PDFParseJobTask
 	wg          sync.WaitGroup
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -43,13 +48,16 @@ type Pool struct {
 	closed  bool
 	started bool
 
-	branchRepo   domain.BranchRepository
-	profileRepo  domain.ProfileRepository
-	presetRepo   domain.PresetRepository
-	templateRepo domain.TemplateRepository
-	llmService   LLMService
-	validator    ProvenanceValidator
-	renderer     TemplateRenderer
+	branchRepo      domain.BranchRepository
+	profileRepo     domain.ProfileRepository
+	presetRepo      domain.PresetRepository
+	templateRepo    domain.TemplateRepository
+	pdfJobRepo      domain.PDFParseJobRepository
+	resumeExtractor ResumeExtractor
+	llmTimeout      time.Duration
+	llmService      LLMService
+	validator       ProvenanceValidator
+	renderer        TemplateRenderer
 }
 
 // NewPool constructs a new worker Pool.
@@ -64,17 +72,21 @@ func NewPool(cfg PoolConfig) *Pool {
 	}
 
 	return &Pool{
-		concurrency:  concurrency,
-		queueSize:    queueSize,
-		jobQueue:     make(chan GenerationJob, queueSize),
-		logger:       cfg.Logger,
-		branchRepo:   cfg.BranchRepo,
-		profileRepo:  cfg.ProfileRepo,
-		presetRepo:   cfg.PresetRepo,
-		templateRepo: cfg.TemplateRepo,
-		llmService:   cfg.LLMService,
-		validator:    cfg.Validator,
-		renderer:     cfg.Renderer,
+		concurrency:     concurrency,
+		queueSize:       queueSize,
+		jobQueue:        make(chan GenerationJob, queueSize),
+		pdfJobQueue:     make(chan PDFParseJobTask, queueSize),
+		logger:          cfg.Logger,
+		branchRepo:      cfg.BranchRepo,
+		profileRepo:     cfg.ProfileRepo,
+		presetRepo:      cfg.PresetRepo,
+		templateRepo:    cfg.TemplateRepo,
+		pdfJobRepo:      cfg.PDFJobRepo,
+		resumeExtractor: cfg.ResumeExtractor,
+		llmTimeout:      cfg.LLMTimeout,
+		llmService:      cfg.LLMService,
+		validator:       cfg.Validator,
+		renderer:        cfg.Renderer,
 	}
 }
 
@@ -122,6 +134,29 @@ func (p *Pool) Enqueue(job GenerationJob) error {
 	}
 }
 
+// EnqueuePDFJob submits an asynchronous PDF parse task to the pool, returning domain.ErrQueueFull if saturated.
+func (p *Pool) EnqueuePDFJob(task PDFParseJobTask) error {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if p.closed {
+		return domain.ErrQueueFull
+	}
+
+	select {
+	case p.pdfJobQueue <- task:
+		if p.logger != nil {
+			p.logger.Debug("pdf job enqueued", "job_id", task.JobID)
+		}
+		return nil
+	default:
+		if p.logger != nil {
+			p.logger.Warn("pdf worker queue saturated", "job_id", task.JobID)
+		}
+		return domain.ErrQueueFull
+	}
+}
+
 // Stop gracefully shuts down the worker pool, draining all pending jobs and waiting for workers to terminate.
 func (p *Pool) Stop() {
 	p.mu.Lock()
@@ -131,6 +166,7 @@ func (p *Pool) Stop() {
 	}
 	p.closed = true
 	close(p.jobQueue)
+	close(p.pdfJobQueue)
 	p.mu.Unlock()
 
 	// Wait for workers to finish draining all queued jobs
@@ -147,18 +183,47 @@ func (p *Pool) Stop() {
 
 // RecoverStaleJobs recovers interrupted jobs left in pending or processing states by failing them with the given reason.
 func (p *Pool) RecoverStaleJobs(ctx context.Context, reason string) error {
-	if p.branchRepo == nil {
-		return nil
+	var errs []error
+	if p.branchRepo != nil {
+		if err := p.branchRepo.FailInterruptedVersions(ctx, reason); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return p.branchRepo.FailInterruptedVersions(ctx, reason)
+	if p.pdfJobRepo != nil {
+		if err := p.pdfJobRepo.FailInterruptedJobs(ctx, reason); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
-// workerLoop drains jobs from the jobQueue channel until it is closed during shutdown.
+// workerLoop drains jobs from jobQueue and pdfJobQueue channels until they are closed during shutdown.
 func (p *Pool) workerLoop(ctx context.Context, workerID int) {
 	defer p.wg.Done()
 
-	for job := range p.jobQueue {
-		p.safeProcessJob(ctx, job)
+	for {
+		select {
+		case job, ok := <-p.jobQueue:
+			if !ok {
+				// jobQueue closed, drain remaining pdf jobs if any
+				for task := range p.pdfJobQueue {
+					p.safeProcessPDFJob(ctx, task)
+				}
+				return
+			}
+			p.safeProcessJob(ctx, job)
+		case task, ok := <-p.pdfJobQueue:
+			if !ok {
+				// pdfJobQueue closed, drain remaining generation jobs if any
+				for job := range p.jobQueue {
+					p.safeProcessJob(ctx, job)
+				}
+				return
+			}
+			p.safeProcessPDFJob(ctx, task)
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -114,9 +115,23 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 		return
 	}
 
-	resp, err := p.llmService.GenerateTailoredResume(ctx, req)
+	timeout := p.llmTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	llmCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := p.llmService.GenerateTailoredResume(llmCtx, req)
 	if err != nil {
-		p.failJob(ctx, job.VersionID, fmt.Sprintf("llm generation error: %v", err))
+		if p.logger != nil {
+			p.logger.Error("llm generation failed", "version_id", job.VersionID, "error", err)
+		}
+		errMsg := "An error occurred during resume tailoring. Please try again."
+		if errors.Is(err, context.DeadlineExceeded) {
+			errMsg = "Resume tailoring timed out after 10 minutes."
+		}
+		p.failJob(ctx, job.VersionID, errMsg)
 		return
 	}
 	if resp == nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"resumeee/internal/domain"
+	"resumeee/internal/profile"
 	"resumeee/internal/validator"
 )
 
@@ -17,6 +18,25 @@ type GenerationJob struct {
 // JobEnqueuer defines the contract for enqueuing generation jobs into the worker pool.
 type JobEnqueuer interface {
 	Enqueue(job GenerationJob) error
+}
+
+// PDFParseJobTask encapsulates the parameters of an asynchronous PDF resume parsing task.
+type PDFParseJobTask struct {
+	JobID    string `json:"job_id"`
+	UserID   string `json:"user_id"`
+	RawText  string `json:"raw_text"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// PDFJobEnqueuer defines the contract for enqueuing PDF parse tasks into the worker pool.
+type PDFJobEnqueuer interface {
+	EnqueuePDFJob(task PDFParseJobTask) error
+}
+
+// ResumeExtractor defines the contract for structured resume data extraction from raw text via an LLM.
+type ResumeExtractor interface {
+	ExtractResume(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, error)
 }
 
 // LLMService abstracts multi-provider prompt generation and structured response.

@@ -1428,5 +1428,59 @@ func TestCheckStatusError(t *testing.T) {
 	}
 }
 
+func TestLLMTimeoutOption(t *testing.T) {
+	t.Run("Default HTTP client timeout is 10 minutes", func(t *testing.T) {
+		opts := applyOptions(nil, "", "")
+		if opts.httpClient.Timeout != 10*time.Minute {
+			t.Errorf("expected default timeout 10m, got %v", opts.httpClient.Timeout)
+		}
+	})
 
+	t.Run("WithTimeout option overrides client timeout", func(t *testing.T) {
+		opts := applyOptions([]Option{WithTimeout(5 * time.Minute)}, "", "")
+		if opts.httpClient.Timeout != 5*time.Minute {
+			t.Errorf("expected overridden timeout 5m, got %v", opts.httpClient.Timeout)
+		}
+	})
 
+	t.Run("NewRegistry configures providers with cfg.LLMTimeout", func(t *testing.T) {
+		cfg := &config.Config{
+			OpenAICompatBaseURL: "http://localhost:11434/v1",
+			LLMTimeout:          7 * time.Minute,
+		}
+		reg := NewRegistry(cfg)
+		p, err := reg.Get("compat")
+		if err != nil {
+			t.Fatalf("failed to get compat provider: %v", err)
+		}
+		cp, ok := p.(*CompatProvider)
+		if !ok {
+			t.Fatalf("expected *CompatProvider, got %T", p)
+		}
+		if cp.httpClient.Timeout != 7*time.Minute {
+			t.Errorf("expected 7m timeout on provider client, got %v", cp.httpClient.Timeout)
+		}
+	})
+
+	t.Run("NewRegistry preserves LLMTimeout when LLMDebugPrompts is enabled", func(t *testing.T) {
+		tempDir := t.TempDir()
+		cfg := &config.Config{
+			OpenAICompatBaseURL: "http://localhost:11434/v1",
+			LLMTimeout:          8 * time.Minute,
+			LLMDebugPrompts:     true,
+			LLMDebugDir:         tempDir,
+		}
+		reg := NewRegistry(cfg)
+		p, err := reg.Get("compat")
+		if err != nil {
+			t.Fatalf("failed to get compat provider: %v", err)
+		}
+		cp, ok := p.(*CompatProvider)
+		if !ok {
+			t.Fatalf("expected *CompatProvider, got %T", p)
+		}
+		if cp.httpClient.Timeout != 8*time.Minute {
+			t.Errorf("expected 8m timeout on provider client with debug prompts enabled, got %v", cp.httpClient.Timeout)
+		}
+	})
+}

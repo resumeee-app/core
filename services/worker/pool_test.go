@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"resumeee/internal/domain"
+	"resumeee/internal/profile"
 	"resumeee/internal/renderer"
 	"resumeee/internal/repository/sqlite"
 	"resumeee/internal/validator"
@@ -26,11 +28,13 @@ type mockLLM struct {
 	panicVal     any
 	customResp   *domain.GenerationResponse
 	requestCount int
+	capturedCtx  context.Context
 }
 
 func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
 	m.mu.Lock()
 	m.requestCount++
+	m.capturedCtx = ctx
 	delay := m.delay
 	fail := m.fail
 	failErrMsg := m.failErrMsg
@@ -776,4 +780,269 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 	}
 }
 
+type mockResumeExtractor struct {
+	mu         sync.Mutex
+	delay      time.Duration
+	fail       bool
+	failErrMsg string
+	result     *profile.JSONResume
+}
 
+func (m *mockResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+	m.mu.Lock()
+	delay := m.delay
+	fail := m.fail
+	failErrMsg := m.failErrMsg
+	result := m.result
+	m.mu.Unlock()
+
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if fail {
+		return nil, errors.New(failErrMsg)
+	}
+	if result != nil {
+		return result, nil
+	}
+	return &profile.JSONResume{
+		Basics: profile.JSONResumeBasics{
+			Name:  "Test Candidate",
+			Email: "candidate@test.com",
+		},
+	}, nil
+}
+
+func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
+	db, err := sqlite.New("file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("sqlite init: %v", err)
+	}
+	pdfRepo := sqlite.NewPDFParseJobRepository(db)
+	mockExt := &mockResumeExtractor{
+		delay: 10 * time.Millisecond,
+		result: &profile.JSONResume{
+			Basics: profile.JSONResumeBasics{
+				Name: "Grace Hopper",
+			},
+		},
+	}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:     2,
+		QueueSize:       10,
+		PDFJobRepo:      pdfRepo,
+		ResumeExtractor: mockExt,
+		LLMTimeout:      5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	jobID := "pdf-job-success-1"
+	job := &domain.PDFParseJob{
+		ID:        jobID,
+		UserID:    "user-1",
+		Status:    domain.PDFParseJobStatusPending,
+		Filename:  "hopper.pdf",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := pdfRepo.CreateJob(ctx, job); err != nil {
+		t.Fatalf("failed to create job: %v", err)
+	}
+
+	task := worker.PDFParseJobTask{
+		JobID:    jobID,
+		UserID:   "user-1",
+		RawText:  "Admiral Grace Hopper resume text",
+		Provider: "mock",
+		Model:    "mock-model",
+	}
+
+	if err := pool.EnqueuePDFJob(task); err != nil {
+		t.Fatalf("failed to enqueue pdf job: %v", err)
+	}
+
+	// Poll until completed
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		j, err := pdfRepo.GetJob(ctx, "user-1", jobID)
+		if err != nil {
+			t.Fatalf("get job failed: %v", err)
+		}
+		if j.Status == domain.PDFParseJobStatusCompleted {
+			if j.CompletedAt == nil {
+				t.Errorf("expected CompletedAt to be set")
+			}
+			resMap, ok := j.Result.(map[string]any)
+			if !ok {
+				t.Fatalf("expected map[string]any result, got %T", j.Result)
+			}
+			basics, ok := resMap["basics"].(map[string]any)
+			if !ok || basics["name"] != "Grace Hopper" {
+				t.Errorf("expected basics.name == 'Grace Hopper', got %+v", resMap)
+			}
+			break
+		}
+		if j.Status == domain.PDFParseJobStatusFailed {
+			t.Fatalf("pdf job unexpectedly failed: %s", j.ErrorMessage)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for pdf job to complete, status: %s", j.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestWorkerPool_PDFParseJob_Failure(t *testing.T) {
+	db, err := sqlite.New("file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("sqlite init: %v", err)
+	}
+	pdfRepo := sqlite.NewPDFParseJobRepository(db)
+	mockExt := &mockResumeExtractor{
+		fail:       true,
+		failErrMsg: "upstream model capacity reached",
+	}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:     2,
+		QueueSize:       10,
+		PDFJobRepo:      pdfRepo,
+		ResumeExtractor: mockExt,
+		LLMTimeout:      5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	jobID := "pdf-job-fail-1"
+	job := &domain.PDFParseJob{
+		ID:        jobID,
+		UserID:    "user-1",
+		Status:    domain.PDFParseJobStatusPending,
+		Filename:  "fail.pdf",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := pdfRepo.CreateJob(ctx, job); err != nil {
+		t.Fatalf("failed to create job: %v", err)
+	}
+
+	task := worker.PDFParseJobTask{
+		JobID:   jobID,
+		UserID:  "user-1",
+		RawText: "Some text",
+	}
+
+	if err := pool.EnqueuePDFJob(task); err != nil {
+		t.Fatalf("failed to enqueue: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		j, err := pdfRepo.GetJob(ctx, "user-1", jobID)
+		if err != nil {
+			t.Fatalf("get job failed: %v", err)
+		}
+		if j.Status == domain.PDFParseJobStatusFailed {
+			if !strings.Contains(j.ErrorMessage, "Failed to extract resume from document") {
+				t.Errorf("expected sanitized error message, got %q", j.ErrorMessage)
+			}
+			break
+		}
+		if j.Status == domain.PDFParseJobStatusCompleted {
+			t.Fatalf("expected job to fail, but it completed")
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for failure, status: %s", j.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestWorkerPool_TailoringPipeline_LLMTimeout(t *testing.T) {
+	env := setupTestWorkerEnv(t)
+	mockLLM := &mockLLM{}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:  1,
+		QueueSize:    5,
+		BranchRepo:   env.branchRepo,
+		ProfileRepo:  env.profileRepo,
+		PresetRepo:   env.presetRepo,
+		TemplateRepo: env.templateRepo,
+		LLMService:   mockLLM,
+		Validator:    env.validator,
+		Renderer:     env.renderer,
+		LLMTimeout:   7 * time.Minute,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	verID := "ver-timeout-check-1"
+	ver := domain.BranchVersion{
+		ID:                 verID,
+		BranchID:           env.branchID,
+		Status:             domain.VersionStatusPending,
+		MasterRevisionUsed: 1,
+		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, &ver); err != nil {
+		t.Fatalf("failed to create version: %v", err)
+	}
+
+	if err := pool.Enqueue(worker.GenerationJob{
+		UserID:    env.defaultUser,
+		BranchID:  env.branchID,
+		VersionID: verID,
+	}); err != nil {
+		t.Fatalf("failed to enqueue: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		v, err := env.branchRepo.GetVersion(ctx, env.branchID, verID)
+		if err != nil {
+			t.Fatalf("get version failed: %v", err)
+		}
+		if v.Status == domain.VersionStatusCompleted {
+			break
+		}
+		if v.Status == domain.VersionStatusFailed {
+			t.Fatalf("job failed: %s", v.ErrorMessage)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for job completion")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mockLLM.mu.Lock()
+	capturedCtx := mockLLM.capturedCtx
+	mockLLM.mu.Unlock()
+
+	if capturedCtx == nil {
+		t.Fatalf("expected GenerateTailoredResume to be called with context")
+	}
+	capturedDeadline, hasDeadline := capturedCtx.Deadline()
+	if !hasDeadline {
+		t.Fatalf("expected GenerateTailoredResume context to have a deadline bounded by LLMTimeout")
+	}
+	remaining := time.Until(capturedDeadline)
+	if remaining < 6*time.Minute+50*time.Second || remaining > 7*time.Minute {
+		t.Fatalf("expected remaining timeout around 7 minutes, got %v", remaining)
+	}
+}

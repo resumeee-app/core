@@ -6,10 +6,13 @@ import (
 	"time"
 )
 
+// DefaultLLMTimeout defines the default upper timeout boundary for generative LLM requests.
+const DefaultLLMTimeout = 10 * time.Minute
+
 // defaultLLMHTTPClient provides a production-tuned HTTP client for LLM provider adapters
 // with connection pooling and an upper timeout to prevent stalled requests from hanging workers.
 var defaultLLMHTTPClient = &http.Client{
-	Timeout: 3 * time.Minute,
+	Timeout: DefaultLLMTimeout,
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		MaxIdleConns:          50,
@@ -26,6 +29,7 @@ type adapterOptions struct {
 	defaultModel   string
 	logger         *slog.Logger
 	promptDebugger PromptDebugger
+	timeout        time.Duration
 }
 
 // Option represents a configuration option for LLM adapters.
@@ -97,6 +101,15 @@ func WithDebugPrompts(enabled bool, dir string) Option {
 	}
 }
 
+// WithTimeout overrides the default HTTP client timeout for LLM requests.
+func WithTimeout(timeout time.Duration) Option {
+	return func(o *adapterOptions) {
+		if timeout > 0 {
+			o.timeout = timeout
+		}
+	}
+}
+
 // applyOptions initializes adapterOptions with defaults and applies any custom Option functions.
 func applyOptions(opts []Option, defaultBaseURL, defaultModel string) adapterOptions {
 	cfg := adapterOptions{
@@ -112,6 +125,15 @@ func applyOptions(opts []Option, defaultBaseURL, defaultModel string) adapterOpt
 	}
 	if cfg.logger == nil {
 		cfg.logger = slog.Default()
+	}
+	if cfg.timeout > 0 {
+		if cfg.httpClient == defaultLLMHTTPClient {
+			cloned := *defaultLLMHTTPClient
+			cloned.Timeout = cfg.timeout
+			cfg.httpClient = &cloned
+		} else if cfg.httpClient != nil {
+			cfg.httpClient.Timeout = cfg.timeout
+		}
 	}
 	if fpd, ok := cfg.promptDebugger.(*FilePromptDebugger); ok && fpd != nil {
 		fpd.logger = cfg.logger

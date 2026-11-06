@@ -33,6 +33,9 @@ func NewRegistry(cfg *config.Config, opts ...Option) *Registry {
 	}
 
 	effectiveOpts := opts
+	if cfg.LLMTimeout > 0 {
+		effectiveOpts = append(append([]Option{}, effectiveOpts...), WithTimeout(cfg.LLMTimeout))
+	}
 	if cfg.LLMDebugPrompts {
 		dir := cfg.LLMDebugDir
 		if strings.TrimSpace(dir) == "" {
@@ -41,7 +44,7 @@ func NewRegistry(cfg *config.Config, opts ...Option) *Registry {
 		baseOpts := applyOptions(opts, "", "")
 		debugger := NewFilePromptDebugger(dir, baseOpts.logger)
 		r.debugger = debugger
-		effectiveOpts = append(append([]Option{}, opts...), WithPromptDebugger(debugger))
+		effectiveOpts = append(effectiveOpts, WithPromptDebugger(debugger))
 	}
 
 	if cfg.GeminiAPIKey != "" {
@@ -350,4 +353,3 @@ func (r *Registry) AvailableModels() []domain.ModelOption {
 	}
 	return models
 }
-

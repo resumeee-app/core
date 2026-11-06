@@ -141,3 +141,18 @@ type TemplateRenderer interface {
 	// Validate checks that all templates within a TemplateSet parse cleanly and cite only whitelisted functions.
 	Validate(tmpl *TemplateSet) error
 }
+
+// PDFParseJobRepository defines persistence operations for asynchronous PDF parsing jobs.
+type PDFParseJobRepository interface {
+	// CreateJob inserts a new PDF parse job record in pending state.
+	CreateJob(ctx context.Context, job *PDFParseJob) error
+
+	// GetJob retrieves a PDF parse job by ID scoped to the authenticated user.
+	GetJob(ctx context.Context, userID, jobID string) (*PDFParseJob, error)
+
+	// UpdateJobStatus updates the status, result, and error message of a PDF parse job.
+	UpdateJobStatus(ctx context.Context, jobID string, status PDFParseJobStatus, result any, errMsg string) error
+
+	// FailInterruptedJobs marks all pending or processing jobs as failed following a server restart.
+	FailInterruptedJobs(ctx context.Context, reason string) error
+}

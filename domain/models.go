@@ -96,7 +96,7 @@ type Skill struct {
 	ShortID         string         `json:"short_id,omitempty" gorm:"index"`
 	UserID          string         `json:"user_id" gorm:"index;not null"`
 	Name            string         `json:"name" gorm:"not null;index"`
-	Category        string         `json:"category"` // e.g., "Languages", "Distributed Systems", "Cloud"
+	Category        string         `json:"category"`    // e.g., "Languages", "Distributed Systems", "Cloud"
 	Proficiency     string         `json:"proficiency"` // e.g., "Expert", "Proficient", "Familiar"
 	YearsExperience float64        `json:"years_experience"`
 	Keywords        []string       `json:"keywords,omitempty" gorm:"serializer:json"`
@@ -124,13 +124,13 @@ type WorkExperience struct {
 	UserID            string         `json:"user_id" gorm:"index;not null"`
 	Company           string         `json:"company" gorm:"not null"`
 	RoleTitle         string         `json:"role_title" gorm:"not null"`
-	EmploymentType    EmploymentType `json:"employment_type"` // Full-time, Contract, Part-time, Internship
+	EmploymentType    EmploymentType `json:"employment_type"`            // Full-time, Contract, Part-time, Internship
 	StartDate         string         `json:"start_date" gorm:"not null"` // ISO-8601 YYYY-MM-DD
-	EndDate           *string        `json:"end_date,omitempty"` // nil if current
+	EndDate           *string        `json:"end_date,omitempty"`         // nil if current
 	IsCurrent         bool           `json:"is_current"`
 	Location          Location       `json:"location" gorm:"serializer:json"`
 	CompanyLocation   Location       `json:"company_location,omitempty" gorm:"serializer:json"` // Location of the employing company (government/visa)
-	CompanyContact    *ContactDetail `json:"company_contact,omitempty" gorm:"serializer:json"` // Contact detail for employment verification
+	CompanyContact    *ContactDetail `json:"company_contact,omitempty" gorm:"serializer:json"`  // Contact detail for employment verification
 	HoursPerWeek      *int           `json:"hours_per_week,omitempty"`                          // For immigration/government CVs
 	SupervisorName    string         `json:"supervisor_name,omitempty"`
 	SupervisorContact string         `json:"supervisor_contact,omitempty"`
@@ -248,8 +248,8 @@ type Fact struct {
 	UserID    string    `json:"user_id" gorm:"index;not null"`
 	OwnerID   string    `json:"owner_id" gorm:"index;index:idx_fact_owner;not null"`
 	OwnerType OwnerType `json:"owner_type" gorm:"index;index:idx_fact_owner;not null"` // work_experience, project, education
-	Statement string    `json:"statement" gorm:"not null"`        // Raw factual description
-	Impact    string    `json:"impact,omitempty"`                 // Verifiable outcome / metric
+	Statement string    `json:"statement" gorm:"not null"`                             // Raw factual description
+	Impact    string    `json:"impact,omitempty"`                                      // Verifiable outcome / metric
 	Skills    []Skill   `json:"skills,omitempty" gorm:"many2many:fact_skills;"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -269,14 +269,14 @@ func (f Fact) EffectiveShortID() string {
 
 // Preset represents Tier-2 reusable LLM and formatting configurations.
 type Preset struct {
-	ID                 string    `json:"id" gorm:"primaryKey;type:text"`
-	UserID             string    `json:"user_id" gorm:"index;not null"`
-	Name               string    `json:"name" gorm:"not null"`
-	Description        string    `json:"description,omitempty"`
-	SystemInstructions string    `json:"system_instructions" gorm:"not null"` // Tier 2 LLM instructions
-	TemplateSetID      string    `json:"template_set_id" gorm:"index;not null"`
-	ProviderOverride   string    `json:"provider_override,omitempty"`
-	ModelOverride      string    `json:"model_override,omitempty"`
+	ID                 string `json:"id" gorm:"primaryKey;type:text"`
+	UserID             string `json:"user_id" gorm:"index;not null"`
+	Name               string `json:"name" gorm:"not null"`
+	Description        string `json:"description,omitempty"`
+	SystemInstructions string `json:"system_instructions" gorm:"not null"` // Tier 2 LLM instructions
+	TemplateSetID      string `json:"template_set_id" gorm:"index;not null"`
+	ProviderOverride   string `json:"provider_override,omitempty"`
+	ModelOverride      string `json:"model_override,omitempty"`
 	// ReasoningLevel defines the optional reasoning effort or depth constraint for thinking models (enum: "none", "low", "medium", "high").
 	ReasoningLevel     string    `json:"reasoning_level,omitempty"`
 	IncludeAdminFields bool      `json:"include_admin_fields"` // True for immigration/government presets
@@ -411,3 +411,31 @@ type ModelOption struct {
 	IsDefault   bool   `json:"is_default"`
 }
 
+// PDFParseJobStatus represents the asynchronous lifecycle state of a PDF resume parse operation.
+type PDFParseJobStatus string
+
+const (
+	// PDFParseJobStatusPending indicates the job is queued for parsing.
+	PDFParseJobStatusPending PDFParseJobStatus = "pending"
+	// PDFParseJobStatusProcessing indicates the job is actively being processed by an LLM worker.
+	PDFParseJobStatusProcessing PDFParseJobStatus = "processing"
+	// PDFParseJobStatusCompleted indicates parsing finished successfully and candidate result is available.
+	PDFParseJobStatusCompleted PDFParseJobStatus = "completed"
+	// PDFParseJobStatusFailed indicates parsing terminated with an error.
+	PDFParseJobStatusFailed PDFParseJobStatus = "failed"
+)
+
+// PDFParseJob tracks the status and candidate extraction result of an asynchronous PDF resume parse task.
+type PDFParseJob struct {
+	ID           string            `json:"id" gorm:"primaryKey;type:text"`
+	UserID       string            `json:"user_id" gorm:"index;not null"`
+	Status       PDFParseJobStatus `json:"status" gorm:"index;not null"`
+	Filename     string            `json:"filename,omitempty"`
+	Provider     string            `json:"provider,omitempty"`
+	Model        string            `json:"model,omitempty"`
+	Result       any               `json:"result,omitempty" gorm:"serializer:json"`
+	ErrorMessage string            `json:"error_message,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
+	CompletedAt  *time.Time        `json:"completed_at,omitempty"`
+}

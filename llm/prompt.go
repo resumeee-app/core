@@ -1,17 +1,59 @@
 package llm
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"text/template"
 
 	"resumeee/internal/domain"
 )
+
+//go:embed templates/*
+var templateFS embed.FS
+
+var (
+	tailorSystemTmpl      = template.Must(template.ParseFS(templateFS, "templates/tailor_system.tmpl"))
+	tailorUserTmpl        = template.Must(template.ParseFS(templateFS, "templates/tailor_user.tmpl"))
+	gapAnalysisSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_system.tmpl"))
+	gapAnalysisUserTmpl   = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_user.tmpl"))
+)
+
+// ReadTemplateFile reads a template file by name from the embedded templates directory.
+func ReadTemplateFile(name string) (string, error) {
+	data, err := templateFS.ReadFile("templates/" + name)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
 
 // PromptPayload wraps the assembled system and user prompts ready for LLM consumption.
 type PromptPayload struct {
 	SystemPrompt string
 	UserPrompt   string
+}
+
+type tailorPromptContext struct {
+	GlobalRules        string
+	PresetInstructions string
+	TargetRole         string
+	TargetCompany      string
+	TargetRequirements string
+	BranchInstructions string
+	PinnedEntities     string
+	ExcludedEntities   string
+	PriorVersionJSON   string
+	MasterProfileJSON  string
+}
+
+type gapAnalysisPromptContext struct {
+	TargetRole         string
+	TargetCompany      string
+	TargetRequirements string
+	BranchInstructions string
+	MasterProfileJSON  string
 }
 
 func recordShortID(idMap map[string]string, id, shortID string) {
@@ -48,106 +90,32 @@ func recordFacts(idMap map[string]string, facts []domain.Fact) {
 //   - PromptPayload with populated SystemPrompt and UserPrompt strings, or an error if generation fails.
 func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 	// 1. Build idMap for projecting snapshot, pinned/excluded entities, and prior version
-	idMap := make(map[string]string)
-	if req.MasterProfile != nil {
-		recordSkills(idMap, req.MasterProfile.AllSkills())
-		for _, exp := range req.MasterProfile.Experiences {
-			recordShortID(idMap, exp.ID, exp.EffectiveShortID())
-			recordFacts(idMap, exp.Facts)
-		}
-		for _, proj := range req.MasterProfile.Projects {
-			recordShortID(idMap, proj.ID, proj.EffectiveShortID())
-			recordFacts(idMap, proj.Facts)
-		}
-		for _, edu := range req.MasterProfile.Education {
-			recordShortID(idMap, edu.ID, edu.EffectiveShortID())
-			recordFacts(idMap, edu.Facts)
-		}
-		for _, cert := range req.MasterProfile.Certifications {
-			recordShortID(idMap, cert.ID, cert.EffectiveShortID())
-		}
-		recordFacts(idMap, req.MasterProfile.Facts)
-	}
+	idMap := buildShortIDMap(req.MasterProfile)
 
-	// 2. Build System Prompt
+	// 2. Render System Prompt from template
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(2048)
-	sysBuilder.WriteString("You are Resumeee AI, an expert career strategist and resume compiler.\n")
-	sysBuilder.WriteString("Your task is to tailor a candidate's resume to a specific target role by selecting, highlighting, ")
-	sysBuilder.WriteString("and phrasing achievements grounded STRICTLY in the candidate's verified Master Profile.\n\n")
-
-	sysBuilder.WriteString("<grounding_and_provenance_rules>\n")
-	sysBuilder.WriteString("1. Anti-Hallucination (\"No Lies\" Invariant): You must NOT invent, fabricate, or extrapolate any facts, ")
-	sysBuilder.WriteString("metrics, dates, companies, titles, degrees, certifications, or skills not explicitly documented in the Master Profile.\n")
-	sysBuilder.WriteString("2. Citation Provenance:\n")
-	sysBuilder.WriteString("   - Every accomplishment bullet in experiences and projects MUST cite \"source_fact_ids\" containing the short identifiers (e.g., fact-1, fact-2) of the Facts from the corresponding parent entity.\n")
-	sysBuilder.WriteString("   - You may cite related \"source_skill_ids\" with short identifiers (e.g., skill-1) of Skills from the Master Profile.\n")
-	sysBuilder.WriteString("   - Every TailoredExperience MUST set \"source_entity_id\" to the short identifier (e.g., exp-1) of the corresponding WorkExperience.\n")
-	sysBuilder.WriteString("   - Every TailoredProject MUST set \"source_entity_id\" to the short identifier (e.g., proj-1) of the corresponding Project.\n")
-	sysBuilder.WriteString("   - Every TailoredEducation MUST set \"source_entity_id\" to the short identifier (e.g., edu-1) of the corresponding Education.\n")
-	sysBuilder.WriteString("   - Every TailoredCert MUST set \"source_entity_id\" to the short identifier (e.g., cert-1) of the corresponding Certification.\n")
-	sysBuilder.WriteString("   - Any bullet or entity citing an invalid, fabricated, or cross-entity short identifier will be deterministically stripped by the backend provenance validator.\n")
-	sysBuilder.WriteString("3. Entity Exclusions & Pinnings:\n")
-	sysBuilder.WriteString("   - Any entity ID listed under Excluded Entity IDs MUST NOT appear in the tailored resume.\n")
-	sysBuilder.WriteString("   - Any entity ID listed under Pinned Entity IDs MUST be included in the tailored resume if present in the Master Profile.\n")
-	sysBuilder.WriteString("4. Objective Gap Analysis: In \"gap_report\", objectively assess the candidate's Master Profile against target requirements.\n")
-	sysBuilder.WriteString("   - Compare target requirements strictly against the candidate's verified Master Profile graph.\n")
-	sysBuilder.WriteString("   - Do NOT flag a qualification as missing if it is present or directly implied by an existing Fact or Skill in the Master Profile.\n")
-	sysBuilder.WriteString("   - Do NOT invent or extrapolate requirements that were not stated or clearly implied by the Target Requirements.\n")
-	sysBuilder.WriteString("   - For every gap, provide a \"missing_area\" category, an \"importance\" (\"critical\", \"preferred\", or \"nice_to_have\"), a \"clarifying_prompt\", and an actionable \"recommended_action\".\n")
-	sysBuilder.WriteString("</grounding_and_provenance_rules>\n")
-
-	// 3. Build User Prompt with 3-tier rules hierarchy, prior context, and profile data
-	var userBuilder strings.Builder
-	userBuilder.Grow(8192)
-
-	userBuilder.WriteString("<rules_hierarchy>\n")
-	userBuilder.WriteString("Tier 1: Global Writing Rules:\n")
-	if strings.TrimSpace(req.GlobalRules) != "" {
-		userBuilder.WriteString(strings.TrimSpace(req.GlobalRules))
-	} else {
-		userBuilder.WriteString("None")
+	if err := tailorSystemTmpl.Execute(&sysBuilder, nil); err != nil {
+		return nil, fmt.Errorf("failed to render tailor system prompt template: %w", err)
 	}
-	userBuilder.WriteString("\n\n")
 
-	userBuilder.WriteString("Tier 2: Preset Formatting Instructions:\n")
-	if strings.TrimSpace(req.PresetInstructions) != "" {
-		userBuilder.WriteString(strings.TrimSpace(req.PresetInstructions))
-	} else {
-		userBuilder.WriteString("None")
+	// 3. Prepare data and render User Prompt from template
+	var priorJSONStr string
+	if req.PriorVersion != nil {
+		projectedPrior := projectPriorVersion(req.PriorVersion, idMap)
+		priorJSON, err := json.MarshalIndent(projectedPrior, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize prior version: %w", err)
+		}
+		priorJSONStr = string(priorJSON)
 	}
-	userBuilder.WriteString("\n\n")
 
-	userBuilder.WriteString("Tier 3: Branch Target & Custom Instructions:\n")
-	targetRole := strings.TrimSpace(req.BranchContext.TargetRole)
-	if targetRole == "" {
-		targetRole = "Not specified"
+	profileJSONStr, err := serializeProjectedMasterProfile(req.MasterProfile, idMap)
+	if err != nil {
+		return nil, err
 	}
-	fmt.Fprintf(&userBuilder, "Target Role: %s\n", targetRole)
 
-	targetCompany := strings.TrimSpace(req.BranchContext.TargetCompany)
-	if targetCompany == "" {
-		targetCompany = "Not specified"
-	}
-	fmt.Fprintf(&userBuilder, "Target Company: %s\n", targetCompany)
-
-	userBuilder.WriteString("Target Requirements:\n")
-	if strings.TrimSpace(req.BranchContext.TargetRequirements) != "" {
-		userBuilder.WriteString(strings.TrimSpace(req.BranchContext.TargetRequirements))
-	} else {
-		userBuilder.WriteString("None")
-	}
-	userBuilder.WriteString("\n")
-
-	userBuilder.WriteString("Custom Branch Instructions:\n")
-	if strings.TrimSpace(req.BranchContext.BranchInstructions) != "" {
-		userBuilder.WriteString(strings.TrimSpace(req.BranchContext.BranchInstructions))
-	} else {
-		userBuilder.WriteString("None")
-	}
-	userBuilder.WriteString("\n")
-
-	pinned := "None"
+	pinned := ""
 	if len(req.BranchContext.PinnedEntityIDs) > 0 {
 		projectedPinned := make([]string, len(req.BranchContext.PinnedEntityIDs))
 		for i, id := range req.BranchContext.PinnedEntityIDs {
@@ -155,9 +123,8 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 		}
 		pinned = strings.Join(projectedPinned, ", ")
 	}
-	fmt.Fprintf(&userBuilder, "Pinned Entity IDs (Must Include): %s\n", pinned)
 
-	excluded := "None"
+	excluded := ""
 	if len(req.BranchContext.ExcludedEntityIDs) > 0 {
 		projectedExcluded := make([]string, len(req.BranchContext.ExcludedEntityIDs))
 		for i, id := range req.BranchContext.ExcludedEntityIDs {
@@ -165,39 +132,25 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 		}
 		excluded = strings.Join(projectedExcluded, ", ")
 	}
-	fmt.Fprintf(&userBuilder, "Excluded Entity IDs (Must Omit): %s\n", excluded)
-	userBuilder.WriteString("</rules_hierarchy>\n\n")
 
-	// Prior Context Continuity (ADR-002)
-	userBuilder.WriteString("<prior_active_version>\n")
-	if req.PriorVersion != nil {
-		userBuilder.WriteString("A prior active tailored version exists for this branch. The user may have manually refined bullet phrasing, word choice, or structure. You must preserve the phrasing, tone, and specific wordings of the prior version bullets whenever they remain grounded in the Master Profile, while updating content to incorporate newly added Master Profile achievements or address revised target requirements.\n\n")
-		projectedPrior := projectPriorVersion(req.PriorVersion, idMap)
-		priorJSON, err := json.MarshalIndent(projectedPrior, "", "  ")
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize prior version: %w", err)
-		}
-		userBuilder.WriteString(string(priorJSON))
-	} else {
-		userBuilder.WriteString("None (Initial generation)")
+	ctx := tailorPromptContext{
+		GlobalRules:        strings.TrimSpace(req.GlobalRules),
+		PresetInstructions: strings.TrimSpace(req.PresetInstructions),
+		TargetRole:         strings.TrimSpace(req.BranchContext.TargetRole),
+		TargetCompany:      strings.TrimSpace(req.BranchContext.TargetCompany),
+		TargetRequirements: strings.TrimSpace(req.BranchContext.TargetRequirements),
+		BranchInstructions: strings.TrimSpace(req.BranchContext.BranchInstructions),
+		PinnedEntities:     pinned,
+		ExcludedEntities:   excluded,
+		PriorVersionJSON:   priorJSONStr,
+		MasterProfileJSON:  profileJSONStr,
 	}
-	userBuilder.WriteString("\n</prior_active_version>\n\n")
 
-	// Master Profile Graph Data projected with short identifiers
-	userBuilder.WriteString("<master_profile_data>\n")
-	if req.MasterProfile != nil {
-		projectedProfile := projectMasterProfileSnapshot(req.MasterProfile, idMap)
-		profileJSON, err := json.MarshalIndent(projectedProfile, "", "  ")
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize master profile snapshot: %w", err)
-		}
-		userBuilder.WriteString(string(profileJSON))
-	} else {
-		userBuilder.WriteString("{}\n")
+	var userBuilder strings.Builder
+	userBuilder.Grow(8192)
+	if err := tailorUserTmpl.Execute(&userBuilder, ctx); err != nil {
+		return nil, fmt.Errorf("failed to render tailor user prompt template: %w", err)
 	}
-	userBuilder.WriteString("\n</master_profile_data>\n\n")
-
-	userBuilder.WriteString("Produce a valid JSON object matching the required schema with tailored_content and gap_report. Adhere strictly to the No Lies grounding rules.")
 
 	return &PromptPayload{
 		SystemPrompt: sysBuilder.String(),
@@ -208,93 +161,77 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 // BuildGapAnalysisPrompt constructs a targeted prompt payload designed exclusively for evaluating
 // candidate qualifications against target job requirements, avoiding full resume generation overhead.
 func BuildGapAnalysisPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
-	idMap := make(map[string]string)
-	if req.MasterProfile != nil {
-		recordSkills(idMap, req.MasterProfile.AllSkills())
-		for _, exp := range req.MasterProfile.Experiences {
-			recordShortID(idMap, exp.ID, exp.EffectiveShortID())
-			recordFacts(idMap, exp.Facts)
-		}
-		for _, proj := range req.MasterProfile.Projects {
-			recordShortID(idMap, proj.ID, proj.EffectiveShortID())
-			recordFacts(idMap, proj.Facts)
-		}
-		for _, edu := range req.MasterProfile.Education {
-			recordShortID(idMap, edu.ID, edu.EffectiveShortID())
-			recordFacts(idMap, edu.Facts)
-		}
-		for _, cert := range req.MasterProfile.Certifications {
-			recordShortID(idMap, cert.ID, cert.EffectiveShortID())
-		}
-		recordFacts(idMap, req.MasterProfile.Facts)
-	}
+	idMap := buildShortIDMap(req.MasterProfile)
 
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(1024)
-	sysBuilder.WriteString("You are Resumeee AI, an expert career strategist and technical recruiter.\n")
-	sysBuilder.WriteString("Your task is to perform an objective, rigorous gap analysis comparing a candidate's verified Master Profile against specific target role requirements.\n\n")
+	if err := gapAnalysisSystemTmpl.Execute(&sysBuilder, nil); err != nil {
+		return nil, fmt.Errorf("failed to render gap analysis system prompt template: %w", err)
+	}
 
-	sysBuilder.WriteString("<grounding_and_provenance_rules>\n")
-	sysBuilder.WriteString("1. Anti-Hallucination (\"No Lies\" Invariant): You must evaluate the candidate strictly against their verified Master Profile graph.\n")
-	sysBuilder.WriteString("2. Objective Gap Analysis: In \"gap_report\", objectively assess the candidate's Master Profile against target requirements.\n")
-	sysBuilder.WriteString("   - Compare target requirements strictly against the candidate's verified Master Profile graph.\n")
-	sysBuilder.WriteString("   - Do NOT flag a qualification as missing if it is present or directly implied by an existing Fact or Skill in the Master Profile.\n")
-	sysBuilder.WriteString("   - Do NOT invent or extrapolate requirements that were not stated or clearly implied by the Target Requirements.\n")
-	sysBuilder.WriteString("   - For every gap, provide a \"missing_area\" category, an \"importance\" (\"critical\", \"preferred\", or \"nice_to_have\"), a \"clarifying_prompt\", and an actionable \"recommended_action\".\n")
-	sysBuilder.WriteString("   - In \"overall_match_summary\", summarize alignment with the target requirements.\n")
-	sysBuilder.WriteString("   - In \"strategic_recommendations\", provide actionable advice for addressing gaps or framing experience.\n")
-	sysBuilder.WriteString("</grounding_and_provenance_rules>\n")
+	profileJSONStr, err := serializeProjectedMasterProfile(req.MasterProfile, idMap)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := gapAnalysisPromptContext{
+		TargetRole:         strings.TrimSpace(req.BranchContext.TargetRole),
+		TargetCompany:      strings.TrimSpace(req.BranchContext.TargetCompany),
+		TargetRequirements: strings.TrimSpace(req.BranchContext.TargetRequirements),
+		BranchInstructions: strings.TrimSpace(req.BranchContext.BranchInstructions),
+		MasterProfileJSON:  profileJSONStr,
+	}
 
 	var userBuilder strings.Builder
 	userBuilder.Grow(4096)
-
-	userBuilder.WriteString("<target_context>\n")
-	targetRole := strings.TrimSpace(req.BranchContext.TargetRole)
-	if targetRole == "" {
-		targetRole = "Not specified"
+	if err := gapAnalysisUserTmpl.Execute(&userBuilder, ctx); err != nil {
+		return nil, fmt.Errorf("failed to render gap analysis user prompt template: %w", err)
 	}
-	fmt.Fprintf(&userBuilder, "Target Role: %s\n", targetRole)
-
-	targetCompany := strings.TrimSpace(req.BranchContext.TargetCompany)
-	if targetCompany == "" {
-		targetCompany = "Not specified"
-	}
-	fmt.Fprintf(&userBuilder, "Target Company: %s\n", targetCompany)
-
-	userBuilder.WriteString("Target Requirements:\n")
-	if strings.TrimSpace(req.BranchContext.TargetRequirements) != "" {
-		userBuilder.WriteString(strings.TrimSpace(req.BranchContext.TargetRequirements))
-	} else {
-		userBuilder.WriteString("None")
-	}
-	userBuilder.WriteString("\n")
-
-	if strings.TrimSpace(req.BranchContext.BranchInstructions) != "" {
-		userBuilder.WriteString("Custom Branch Instructions:\n")
-		userBuilder.WriteString(strings.TrimSpace(req.BranchContext.BranchInstructions))
-		userBuilder.WriteString("\n")
-	}
-	userBuilder.WriteString("</target_context>\n\n")
-
-	userBuilder.WriteString("<master_profile_data>\n")
-	if req.MasterProfile != nil {
-		projectedProfile := projectMasterProfileSnapshot(req.MasterProfile, idMap)
-		profileJSON, err := json.MarshalIndent(projectedProfile, "", "  ")
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize master profile snapshot: %w", err)
-		}
-		userBuilder.WriteString(string(profileJSON))
-	} else {
-		userBuilder.WriteString("{}\n")
-	}
-	userBuilder.WriteString("\n</master_profile_data>\n\n")
-
-	userBuilder.WriteString("Produce a valid JSON object matching the required schema with gap_report. Adhere strictly to the No Lies grounding rules.")
 
 	return &PromptPayload{
 		SystemPrompt: sysBuilder.String(),
 		UserPrompt:   userBuilder.String(),
 	}, nil
+}
+
+// buildShortIDMap builds a fast lookup dictionary mapping canonical UUIDs to compact short IDs
+// for all entities (skills, experiences, projects, education, certifications, facts) in a profile snapshot.
+func buildShortIDMap(snapshot *domain.MasterProfileSnapshot) map[string]string {
+	idMap := make(map[string]string)
+	if snapshot == nil {
+		return idMap
+	}
+	recordSkills(idMap, snapshot.AllSkills())
+	for _, exp := range snapshot.Experiences {
+		recordShortID(idMap, exp.ID, exp.EffectiveShortID())
+		recordFacts(idMap, exp.Facts)
+	}
+	for _, proj := range snapshot.Projects {
+		recordShortID(idMap, proj.ID, proj.EffectiveShortID())
+		recordFacts(idMap, proj.Facts)
+	}
+	for _, edu := range snapshot.Education {
+		recordShortID(idMap, edu.ID, edu.EffectiveShortID())
+		recordFacts(idMap, edu.Facts)
+	}
+	for _, cert := range snapshot.Certifications {
+		recordShortID(idMap, cert.ID, cert.EffectiveShortID())
+	}
+	recordFacts(idMap, snapshot.Facts)
+	return idMap
+}
+
+// serializeProjectedMasterProfile projects the profile snapshot using short IDs and serializes it to formatted JSON.
+func serializeProjectedMasterProfile(snapshot *domain.MasterProfileSnapshot, idMap map[string]string) (string, error) {
+	if snapshot == nil {
+		return "", nil
+	}
+	projectedProfile := projectMasterProfileSnapshot(snapshot, idMap)
+	profileJSON, err := json.MarshalIndent(projectedProfile, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize master profile snapshot: %w", err)
+	}
+	return string(profileJSON), nil
 }
 
 // resolveShortID maps a canonical or existing identifier to its compact short equivalent.

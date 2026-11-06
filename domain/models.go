@@ -440,3 +440,21 @@ type PDFParseJob struct {
 	UpdatedAt    time.Time         `json:"updated_at"`
 	CompletedAt  *time.Time        `json:"completed_at,omitempty"`
 }
+
+// PromptPreview wraps compiled system and user prompt strings ready for LLM consumption.
+type PromptPreview struct {
+	SystemPrompt string `json:"system_prompt"`
+	UserPrompt   string `json:"user_prompt"`
+}
+
+// PromptPreviewOptions encapsulates optional draft modifications when previewing prompt compilation.
+type PromptPreviewOptions struct {
+	TargetRole         *string  `json:"target_role,omitempty"`
+	TargetCompany      *string  `json:"target_company,omitempty"`
+	TargetRequirements *string  `json:"target_requirements,omitempty"`
+	BranchInstructions *string  `json:"branch_instructions,omitempty"`
+	PresetID           *string  `json:"preset_id,omitempty"`
+	PinnedEntityIDs    []string `json:"pinned_entity_ids,omitempty"`
+	ExcludedEntityIDs  []string `json:"excluded_entity_ids,omitempty"`
+}
+

@@ -1,0 +1,30 @@
+<rules_hierarchy>
+Tier 1: Global Writing Rules:
+{{if .GlobalRules}}{{.GlobalRules}}{{else}}None{{end}}
+
+Tier 2: Preset Formatting Instructions:
+{{if .PresetInstructions}}{{.PresetInstructions}}{{else}}None{{end}}
+
+Tier 3: Branch Target & Custom Instructions:
+Target Role: {{if .TargetRole}}{{.TargetRole}}{{else}}Not specified{{end}}
+Target Company: {{if .TargetCompany}}{{.TargetCompany}}{{else}}Not specified{{end}}
+Target Requirements:
+{{if .TargetRequirements}}{{.TargetRequirements}}{{else}}None{{end}}
+Custom Branch Instructions:
+{{if .BranchInstructions}}{{.BranchInstructions}}{{else}}None{{end}}
+Pinned Entity IDs (Must Include): {{if .PinnedEntities}}{{.PinnedEntities}}{{else}}None{{end}}
+Excluded Entity IDs (Must Omit): {{if .ExcludedEntities}}{{.ExcludedEntities}}{{else}}None{{end}}
+</rules_hierarchy>
+
+<prior_active_version>
+{{if .PriorVersionJSON}}A prior active tailored version exists for this branch. The user may have manually refined bullet phrasing, word choice, or structure. You must preserve the phrasing, tone, and specific wordings of the prior version bullets whenever they remain grounded in the Master Profile, while updating content to incorporate newly added Master Profile achievements or address revised target requirements.
+
+{{.PriorVersionJSON}}{{else}}None (Initial generation){{end}}
+</prior_active_version>
+
+<master_profile_data>
+{{if .MasterProfileJSON}}{{.MasterProfileJSON}}
+{{else}}{}
+{{end}}</master_profile_data>
+
+Produce a valid JSON object matching the required schema with tailored_content and gap_report. Adhere strictly to the No Lies grounding rules.

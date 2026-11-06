@@ -1,0 +1,15 @@
+<target_context>
+Target Role: {{if .TargetRole}}{{.TargetRole}}{{else}}Not specified{{end}}
+Target Company: {{if .TargetCompany}}{{.TargetCompany}}{{else}}Not specified{{end}}
+Target Requirements:
+{{if .TargetRequirements}}{{.TargetRequirements}}{{else}}None{{end}}
+{{if .BranchInstructions}}Custom Branch Instructions:
+{{.BranchInstructions}}
+{{end}}</target_context>
+
+<master_profile_data>
+{{if .MasterProfileJSON}}{{.MasterProfileJSON}}
+{{else}}{}
+{{end}}</master_profile_data>
+
+Produce a valid JSON object matching the required schema with gap_report. Adhere strictly to the No Lies grounding rules.

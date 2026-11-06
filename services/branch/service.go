@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"resumeee/internal/domain"
+	"resumeee/internal/llm"
 	"resumeee/internal/renderer"
 	"resumeee/internal/validator"
 	"resumeee/internal/worker"
@@ -33,6 +34,7 @@ type Service interface {
 	GetVersion(ctx context.Context, branchID, versionNumOrID string) (*domain.BranchVersion, error)
 	EditVersion(ctx context.Context, userID, branchID, parentVersionNumOrID string, editedContent domain.TailoredContent) (*domain.BranchVersion, error)
 	AnalyzeGaps(ctx context.Context, userID, branchID string) (*domain.GapReport, error)
+	GetPromptPreview(ctx context.Context, userID, branchID string, opts *domain.PromptPreviewOptions) (*domain.PromptPreview, error)
 }
 
 // Config defines the dependencies required by the branch domain service.
@@ -621,5 +623,100 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 	}
 
 	return report, nil
+}
+
+// GetPromptPreview compiles the system and user prompt templates against the branch's candidate profile,
+// rules hierarchy, and target requirements without dispatching any request to an LLM provider.
+func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string, opts *domain.PromptPreviewOptions) (*domain.PromptPreview, error) {
+	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
+	if err != nil {
+		return nil, err
+	}
+
+	snapshot, err := s.profileRepo.GetSnapshot(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	prof, err := s.profileRepo.GetProfile(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply optional live draft overrides
+	b := *branch
+	if opts != nil {
+		if opts.TargetRole != nil {
+			b.TargetRole = *opts.TargetRole
+		}
+		if opts.TargetCompany != nil {
+			b.TargetCompany = *opts.TargetCompany
+		}
+		if opts.TargetRequirements != nil {
+			b.TargetRequirements = *opts.TargetRequirements
+		}
+		if opts.BranchInstructions != nil {
+			b.BranchInstructions = *opts.BranchInstructions
+		}
+		if opts.PresetID != nil {
+			b.PresetID = opts.PresetID
+		}
+		if opts.PinnedEntityIDs != nil {
+			b.PinnedEntityIDs = opts.PinnedEntityIDs
+		}
+		if opts.ExcludedEntityIDs != nil {
+			b.ExcludedEntityIDs = opts.ExcludedEntityIDs
+		}
+	}
+
+	var preset *domain.Preset
+	var presetInstructions string
+	if b.PresetID != nil && *b.PresetID != "" {
+		p, pErr := s.presetRepo.GetPreset(ctx, userID, *b.PresetID)
+		if pErr == nil && p != nil {
+			preset = p
+			presetInstructions = p.SystemInstructions
+		} else if pErr != nil && s.logger != nil {
+			s.logger.Warn("failed to load preset for prompt preview", "branch_id", b.ID, "preset_id", *b.PresetID, "err", pErr)
+		}
+	}
+
+	var priorContent *domain.TailoredContent
+	if b.ActiveVersionID != nil && *b.ActiveVersionID != "" {
+		activeVer, vErr := s.branchRepo.GetVersion(ctx, b.ID, *b.ActiveVersionID)
+		if vErr == nil && activeVer != nil {
+			priorContent = activeVer.TailoredContent
+		} else if vErr != nil && s.logger != nil {
+			s.logger.Warn("failed to load active version for prompt preview", "branch_id", b.ID, "version_id", *b.ActiveVersionID, "err", vErr)
+		}
+	}
+
+	model := b.ModelOverride
+	if model == "" && preset != nil {
+		model = preset.ModelOverride
+	}
+	if model == "" {
+		model = prof.DefaultModel
+	}
+
+	req := domain.GenerationRequest{
+		Model:              model,
+		MasterProfile:      snapshot,
+		GlobalRules:        prof.GlobalWritingRules,
+		PresetInstructions: presetInstructions,
+		Preset:             preset,
+		BranchContext:      b,
+		PriorVersion:       priorContent,
+	}
+
+	payload, err := llm.BuildPrompt(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile prompt preview: %w", err)
+	}
+
+	return &domain.PromptPreview{
+		SystemPrompt: payload.SystemPrompt,
+		UserPrompt:   payload.UserPrompt,
+	}, nil
 }
 

@@ -8,12 +8,36 @@ import (
 	"fmt"
 	htmltemplate "html/template"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	texttemplate "text/template"
 
 	"resumeee/internal/domain"
 )
+
+var (
+	scriptBlockRegex = regexp.MustCompile(`(?i)<script\b[^>]*>[\s\S]*?<\/script\b[^>]*>`)
+	scriptTagRegex   = regexp.MustCompile(`(?i)<\/?script\b[^>]*\/?>`)
+)
+
+// StripScriptTags removes all <script>...</script> blocks and lingering <script...> or </script> tags from the provided HTML string.
+// This prevents sandboxed preview iframes (sandbox="") from encountering script execution errors or security blocks.
+func StripScriptTags(html string) string {
+	if html == "" {
+		return ""
+	}
+	res := html
+	for {
+		stripped := scriptBlockRegex.ReplaceAllString(res, "")
+		stripped = scriptTagRegex.ReplaceAllString(stripped, "")
+		if stripped == res {
+			break
+		}
+		res = stripped
+	}
+	return res
+}
 
 // bufferPool recycles bytes.Buffer instances to eliminate allocations during frequent template rendering passes.
 var bufferPool = sync.Pool{

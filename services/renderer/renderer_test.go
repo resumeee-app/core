@@ -844,3 +844,56 @@ func TestValidate_CSSStylesIncluded(t *testing.T) {
 	}
 }
 
+func TestStripScriptTags(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "html without scripts",
+			input:    `<div class="resume"><h1>John Doe</h1></div>`,
+			expected: `<div class="resume"><h1>John Doe</h1></div>`,
+		},
+		{
+			name:     "single script tag with content",
+			input:    `<div>Hello</div><script>alert('xss');</script><p>World</p>`,
+			expected: `<div>Hello</div><p>World</p>`,
+		},
+		{
+			name:     "script tag with attributes and multiline JSON-LD content",
+			input:    `<div>Header</div><script type="application/ld+json">{"@context": "https://schema.org"}</script><footer>Footer</footer>`,
+			expected: `<div>Header</div><footer>Footer</footer>`,
+		},
+		{
+			name:     "multiple script tags with mixed case",
+			input:    `<SCRIPT src="evil.js"></SCRIPT><h1>Title</h1><Script type="text/javascript">console.log(1);</Script>`,
+			expected: `<h1>Title</h1>`,
+		},
+		{
+			name:     "self closing script tag",
+			input:    `<p>Before</p><script src="tracker.js" /><p>After</p>`,
+			expected: `<p>Before</p><p>After</p>`,
+		},
+		{
+			name:     "nested script tags or edge formatting",
+			input:    `<div><script><script>nested</script></script>Valid</div>`,
+			expected: `<div>Valid</div>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := renderer.StripScriptTags(tt.input)
+			if got != tt.expected {
+				t.Errorf("StripScriptTags(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+

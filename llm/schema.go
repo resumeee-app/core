@@ -230,6 +230,10 @@ func GenerationResponseSchema() map[string]any {
 									"type":        "string",
 									"description": "Target requirement or qualification missing from master profile",
 								},
+								"missing_area": map[string]any{
+									"type":        "string",
+									"description": "Functional domain or skill area (e.g. Distributed Systems, Frontend)",
+								},
 								"importance": map[string]any{
 									"type": "string",
 									"enum": []string{"critical", "preferred", "nice_to_have"},
@@ -238,10 +242,21 @@ func GenerationResponseSchema() map[string]any {
 									"type":        "string",
 									"description": "Question to prompt user for missing experience or facts",
 								},
+								"recommended_action": map[string]any{
+									"type":        "string",
+									"description": "Suggested action or resume framing strategy to address this gap",
+								},
 							},
-							"required":             []string{"requirement", "importance", "clarifying_prompt"},
+							"required":             []string{"requirement", "missing_area", "importance", "clarifying_prompt"},
 							"additionalProperties": false,
 						},
+					},
+					"strategic_recommendations": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+						},
+						"description": "Actionable strategic recommendations for tailoring and interview preparation",
 					},
 				},
 				"required":             []string{"overall_match_summary", "missing_requirements"},
@@ -249,6 +264,66 @@ func GenerationResponseSchema() map[string]any {
 			},
 		},
 		"required":             []string{"tailored_content", "gap_report"},
+		"additionalProperties": false,
+	}
+}
+
+// GapAnalysisResponseSchema returns the canonical JSON Schema for a standalone GapReport,
+// enforcing strict validation keywords and wrapping the report under the "gap_report" key.
+func GapAnalysisResponseSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"gap_report": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"overall_match_summary": map[string]any{
+						"type":        "string",
+						"description": "Concise summary of alignment against target requirements",
+					},
+					"missing_requirements": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"requirement": map[string]any{
+									"type":        "string",
+									"description": "Target requirement or qualification missing from master profile",
+								},
+								"missing_area": map[string]any{
+									"type":        "string",
+									"description": "Functional domain or skill area (e.g. Distributed Systems, Frontend)",
+								},
+								"importance": map[string]any{
+									"type": "string",
+									"enum": []string{"critical", "preferred", "nice_to_have"},
+								},
+								"clarifying_prompt": map[string]any{
+									"type":        "string",
+									"description": "Question to prompt user for missing experience or facts",
+								},
+								"recommended_action": map[string]any{
+									"type":        "string",
+									"description": "Suggested action or resume framing strategy to address this gap",
+								},
+							},
+							"required":             []string{"requirement", "missing_area", "importance", "clarifying_prompt"},
+							"additionalProperties": false,
+						},
+					},
+					"strategic_recommendations": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+						},
+						"description": "Actionable strategic recommendations for tailoring and interview preparation",
+					},
+				},
+				"required":             []string{"overall_match_summary", "missing_requirements"},
+				"additionalProperties": false,
+			},
+		},
+		"required":             []string{"gap_report"},
 		"additionalProperties": false,
 	}
 }

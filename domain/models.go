@@ -331,10 +331,11 @@ type Branch struct {
 	TemplateSetID            string    `json:"template_set_id" gorm:"index;not null"`
 	ProviderOverride         string    `json:"provider_override,omitempty"`
 	ModelOverride            string    `json:"model_override,omitempty"`
-	PinnedEntityIDs          []string  `json:"pinned_entity_ids,omitempty" gorm:"serializer:json"`   // Force-included Master IDs
-	ExcludedEntityIDs        []string  `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"` // Force-excluded Master IDs
-	ActiveVersionID          *string   `json:"active_version_id,omitempty" gorm:"index"`
-	LastSyncedMasterRevision int64     `json:"last_synced_master_revision"`
+	PinnedEntityIDs          []string   `json:"pinned_entity_ids,omitempty" gorm:"serializer:json"`   // Force-included Master IDs
+	ExcludedEntityIDs        []string   `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"` // Force-excluded Master IDs
+	ActiveVersionID          *string    `json:"active_version_id,omitempty" gorm:"index"`
+	GapReport                *GapReport `json:"gap_report,omitempty" gorm:"serializer:json"`
+	LastSyncedMasterRevision int64      `json:"last_synced_master_revision"`
 	IsStale                  bool      `json:"is_stale" gorm:"-"` // Computed: LastSyncedMasterRevision < Profile.MasterRevision
 	CreatedAt                time.Time `json:"created_at"`
 	UpdatedAt                time.Time `json:"updated_at"`

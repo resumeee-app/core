@@ -113,6 +113,14 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req domain.Generat
 	}, nil
 }
 
+func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error) {
+	resp, err := m.GenerateTailoredResume(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &resp.GapReport, nil
+}
+
 type testWorkerEnv struct {
 	db           any
 	profileRepo  domain.ProfileRepository
@@ -355,6 +363,14 @@ func (m *blockingMockLLM) GenerateTailoredResume(ctx context.Context, req domain
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error) {
+	resp, err := m.GenerateTailoredResume(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &resp.GapReport, nil
 }
 
 // 3. Graceful Shutdown & Drain Test

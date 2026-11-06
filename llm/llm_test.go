@@ -140,8 +140,34 @@ func TestGenerationResponseSchema_Integrity(t *testing.T) {
 	if _, ok := props["tailored_content"]; !ok {
 		t.Errorf("missing tailored_content property")
 	}
-	if _, ok := props["gap_report"]; !ok {
-		t.Errorf("missing gap_report property")
+	gapReportProp, ok := props["gap_report"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing or invalid gap_report property")
+	}
+	gapProps, ok := gapReportProp["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing properties in gap_report schema")
+	}
+	if _, ok := gapProps["strategic_recommendations"]; !ok {
+		t.Errorf("missing strategic_recommendations in gap_report schema")
+	}
+	missingReqs, ok := gapProps["missing_requirements"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing missing_requirements in gap_report schema")
+	}
+	items, ok := missingReqs["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing items in missing_requirements schema")
+	}
+	itemProps, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing properties in missing_requirements item schema")
+	}
+	if _, ok := itemProps["missing_area"]; !ok {
+		t.Errorf("missing missing_area in gap item schema")
+	}
+	if _, ok := itemProps["recommended_action"]; !ok {
+		t.Errorf("missing recommended_action in gap item schema")
 	}
 
 	reqs, ok := schema["required"].([]string)
@@ -177,6 +203,12 @@ func TestPromptBuilder_Composition(t *testing.T) {
 	}
 	if !strings.Contains(prompts.SystemPrompt, "source_fact_ids") {
 		t.Errorf("system prompt missing source_fact_ids citation directive")
+	}
+	if !strings.Contains(prompts.SystemPrompt, "Do NOT flag a qualification as missing if it is present or directly implied") {
+		t.Errorf("system prompt missing gap grounding constraint forbidding false positives for documented facts")
+	}
+	if !strings.Contains(prompts.SystemPrompt, "Do NOT invent or extrapolate requirements") {
+		t.Errorf("system prompt missing gap grounding constraint forbidding fabricated job requirements")
 	}
 
 	// Check 3-Tier Hierarchy in User Prompt
@@ -1483,4 +1515,65 @@ func TestLLMTimeoutOption(t *testing.T) {
 			t.Errorf("expected 8m timeout on provider client with debug prompts enabled, got %v", cp.httpClient.Timeout)
 		}
 	})
+}
+
+func TestGapAnalysisResponseSchema(t *testing.T) {
+	schema := GapAnalysisResponseSchema()
+	if schema["type"] != "object" {
+		t.Fatalf("expected schema type object, got %v", schema["type"])
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties map, got %T", schema["properties"])
+	}
+	gapReportProp, ok := props["gap_report"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected gap_report property, got %v", props)
+	}
+	grProps, ok := gapReportProp["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected gap_report properties map")
+	}
+	if _, ok := grProps["overall_match_summary"]; !ok {
+		t.Errorf("missing overall_match_summary in schema")
+	}
+	if _, ok := grProps["missing_requirements"]; !ok {
+		t.Errorf("missing missing_requirements in schema")
+	}
+}
+
+func TestBuildGapAnalysisPrompt(t *testing.T) {
+	req := sampleRequest()
+	req.BranchContext = domain.Branch{
+		TargetRole:         "Staff Distributed Systems Engineer",
+		TargetCompany:      "CloudScale Labs",
+		TargetRequirements: "Must have deep expertise in Raft, Paxos, and Go.",
+	}
+
+	payload, err := BuildGapAnalysisPrompt(req)
+	if err != nil {
+		t.Fatalf("BuildGapAnalysisPrompt returned error: %v", err)
+	}
+	if payload == nil {
+		t.Fatalf("expected non-nil PromptPayload")
+	}
+
+	if !strings.Contains(payload.SystemPrompt, "Resumeee AI") {
+		t.Errorf("expected system prompt to contain Resumeee AI intro")
+	}
+	if !strings.Contains(payload.SystemPrompt, "Anti-Hallucination") {
+		t.Errorf("expected system prompt to contain Anti-Hallucination rules")
+	}
+	if !strings.Contains(payload.UserPrompt, "Staff Distributed Systems Engineer") {
+		t.Errorf("expected user prompt to contain target role")
+	}
+	if !strings.Contains(payload.UserPrompt, "CloudScale Labs") {
+		t.Errorf("expected user prompt to contain target company")
+	}
+	if !strings.Contains(payload.UserPrompt, "Must have deep expertise in Raft") {
+		t.Errorf("expected user prompt to contain target requirements")
+	}
+	if !strings.Contains(payload.UserPrompt, "<master_profile_data>") {
+		t.Errorf("expected user prompt to contain master profile data")
+	}
 }

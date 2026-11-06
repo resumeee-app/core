@@ -42,6 +42,7 @@ type ResumeExtractor interface {
 // LLMService abstracts multi-provider prompt generation and structured response.
 type LLMService interface {
 	GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error)
+	GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error)
 }
 
 // ProvenanceValidator audits tailored content against career snapshots and exclusion lists.

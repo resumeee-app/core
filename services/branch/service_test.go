@@ -679,4 +679,294 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 	})
 }
 
+func TestService_EditVersionPreservesGapReport(t *testing.T) {
+	env := setupTestBranchEnv(t, 10)
+	ctx := context.Background()
+
+	score := 88.0
+	expectedReport := &domain.GapReport{
+		OverallMatchSummary: "Solid engineering match with minor distributed gaps.",
+		MatchScore:          &score,
+		MissingRequirements: []domain.GapItem{
+			{
+				Requirement:      "Kubernetes Operator SDK",
+				MissingArea:      "Orchestration",
+				Importance:       domain.GapImportancePreferred,
+				ClarifyingPrompt: "Have you written Kubernetes operators in Go?",
+			},
+		},
+		StrategicRecommendations: []string{"Highlight controller loops in summary."},
+	}
+
+	// Attach GapReport to parent version (v1)
+	v1, err := env.svc.GetVersion(ctx, env.branchID, env.v1ID)
+	if err != nil {
+		t.Fatalf("failed to get v1: %v", err)
+	}
+	v1.GapReport = expectedReport
+	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+		t.Fatalf("failed to update v1 with gap report: %v", err)
+	}
+
+	validContent := domain.TailoredContent{
+		Summary: "Updated manual summary for Senior Cloud Architect.",
+		Experiences: []domain.TailoredExperience{
+			{
+				SourceEntityID: env.validExpID,
+				Company:        "Acme Corp",
+				RoleTitle:      "Lead Systems Architect",
+				StartDate:      "2020-01-01",
+				Location:       domain.Location{City: "San Francisco"},
+				Bullets: []domain.TailoredBullet{
+					{
+						Text:          "Optimized distributed consensus throughput by 40%.",
+						SourceFactIDs: []string{env.validFactID},
+					},
+				},
+			},
+		},
+	}
+
+	newVer, err := env.svc.EditVersion(ctx, env.defaultUser, env.branchID, env.v1ID, validContent)
+	if err != nil {
+		t.Fatalf("EditVersion failed: %v", err)
+	}
+
+	if newVer.GapReport == nil {
+		t.Fatalf("expected newVer.GapReport to be preserved, got nil")
+	}
+	if newVer.GapReport.OverallMatchSummary != expectedReport.OverallMatchSummary {
+		t.Errorf("expected summary %q, got %q", expectedReport.OverallMatchSummary, newVer.GapReport.OverallMatchSummary)
+	}
+	if newVer.GapReport.MatchScore == nil || *newVer.GapReport.MatchScore != score {
+		t.Errorf("expected match score %v, got %v", score, newVer.GapReport.MatchScore)
+	}
+	if len(newVer.GapReport.MissingRequirements) != 1 {
+		t.Errorf("expected 1 missing requirement, got %d", len(newVer.GapReport.MissingRequirements))
+	}
+}
+
+type stubLLMService struct {
+	gapReport *domain.GapReport
+	genResp   *domain.GenerationResponse
+	err       error
+}
+
+func (s *stubLLMService) GenerateTailoredResume(_ context.Context, _ domain.GenerationRequest) (*domain.GenerationResponse, error) {
+	return s.genResp, s.err
+}
+
+func (s *stubLLMService) GenerateGapAnalysis(_ context.Context, _ domain.GenerationRequest) (*domain.GapReport, error) {
+	if s.gapReport != nil {
+		return s.gapReport, s.err
+	}
+	if s.genResp != nil {
+		return &s.genResp.GapReport, s.err
+	}
+	return nil, s.err
+}
+
+func TestService_AnalyzeGaps(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("returns ErrNotFound for unknown branch", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+		_, err := env.svc.AnalyzeGaps(ctx, env.defaultUser, "non-existent-branch")
+		if !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("analyzes gaps via LLMService and returns deterministic score", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+
+		stubLLM := &stubLLMService{
+			gapReport: &domain.GapReport{
+				OverallMatchSummary: "Decoupled fast analysis completed.",
+				MissingRequirements: []domain.GapItem{
+					{
+						Requirement:      "Kubernetes CRD controllers",
+						MissingArea:      "Container Orchestration",
+						Importance:       domain.GapImportanceCritical,
+						ClarifyingPrompt: "Have you authored custom controllers?",
+					},
+					{
+						Requirement:      "Kafka event streams",
+						MissingArea:      "Messaging",
+						Importance:       domain.GapImportancePreferred,
+						ClarifyingPrompt: "Have you worked with high-throughput Kafka?",
+					},
+				},
+				StrategicRecommendations: []string{"Highlight controller loops in summary."},
+			},
+		}
+
+		// Rebuild svc with stubLLM
+		svcWithLLM := branch.NewService(branch.Config{
+			BranchRepo:   env.branchRepo,
+			ProfileRepo:  env.profileRepo,
+			JobEnqueuer:  env.enqueuer,
+			Validator:    validator.New(),
+			Renderer:     renderer.NewTemplateRenderer(),
+			LLMService:   stubLLM,
+		})
+
+		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("AnalyzeGaps failed: %v", err)
+		}
+		if report == nil {
+			t.Fatalf("expected non-nil GapReport")
+		}
+		if report.OverallMatchSummary != "Decoupled fast analysis completed." {
+			t.Errorf("unexpected summary: %q", report.OverallMatchSummary)
+		}
+		// 1 critical (-15) + 1 preferred (-7) = 100 - 22 = 78.0
+		if report.MatchScore == nil || *report.MatchScore != 78.0 {
+			t.Errorf("expected deterministic match score 78.0, got %v", report.MatchScore)
+		}
+		if len(report.IdentifiedGaps) != 2 {
+			t.Errorf("expected 2 identified gaps alias, got %d", len(report.IdentifiedGaps))
+		}
+	})
+
+	t.Run("normalizes identified_gaps before calculating deterministic match score", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+
+		stubLLM := &stubLLMService{
+			gapReport: &domain.GapReport{
+				OverallMatchSummary: "Report with only identified_gaps populated.",
+				IdentifiedGaps: []domain.GapItem{
+					{
+						Requirement: "Distributed consensus",
+						Importance:  domain.GapImportanceCritical, // -15
+					},
+					{
+						Requirement: "GraphQL subscriptions",
+						Importance:  domain.GapImportancePreferred, // -7
+					},
+				},
+			},
+		}
+
+		svcWithLLM := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			LLMService:  stubLLM,
+		})
+
+		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("AnalyzeGaps failed: %v", err)
+		}
+		// 100 - (15 + 7) = 78.0
+		if report.MatchScore == nil || *report.MatchScore != 78.0 {
+			t.Errorf("expected score 78.0 after normalization, got %v", report.MatchScore)
+		}
+	})
+
+	t.Run("persists gap report on versionless branch", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+
+		// Create a branch without active version
+		b := &domain.Branch{
+			ID:                 "branch-no-ver-" + uuid.New().String(),
+			UserID:             env.defaultUser,
+			Name:               "New Branch Without Versions",
+			TargetRole:         "Backend Engineer",
+			TargetRequirements: "Go, Kubernetes",
+			TemplateSetID:      renderer.TemplateStandardCleanID,
+		}
+		created, err := env.svc.CreateBranch(ctx, b)
+		if err != nil {
+			t.Fatalf("CreateBranch failed: %v", err)
+		}
+
+		stubLLM := &stubLLMService{
+			gapReport: &domain.GapReport{
+				OverallMatchSummary: "Analysis for versionless branch",
+				MissingRequirements: []domain.GapItem{
+					{Requirement: "Kubernetes", Importance: domain.GapImportanceCritical},
+				},
+			},
+		}
+
+		svcWithLLM := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			LLMService:  stubLLM,
+		})
+
+		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, created.ID)
+		if err != nil {
+			t.Fatalf("AnalyzeGaps failed: %v", err)
+		}
+
+		// Reload branch from DB to verify persistence on branch record
+		reloaded, err := env.svc.GetBranch(ctx, env.defaultUser, created.ID)
+		if err != nil {
+			t.Fatalf("GetBranch failed: %v", err)
+		}
+		if reloaded.GapReport == nil {
+			t.Fatalf("expected GapReport to be persisted directly on versionless branch")
+		}
+		if reloaded.GapReport.OverallMatchSummary != report.OverallMatchSummary {
+			t.Errorf("expected summary %q, got %q", report.OverallMatchSummary, reloaded.GapReport.OverallMatchSummary)
+		}
+	})
+
+	t.Run("calculates skill coverage ratio accurately", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+
+		// Seed a skill on profile
+		s := &domain.Skill{
+			ID:       "skill-go-test",
+			UserID:   env.defaultUser,
+			Name:     "Go",
+			Category: "Languages",
+		}
+		if err := env.profileRepo.CreateSkill(ctx, s); err != nil {
+			t.Fatalf("failed to create skill: %v", err)
+		}
+
+		// Update branch with TargetRequirements containing "Go"
+		branchRec, err := env.svc.GetBranch(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("GetBranch failed: %v", err)
+		}
+		branchRec.TargetRequirements = "Must know Go, Distributed Systems, and Raft"
+		if _, err := env.svc.UpdateBranch(ctx, branchRec); err != nil {
+			t.Fatalf("UpdateBranch failed: %v", err)
+		}
+
+		stubLLM := &stubLLMService{
+			gapReport: &domain.GapReport{
+				OverallMatchSummary: "Coverage test",
+				MissingRequirements: []domain.GapItem{
+					{Requirement: "Raft consensus", Importance: domain.GapImportanceCritical},
+				},
+			},
+		}
+
+		svcWithLLM := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			LLMService:  stubLLM,
+		})
+
+		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("AnalyzeGaps failed: %v", err)
+		}
+		if report.SkillCoverageRatio == nil {
+			t.Fatalf("expected SkillCoverageRatio to be computed, got nil")
+		}
+		// Go matched (1), Gaps (1) => 1 / (1 + 1) = 0.50
+		if *report.SkillCoverageRatio <= 0.0 || *report.SkillCoverageRatio > 1.0 {
+			t.Errorf("expected ratio between 0.0 and 1.0, got %v", *report.SkillCoverageRatio)
+		}
+	})
+}
+
+
 

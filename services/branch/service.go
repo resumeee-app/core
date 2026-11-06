@@ -32,6 +32,7 @@ type Service interface {
 	ListVersions(ctx context.Context, branchID string) ([]domain.BranchVersion, error)
 	GetVersion(ctx context.Context, branchID, versionNumOrID string) (*domain.BranchVersion, error)
 	EditVersion(ctx context.Context, userID, branchID, parentVersionNumOrID string, editedContent domain.TailoredContent) (*domain.BranchVersion, error)
+	AnalyzeGaps(ctx context.Context, userID, branchID string) (*domain.GapReport, error)
 }
 
 // Config defines the dependencies required by the branch domain service.
@@ -43,6 +44,7 @@ type Config struct {
 	JobEnqueuer  worker.JobEnqueuer
 	Validator    validator.ProvenanceValidator
 	Renderer     domain.TemplateRenderer
+	LLMService   worker.LLMService
 	Logger       *slog.Logger
 }
 
@@ -54,6 +56,7 @@ type service struct {
 	jobEnqueuer  worker.JobEnqueuer
 	validator    validator.ProvenanceValidator
 	renderer     domain.TemplateRenderer
+	llmService   worker.LLMService
 	logger       *slog.Logger
 }
 
@@ -67,6 +70,7 @@ func NewService(cfg Config) Service {
 		jobEnqueuer:  cfg.JobEnqueuer,
 		validator:    cfg.Validator,
 		renderer:     cfg.Renderer,
+		llmService:   cfg.LLMService,
 		logger:       cfg.Logger,
 	}
 }
@@ -440,6 +444,7 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 		SourceType:         domain.SourceTypeManualEdit,
 		ParentVersionID:    &parentVer.ID,
 		TailoredContent:    &editedContent,
+		GapReport:          parentVer.GapReport,
 		HTMLOutput:         rendered.HTML,
 		MarkdownOutput:     rendered.Markdown,
 		PlainTextOutput:    rendered.PlainText,
@@ -530,3 +535,91 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 
 	return ver, nil
 }
+
+// AnalyzeGaps performs fast decoupled gap analysis for a branch against the master profile snapshot.
+func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*domain.GapReport, error) {
+	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
+	if err != nil {
+		return nil, err
+	}
+
+	snapshot, err := s.profileRepo.GetSnapshot(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch active version once if present
+	var activeVer *domain.BranchVersion
+	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" {
+		v, vErr := s.branchRepo.GetVersion(ctx, branch.ID, *branch.ActiveVersionID)
+		if vErr != nil && s.logger != nil {
+			s.logger.Warn("could not fetch active version for gap analysis", "branch_id", branch.ID, "version_id", *branch.ActiveVersionID, "err", vErr)
+		} else {
+			activeVer = v
+		}
+	}
+
+	var report *domain.GapReport
+	if s.llmService != nil {
+		req := domain.GenerationRequest{
+			MasterProfile: snapshot,
+			BranchContext: *branch,
+		}
+		if analyzer, ok := s.llmService.(interface {
+			GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error)
+		}); ok {
+			r, err := analyzer.GenerateGapAnalysis(ctx, req)
+			if err != nil {
+				return nil, fmt.Errorf("gap analysis generation failed: %w", err)
+			}
+			report = r
+		} else {
+			resp, err := s.llmService.GenerateTailoredResume(ctx, req)
+			if err != nil {
+				return nil, fmt.Errorf("gap analysis fallback generation failed: %w", err)
+			}
+			report = &resp.GapReport
+		}
+	} else {
+		// Fallback to active version gap report if present
+		if activeVer != nil && activeVer.GapReport != nil {
+			report = activeVer.GapReport
+		}
+		if report == nil {
+			report = &domain.GapReport{
+				OverallMatchSummary: "No qualification gaps detected or LLM service unconfigured.",
+				MissingRequirements: []domain.GapItem{},
+			}
+		}
+	}
+
+	// Normalization MUST occur before scoring so identified_gaps populate missing_requirements
+	report.Normalize()
+
+	if report.MatchScore == nil {
+		score := domain.CalculateDeterministicMatchScore(report.MissingRequirements)
+		report.MatchScore = &score
+	}
+
+	if report.SkillCoverageRatio == nil {
+		ratio := domain.CalculateSkillCoverageRatio(snapshot.AllSkills(), report.MissingRequirements, branch.TargetRequirements)
+		report.SkillCoverageRatio = &ratio
+	}
+
+	// Persist gap report directly on branch record
+	branch.GapReport = report
+	if err := s.branchRepo.UpdateBranch(ctx, branch); err != nil && s.logger != nil {
+		s.logger.Error("failed to persist gap report on branch", "branch_id", branch.ID, "err", err)
+	}
+
+	// Update active version in-place if branch has one
+	if activeVer != nil {
+		activeVer.GapReport = report
+		if err := s.branchRepo.CompleteVersion(ctx, activeVer); err != nil && s.logger != nil {
+			s.logger.Error("failed to persist gap report on active version", "branch_id", branch.ID, "version_id", activeVer.ID, "err", err)
+		}
+	}
+
+	return report, nil
+}
+

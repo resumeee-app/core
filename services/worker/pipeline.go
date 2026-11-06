@@ -187,6 +187,10 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 		ver.ModelUsed = model
 	}
 	ver.TailoredContent = sanitizedContent
+	if resp.GapReport.MatchScore == nil {
+		score := domain.CalculateDeterministicMatchScore(resp.GapReport.MissingRequirements)
+		resp.GapReport.MatchScore = &score
+	}
 	ver.GapReport = &resp.GapReport
 	ver.ValidationWarnings = warnings
 	ver.HTMLOutput = rendered.HTML

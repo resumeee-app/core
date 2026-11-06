@@ -90,9 +90,11 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 	sysBuilder.WriteString("3. Entity Exclusions & Pinnings:\n")
 	sysBuilder.WriteString("   - Any entity ID listed under Excluded Entity IDs MUST NOT appear in the tailored resume.\n")
 	sysBuilder.WriteString("   - Any entity ID listed under Pinned Entity IDs MUST be included in the tailored resume if present in the Master Profile.\n")
-	sysBuilder.WriteString("4. Objective Gap Analysis: In \"gap_report\", objectively assess the candidate's Master Profile against target requirements. ")
-	sysBuilder.WriteString("Identify missing or weak qualifications, assign importance (\"critical\", \"preferred\", or \"nice_to_have\"), ")
-	sysBuilder.WriteString("and formulate clarifying prompts to help the candidate provide missing experience or metrics.\n")
+	sysBuilder.WriteString("4. Objective Gap Analysis: In \"gap_report\", objectively assess the candidate's Master Profile against target requirements.\n")
+	sysBuilder.WriteString("   - Compare target requirements strictly against the candidate's verified Master Profile graph.\n")
+	sysBuilder.WriteString("   - Do NOT flag a qualification as missing if it is present or directly implied by an existing Fact or Skill in the Master Profile.\n")
+	sysBuilder.WriteString("   - Do NOT invent or extrapolate requirements that were not stated or clearly implied by the Target Requirements.\n")
+	sysBuilder.WriteString("   - For every gap, provide a \"missing_area\" category, an \"importance\" (\"critical\", \"preferred\", or \"nice_to_have\"), a \"clarifying_prompt\", and an actionable \"recommended_action\".\n")
 	sysBuilder.WriteString("</grounding_and_provenance_rules>\n")
 
 	// 3. Build User Prompt with 3-tier rules hierarchy, prior context, and profile data
@@ -196,6 +198,98 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 	userBuilder.WriteString("\n</master_profile_data>\n\n")
 
 	userBuilder.WriteString("Produce a valid JSON object matching the required schema with tailored_content and gap_report. Adhere strictly to the No Lies grounding rules.")
+
+	return &PromptPayload{
+		SystemPrompt: sysBuilder.String(),
+		UserPrompt:   userBuilder.String(),
+	}, nil
+}
+
+// BuildGapAnalysisPrompt constructs a targeted prompt payload designed exclusively for evaluating
+// candidate qualifications against target job requirements, avoiding full resume generation overhead.
+func BuildGapAnalysisPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
+	idMap := make(map[string]string)
+	if req.MasterProfile != nil {
+		recordSkills(idMap, req.MasterProfile.AllSkills())
+		for _, exp := range req.MasterProfile.Experiences {
+			recordShortID(idMap, exp.ID, exp.EffectiveShortID())
+			recordFacts(idMap, exp.Facts)
+		}
+		for _, proj := range req.MasterProfile.Projects {
+			recordShortID(idMap, proj.ID, proj.EffectiveShortID())
+			recordFacts(idMap, proj.Facts)
+		}
+		for _, edu := range req.MasterProfile.Education {
+			recordShortID(idMap, edu.ID, edu.EffectiveShortID())
+			recordFacts(idMap, edu.Facts)
+		}
+		for _, cert := range req.MasterProfile.Certifications {
+			recordShortID(idMap, cert.ID, cert.EffectiveShortID())
+		}
+		recordFacts(idMap, req.MasterProfile.Facts)
+	}
+
+	var sysBuilder strings.Builder
+	sysBuilder.Grow(1024)
+	sysBuilder.WriteString("You are Resumeee AI, an expert career strategist and technical recruiter.\n")
+	sysBuilder.WriteString("Your task is to perform an objective, rigorous gap analysis comparing a candidate's verified Master Profile against specific target role requirements.\n\n")
+
+	sysBuilder.WriteString("<grounding_and_provenance_rules>\n")
+	sysBuilder.WriteString("1. Anti-Hallucination (\"No Lies\" Invariant): You must evaluate the candidate strictly against their verified Master Profile graph.\n")
+	sysBuilder.WriteString("2. Objective Gap Analysis: In \"gap_report\", objectively assess the candidate's Master Profile against target requirements.\n")
+	sysBuilder.WriteString("   - Compare target requirements strictly against the candidate's verified Master Profile graph.\n")
+	sysBuilder.WriteString("   - Do NOT flag a qualification as missing if it is present or directly implied by an existing Fact or Skill in the Master Profile.\n")
+	sysBuilder.WriteString("   - Do NOT invent or extrapolate requirements that were not stated or clearly implied by the Target Requirements.\n")
+	sysBuilder.WriteString("   - For every gap, provide a \"missing_area\" category, an \"importance\" (\"critical\", \"preferred\", or \"nice_to_have\"), a \"clarifying_prompt\", and an actionable \"recommended_action\".\n")
+	sysBuilder.WriteString("   - In \"overall_match_summary\", summarize alignment with the target requirements.\n")
+	sysBuilder.WriteString("   - In \"strategic_recommendations\", provide actionable advice for addressing gaps or framing experience.\n")
+	sysBuilder.WriteString("</grounding_and_provenance_rules>\n")
+
+	var userBuilder strings.Builder
+	userBuilder.Grow(4096)
+
+	userBuilder.WriteString("<target_context>\n")
+	targetRole := strings.TrimSpace(req.BranchContext.TargetRole)
+	if targetRole == "" {
+		targetRole = "Not specified"
+	}
+	fmt.Fprintf(&userBuilder, "Target Role: %s\n", targetRole)
+
+	targetCompany := strings.TrimSpace(req.BranchContext.TargetCompany)
+	if targetCompany == "" {
+		targetCompany = "Not specified"
+	}
+	fmt.Fprintf(&userBuilder, "Target Company: %s\n", targetCompany)
+
+	userBuilder.WriteString("Target Requirements:\n")
+	if strings.TrimSpace(req.BranchContext.TargetRequirements) != "" {
+		userBuilder.WriteString(strings.TrimSpace(req.BranchContext.TargetRequirements))
+	} else {
+		userBuilder.WriteString("None")
+	}
+	userBuilder.WriteString("\n")
+
+	if strings.TrimSpace(req.BranchContext.BranchInstructions) != "" {
+		userBuilder.WriteString("Custom Branch Instructions:\n")
+		userBuilder.WriteString(strings.TrimSpace(req.BranchContext.BranchInstructions))
+		userBuilder.WriteString("\n")
+	}
+	userBuilder.WriteString("</target_context>\n\n")
+
+	userBuilder.WriteString("<master_profile_data>\n")
+	if req.MasterProfile != nil {
+		projectedProfile := projectMasterProfileSnapshot(req.MasterProfile, idMap)
+		profileJSON, err := json.MarshalIndent(projectedProfile, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize master profile snapshot: %w", err)
+		}
+		userBuilder.WriteString(string(profileJSON))
+	} else {
+		userBuilder.WriteString("{}\n")
+	}
+	userBuilder.WriteString("\n</master_profile_data>\n\n")
+
+	userBuilder.WriteString("Produce a valid JSON object matching the required schema with gap_report. Adhere strictly to the No Lies grounding rules.")
 
 	return &PromptPayload{
 		SystemPrompt: sysBuilder.String(),

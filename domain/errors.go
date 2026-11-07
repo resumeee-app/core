@@ -24,4 +24,11 @@ var (
 
 	// ErrConflict is returned when an entity violates a unique constraint or concurrency version precondition.
 	ErrConflict = errors.New("resource conflict")
+
+	// ErrStrategyImmutable is returned when attempting to modify or delete a built-in strategy.
+	ErrStrategyImmutable = errors.New("built-in strategy cannot be modified or deleted")
+
+	// ErrForbidden is returned when a user attempts to access an unauthorized or foreign resource.
+	ErrForbidden = errors.New("access forbidden")
 )
+

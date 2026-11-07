@@ -3,6 +3,7 @@ package domain_test
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -415,3 +416,59 @@ func TestDomainErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
+	// 1. Assert TailoringStrategy.IsBuiltIn()
+	builtinStrat := domain.TailoringStrategy{ID: "builtin-1-page-swe"}
+	customStrat := domain.TailoringStrategy{ID: "strat-custom-1"}
+	if !builtinStrat.IsBuiltIn() {
+		t.Errorf("expected builtin-1-page-swe to be built-in")
+	}
+	if customStrat.IsBuiltIn() {
+		t.Errorf("expected strat-custom-1 to NOT be built-in")
+	}
+
+	// 2. Assert SuggestedThemeID serializes to null in JSON when omitted
+	stratNoTheme := domain.TailoringStrategy{
+		ID:                 "strat-1",
+		UserID:             "user-1",
+		Name:               "1-Page SWE",
+		SystemInstructions: "Focus on latency",
+		SuggestedThemeID:   nil,
+	}
+	bytesNoTheme, err := json.Marshal(stratNoTheme)
+	if err != nil {
+		t.Fatalf("failed to marshal strategy: %v", err)
+	}
+	if !strings.Contains(string(bytesNoTheme), `"suggested_theme_id":null`) {
+		t.Errorf("expected suggested_theme_id to serialize to null, got: %s", string(bytesNoTheme))
+	}
+
+	themeID := "builtin-standard-clean"
+	stratWithTheme := domain.TailoringStrategy{
+		ID:                 "strat-2",
+		UserID:             "user-1",
+		Name:               "1-Page SWE",
+		SystemInstructions: "Focus on latency",
+		SuggestedThemeID:   &themeID,
+	}
+	bytesWithTheme, err := json.Marshal(stratWithTheme)
+	if err != nil {
+		t.Fatalf("failed to marshal strategy with theme: %v", err)
+	}
+	if !strings.Contains(string(bytesWithTheme), `"suggested_theme_id":"builtin-standard-clean"`) {
+		t.Errorf("expected suggested_theme_id in JSON, got: %s", string(bytesWithTheme))
+	}
+
+	// 3. Assert TargetResume directly owns TemplateSetID
+	targetResume := domain.TargetResume{
+		ID:            "resume-1",
+		UserID:        "user-1",
+		Name:          "Stripe - Staff Backend",
+		TemplateSetID: "builtin-standard-clean",
+	}
+	if targetResume.TemplateSetID != "builtin-standard-clean" {
+		t.Errorf("expected TargetResume to directly own TemplateSetID, got: %s", targetResume.TemplateSetID)
+	}
+}
+

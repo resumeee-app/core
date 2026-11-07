@@ -3,6 +3,8 @@ package domain
 import (
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // OwnerType represents the polymorphic owner entity type of a Fact.
@@ -267,32 +269,75 @@ func (f Fact) EffectiveShortID() string {
 	return ShortenID(f.ID)
 }
 
-// Preset represents Tier-2 reusable LLM and formatting configurations.
-type Preset struct {
-	ID                 string `json:"id" gorm:"primaryKey;type:text"`
-	UserID             string `json:"user_id" gorm:"index;not null"`
-	Name               string `json:"name" gorm:"not null"`
-	Description        string `json:"description,omitempty"`
-	SystemInstructions string `json:"system_instructions" gorm:"not null"` // Tier 2 LLM instructions
-	TemplateSetID      string `json:"template_set_id" gorm:"index;not null"`
-	ProviderOverride   string `json:"provider_override,omitempty"`
-	ModelOverride      string `json:"model_override,omitempty"`
-	// ReasoningLevel defines the optional reasoning effort or depth constraint for thinking models (enum: "none", "low", "medium", "high").
-	ReasoningLevel     string    `json:"reasoning_level,omitempty"`
-	IncludeAdminFields bool      `json:"include_admin_fields"` // True for immigration/government presets
+// TailoringStrategy defines reusable prompt engineering directives, reasoning depth,
+// and density rules for LLM resume tailoring.
+//
+// Invariant: A TailoringStrategy defines how content is synthesized and prioritized;
+// it has zero mandatory coupling to visual templates or CSS layouts.
+type TailoringStrategy struct {
+	ID                 string    `json:"id" gorm:"primaryKey;type:text"`
+	UserID             string    `json:"user_id" gorm:"index;not null"`
+	Name               string    `json:"name" gorm:"not null"` // e.g., "1-Page SWE", "Executive Leadership"
+	Description        string    `json:"description,omitempty"`
+	SystemInstructions string    `json:"system_instructions" gorm:"not null"` // Tier 2 LLM instructions
+
+	// SuggestedThemeID optionally provides a recommended visual layout in creation wizards.
+	// Nullable; when nil, the application defaults to the system standard theme.
+	SuggestedThemeID   *string   `json:"suggested_theme_id" gorm:"index"`
+
+	// TemplateSetID is an alias retained for backwards compatibility with legacy UI/forms.
+	TemplateSetID      string    `json:"template_set_id,omitempty" gorm:"column:template_set_id"`
+
+	ProviderOverride   string    `json:"provider_override,omitempty"`
+	ModelOverride      string    `json:"model_override,omitempty"`
+	ReasoningLevel     string    `json:"reasoning_level,omitempty"` // "none", "low", "medium", "high"
+	IncludeAdminFields bool      `json:"include_admin_fields"`      // Government / visa CV admin fields
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
-// IsBuiltIn returns true if the preset is a system-provided built-in preset.
-func (p Preset) IsBuiltIn() bool {
-	return strings.HasPrefix(p.ID, "builtin-")
+// TableName overrides the GORM table name to tailoring_strategies.
+func (TailoringStrategy) TableName() string {
+	return "tailoring_strategies"
 }
 
-// TemplateSetName returns an empty string on domain.Preset, allowing view models to override it.
-func (p Preset) TemplateSetName() string {
+// BeforeCreate synchronizes aliases prior to insertion.
+func (s *TailoringStrategy) BeforeCreate(_ *gorm.DB) error {
+	if s.SuggestedThemeID == nil && s.TemplateSetID != "" {
+		themeID := s.TemplateSetID
+		s.SuggestedThemeID = &themeID
+	}
+	if s.TemplateSetID == "" && s.SuggestedThemeID != nil {
+		s.TemplateSetID = *s.SuggestedThemeID
+	}
+	return nil
+}
+
+// BeforeSave synchronizes aliases prior to saving.
+func (s *TailoringStrategy) BeforeSave(_ *gorm.DB) error {
+	if s.SuggestedThemeID == nil && s.TemplateSetID != "" {
+		themeID := s.TemplateSetID
+		s.SuggestedThemeID = &themeID
+	}
+	if s.TemplateSetID == "" && s.SuggestedThemeID != nil {
+		s.TemplateSetID = *s.SuggestedThemeID
+	}
+	return nil
+}
+
+// IsBuiltIn returns true if the strategy is a system-provided built-in strategy.
+// Built-in strategies are immutable and protected against update or deletion.
+func (s TailoringStrategy) IsBuiltIn() bool {
+	return strings.HasPrefix(s.ID, "builtin-")
+}
+
+// TemplateSetName returns an empty string on domain.TailoringStrategy, allowing view models to override it.
+func (s TailoringStrategy) TemplateSetName() string {
 	return ""
 }
+
+// Preset is an alias to TailoringStrategy for backwards compatibility.
+type Preset = TailoringStrategy
 
 // TemplateSet bundles HTML, Markdown, and Plain Text Go templates stored in the database.
 type TemplateSet struct {
@@ -309,6 +354,11 @@ type TemplateSet struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// TableName overrides the GORM table name to template_sets.
+func (TemplateSet) TableName() string {
+	return "template_sets"
+}
+
 // Canonical default branch constants and helpers.
 const DefaultBranchName = "Master Profile (Default)"
 
@@ -317,47 +367,85 @@ func DefaultBranchID(userID string) string {
 	return "branch-default-" + userID
 }
 
-// Branch represents a tailored resume line (Tier-3 context + rules + version pointer).
-type Branch struct {
-	ID                       string    `json:"id" gorm:"primaryKey;type:text"`
-	UserID                   string    `json:"user_id" gorm:"index;not null"`
-	Name                     string    `json:"name" gorm:"not null"` // e.g., "Stripe - Staff Backend Engineer"
-	IsDefault                bool      `json:"is_default" gorm:"default:false;index"`
-	TargetRole               string    `json:"target_role,omitempty"`
-	TargetCompany            string    `json:"target_company,omitempty"`
-	TargetRequirements       string    `json:"target_requirements,omitempty"` // Job description or immigration criteria
-	BranchInstructions       string    `json:"branch_instructions,omitempty"` // Tier 3 custom LLM instructions
-	PresetID                 *string   `json:"preset_id,omitempty" gorm:"index"`
-	TemplateSetID            string    `json:"template_set_id" gorm:"index;not null"`
-	ProviderOverride         string    `json:"provider_override,omitempty"`
-	ModelOverride            string    `json:"model_override,omitempty"`
-	PinnedEntityIDs          []string   `json:"pinned_entity_ids,omitempty" gorm:"serializer:json"`   // Force-included Master IDs
-	ExcludedEntityIDs        []string   `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"` // Force-excluded Master IDs
+// TargetResume (Branch) represents a targeted resume variant tailored for a specific opportunity.
+type TargetResume struct {
+	ID                       string     `json:"id" gorm:"primaryKey;type:text"`
+	UserID                   string     `json:"user_id" gorm:"index;not null"`
+	Name                     string     `json:"name" gorm:"not null"` // e.g., "Stripe - Staff Backend Engineer"
+	IsDefault                bool       `json:"is_default" gorm:"default:false;index"`
+	TargetRole               string     `json:"target_role,omitempty"`
+	TargetCompany            string     `json:"target_company,omitempty"`
+	TargetRequirements       string     `json:"target_requirements,omitempty"` // Job description text
+	CustomDirectives         string     `json:"custom_directives,omitempty"`   // Tier 3 custom prompt directives
+	BranchInstructions       string     `json:"branch_instructions,omitempty" gorm:"column:branch_instructions"` // Compatibility alias
+	TailoringStrategyID      *string    `json:"tailoring_strategy_id,omitempty" gorm:"index"`
+	PresetID                 *string    `json:"preset_id,omitempty" gorm:"column:preset_id;index"` // Compatibility alias
+	TemplateSetID            string     `json:"template_set_id" gorm:"index;not null"`
+	ProviderOverride         string     `json:"provider_override,omitempty"`
+	ModelOverride            string     `json:"model_override,omitempty"`
+	PinnedEntityIDs          []string   `json:"pinned_entity_ids,omitempty" gorm:"serializer:json"`
+	ExcludedEntityIDs        []string   `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"`
 	ActiveVersionID          *string    `json:"active_version_id,omitempty" gorm:"index"`
 	GapReport                *GapReport `json:"gap_report,omitempty" gorm:"serializer:json"`
 	LastSyncedMasterRevision int64      `json:"last_synced_master_revision"`
-	IsStale                  bool      `json:"is_stale" gorm:"-"` // Computed: LastSyncedMasterRevision < Profile.MasterRevision
-	CreatedAt                time.Time `json:"created_at"`
-	UpdatedAt                time.Time `json:"updated_at"`
+	IsStale                  bool       `json:"is_stale" gorm:"-"` // Computed: LastSyncedMasterRevision < Profile.MasterRevision
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
-// CanTailor returns true if the branch can be tailored via LLM or manual bullet edits.
+// TableName overrides the GORM table name to target_resumes.
+func (TargetResume) TableName() string {
+	return "target_resumes"
+}
+
+// syncAliases harmonizes TailoringStrategyID <-> PresetID and CustomDirectives <-> BranchInstructions.
+func (b *TargetResume) syncAliases() {
+	if b.TailoringStrategyID == nil && b.PresetID != nil {
+		b.TailoringStrategyID = b.PresetID
+	}
+	if b.PresetID == nil && b.TailoringStrategyID != nil {
+		b.PresetID = b.TailoringStrategyID
+	}
+	if b.CustomDirectives == "" && b.BranchInstructions != "" {
+		b.CustomDirectives = b.BranchInstructions
+	}
+	if b.BranchInstructions == "" && b.CustomDirectives != "" {
+		b.BranchInstructions = b.CustomDirectives
+	}
+}
+
+// BeforeCreate synchronizes aliases prior to insertion.
+func (b *TargetResume) BeforeCreate(_ *gorm.DB) error {
+	b.syncAliases()
+	return nil
+}
+
+// BeforeSave synchronizes aliases prior to saving.
+func (b *TargetResume) BeforeSave(_ *gorm.DB) error {
+	b.syncAliases()
+	return nil
+}
+
+// CanTailor returns true if the branch/resume can be tailored via LLM or manual bullet edits.
 // Default branches directly render the master profile and cannot be tailored.
-func (b *Branch) CanTailor() bool {
+func (b *TargetResume) CanTailor() bool {
 	return !b.IsDefault
 }
 
-// IsStaleRevision returns true if the branch's last synced master revision is behind the given master revision.
-func (b *Branch) IsStaleRevision(currentMasterRevision int64) bool {
+// IsStaleRevision returns true if the last synced master revision is behind the given master revision.
+func (b *TargetResume) IsStaleRevision(currentMasterRevision int64) bool {
 	return b.LastSyncedMasterRevision < currentMasterRevision
 }
 
-// PresetName returns an empty string on domain.Branch, allowing view models to override it.
-func (b Branch) PresetName() string {
+// PresetName returns an empty string on domain.TargetResume, allowing view models to override it.
+func (b TargetResume) PresetName() string {
 	return ""
 }
 
-// VersionStatus represents the lifecycle state of a BranchVersion.
+// Branch is an alias to TargetResume.
+type Branch = TargetResume
+
+// VersionStatus represents the lifecycle state of a ResumeVersion / BranchVersion.
 type VersionStatus string
 
 const (
@@ -368,14 +456,16 @@ const (
 	VersionStatusFailed                VersionStatus = "failed"
 )
 
-// BranchVersion is an immutable snapshot tracking its own async generation lifecycle and rendered outputs.
-type BranchVersion struct {
+// ResumeVersion (BranchVersion) is an immutable snapshot tracking its generation lifecycle and outputs.
+type ResumeVersion struct {
 	ID                 string           `json:"id" gorm:"primaryKey;type:text"`
-	BranchID           string           `json:"branch_id" gorm:"uniqueIndex:idx_branch_version;not null"`
-	VersionNumber      int              `json:"version_number" gorm:"uniqueIndex:idx_branch_version;not null"` // Sequential per branch: 1, 2, 3...
+	ResumeID           string           `json:"resume_id" gorm:"uniqueIndex:idx_resume_version,priority:1;column:resume_id;not null"`
+	BranchID           string           `json:"branch_id,omitempty" gorm:"column:branch_id;index"` // Compatibility alias
+	VersionNumber      int              `json:"version_number" gorm:"uniqueIndex:idx_resume_version,priority:2;column:version_number;not null"`
 	Status             VersionStatus    `json:"status" gorm:"index;not null"`
 	MasterRevisionUsed int64            `json:"master_revision_used"`
 	TemplateSetIDUsed  string           `json:"template_set_id_used"`
+	StrategyIDUsed     *string          `json:"strategy_id_used,omitempty"`
 	ProviderUsed       string           `json:"provider_used"`
 	ModelUsed          string           `json:"model_used"`
 	SourceType         SourceType       `json:"source_type"` // "llm_generation" or "manual_edit"
@@ -390,6 +480,36 @@ type BranchVersion struct {
 	CreatedAt          time.Time        `json:"created_at"`
 	CompletedAt        *time.Time       `json:"completed_at,omitempty"`
 }
+
+// TableName overrides the GORM table name to resume_versions.
+func (ResumeVersion) TableName() string {
+	return "resume_versions"
+}
+
+// syncAliases harmonizes resume_id and branch_id.
+func (v *ResumeVersion) syncAliases() {
+	if v.ResumeID == "" && v.BranchID != "" {
+		v.ResumeID = v.BranchID
+	}
+	if v.BranchID == "" && v.ResumeID != "" {
+		v.BranchID = v.ResumeID
+	}
+}
+
+// BeforeCreate synchronizes resume_id and branch_id prior to insertion.
+func (v *ResumeVersion) BeforeCreate(_ *gorm.DB) error {
+	v.syncAliases()
+	return nil
+}
+
+// BeforeSave synchronizes resume_id and branch_id prior to saving.
+func (v *ResumeVersion) BeforeSave(_ *gorm.DB) error {
+	v.syncAliases()
+	return nil
+}
+
+// BranchVersion is an alias to ResumeVersion.
+type BranchVersion = ResumeVersion
 
 // MasterProfileSnapshot is an aggregate capture of the entire career graph at a specific MasterRevision.
 type MasterProfileSnapshot struct {

@@ -242,28 +242,6 @@ The expected response must be a valid JSON object conforming strictly to the fol
                 "description": "End date of employment in YYYY-MM or YYYY format, or 'Present'",
                 "type": "string"
               },
-              "hours_per_week": {
-                "description": "Average hours worked per week",
-                "type": "integer"
-              },
-              "location": {
-                "description": "Workplace location",
-                "properties": {
-                  "city": {
-                    "description": "City where work was performed",
-                    "type": "string"
-                  },
-                  "country_code": {
-                    "description": "ISO 3166-1 alpha-2 two-letter country code (e.g. US, CA, GB)",
-                    "type": "string"
-                  },
-                  "region": {
-                    "description": "State, province, or region",
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              },
               "role_title": {
                 "description": "Professional job title or position held",
                 "type": "string"
@@ -274,14 +252,6 @@ The expected response must be a valid JSON object conforming strictly to the fol
               },
               "start_date": {
                 "description": "Start date of employment in YYYY-MM or YYYY format",
-                "type": "string"
-              },
-              "supervisor_contact": {
-                "description": "Contact email or phone number for supervisor",
-                "type": "string"
-              },
-              "supervisor_name": {
-                "description": "Name of supervisor or reporting manager",
                 "type": "string"
               }
             },

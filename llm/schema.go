@@ -118,36 +118,6 @@ func GenerationResponseSchema() map[string]any {
 									"type":        "string",
 									"description": "End date of employment in YYYY-MM or YYYY format, or 'Present'",
 								},
-								"location": map[string]any{
-									"type":        "object",
-									"description": "Workplace location",
-									"properties": map[string]any{
-										"city": map[string]any{
-											"type":        "string",
-											"description": "City where work was performed",
-										},
-										"region": map[string]any{
-											"type":        "string",
-											"description": "State, province, or region",
-										},
-										"country_code": map[string]any{
-											"type":        "string",
-											"description": "ISO 3166-1 alpha-2 two-letter country code (e.g. US, CA, GB)",
-										},
-									},
-								},
-								"hours_per_week": map[string]any{
-									"type":        "integer",
-									"description": "Average hours worked per week",
-								},
-								"supervisor_name": map[string]any{
-									"type":        "string",
-									"description": "Name of supervisor or reporting manager",
-								},
-								"supervisor_contact": map[string]any{
-									"type":        "string",
-									"description": "Contact email or phone number for supervisor",
-								},
 								"duties_summary": map[string]any{
 									"type":        "string",
 									"description": "High-level summary of responsibilities and scope of the role",
@@ -896,6 +866,179 @@ func GapReportSchemaJSON() (string, error) {
 // ResumeExtractResponseSchemaJSON returns the indented JSON representation of ResumeExtractResponseSchema().
 func ResumeExtractResponseSchemaJSON() (string, error) {
 	b, err := json.MarshalIndent(ResumeExtractResponseSchema(), "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// leanSkillItemSchema returns the JSON Schema definition for a single LeanSkill item.
+func leanSkillItemSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id":               map[string]any{"type": "string", "description": "Compact short identifier for citation (e.g. sk-1)"},
+			"name":             map[string]any{"type": "string", "description": "Skill name"},
+			"category":         map[string]any{"type": "string", "description": "Skill functional category"},
+			"proficiency":      map[string]any{"type": "string", "description": "Proficiency level"},
+			"years_experience": map[string]any{"type": "number", "description": "Years of experience"},
+			"keywords": map[string]any{
+				"type":        "array",
+				"description": "Sub-skills and related keywords",
+				"items":       map[string]any{"type": "string", "description": "Keyword or sub-skill term"},
+			},
+		},
+		"required": []string{"id", "name"},
+	}
+}
+
+// leanFactItemSchema returns the JSON Schema definition for a single LeanFact item.
+func leanFactItemSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id":         map[string]any{"type": "string", "description": "Compact short identifier for bullet citation (e.g. fact-1)"},
+			"owner_id":   map[string]any{"type": "string", "description": "Parent entity short identifier"},
+			"owner_type": map[string]any{"type": "string", "description": "Parent entity type"},
+			"statement":  map[string]any{"type": "string", "description": "Factual accomplishment description"},
+			"impact":     map[string]any{"type": "string", "description": "Quantifiable outcome or metric"},
+			"skills": map[string]any{
+				"type":        "array",
+				"description": "Skills utilized in this factual accomplishment",
+				"items":       leanSkillItemSchema(),
+			},
+		},
+		"required": []string{"id", "statement"},
+	}
+}
+
+// LeanMasterProfileSchema returns the canonical JSON Schema for LeanMasterProfile,
+// defining only LLM-relevant public career profile attributes and short identifiers for provenance,
+// with zero leakage of internal database or multi-tenancy attributes.
+func LeanMasterProfileSchema() map[string]any {
+	return map[string]any{
+		"type":        "object",
+		"description": "Minimal, lean master profile structure for LLM grounding with short IDs",
+		"properties": map[string]any{
+			"profile": map[string]any{
+				"type":        "object",
+				"description": "Candidate biographical and career summary",
+				"properties": map[string]any{
+					"headline": map[string]any{"type": "string", "description": "Professional headline"},
+					"summary":  map[string]any{"type": "string", "description": "Candidate summary"},
+				},
+			},
+			"skills": map[string]any{
+				"type":        "array",
+				"description": "Candidate technical and domain competencies",
+				"items":       leanSkillItemSchema(),
+			},
+			"experiences": map[string]any{
+				"type":        "array",
+				"description": "Employment history",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":              map[string]any{"type": "string", "description": "Compact short identifier for entity citation (e.g. exp-1)"},
+						"company":         map[string]any{"type": "string", "description": "Employer name"},
+						"role_title":      map[string]any{"type": "string", "description": "Position title"},
+						"employment_type": map[string]any{"type": "string", "description": "Employment type"},
+						"start_date":      map[string]any{"type": "string", "description": "Employment start date"},
+						"end_date":        map[string]any{"type": "string", "description": "Employment end date"},
+						"is_current":      map[string]any{"type": "boolean", "description": "Current position flag"},
+						"duties_summary":  map[string]any{"type": "string", "description": "Role duties summary"},
+						"facts": map[string]any{
+							"type":        "array",
+							"description": "Achievements and metrics belonging to experience",
+							"items":       leanFactItemSchema(),
+						},
+						"skills": map[string]any{
+							"type":        "array",
+							"description": "Skills utilized in experience",
+							"items":       leanSkillItemSchema(),
+						},
+					},
+					"required": []string{"id", "company", "role_title"},
+				},
+			},
+			"projects": map[string]any{
+				"type":        "array",
+				"description": "Technical and open-source projects",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":         map[string]any{"type": "string", "description": "Compact short identifier for entity citation (e.g. proj-1)"},
+						"name":       map[string]any{"type": "string", "description": "Project title"},
+						"role":       map[string]any{"type": "string", "description": "Role in project"},
+						"url":        map[string]any{"type": "string", "description": "Project URL"},
+						"start_date": map[string]any{"type": "string", "description": "Start date"},
+						"end_date":   map[string]any{"type": "string", "description": "End date"},
+						"summary":    map[string]any{"type": "string", "description": "Project summary"},
+						"facts": map[string]any{
+							"type":        "array",
+							"description": "Facts under project",
+							"items":       leanFactItemSchema(),
+						},
+						"skills": map[string]any{
+							"type":        "array",
+							"description": "Skills under project",
+							"items":       leanSkillItemSchema(),
+						},
+					},
+					"required": []string{"id", "name"},
+				},
+			},
+			"education": map[string]any{
+				"type":        "array",
+				"description": "Academic degrees and higher education",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":          map[string]any{"type": "string", "description": "Compact short identifier for entity citation (e.g. edu-1)"},
+						"institution": map[string]any{"type": "string", "description": "Institution name"},
+						"degree":      map[string]any{"type": "string", "description": "Degree earned"},
+						"field":       map[string]any{"type": "string", "description": "Major or field of study"},
+						"start_date":  map[string]any{"type": "string", "description": "Start date"},
+						"end_date":    map[string]any{"type": "string", "description": "Completion date"},
+						"score":       map[string]any{"type": "string", "description": "GPA or academic score"},
+						"facts": map[string]any{
+							"type":        "array",
+							"description": "Facts under education",
+							"items":       leanFactItemSchema(),
+						},
+					},
+					"required": []string{"id", "institution"},
+				},
+			},
+			"certifications": map[string]any{
+				"type":        "array",
+				"description": "Professional certifications and credentials",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":      map[string]any{"type": "string", "description": "Compact short identifier for entity citation (e.g. cert-1)"},
+						"name":    map[string]any{"type": "string", "description": "Certification name"},
+						"issuer":  map[string]any{"type": "string", "description": "Issuing authority"},
+						"date":    map[string]any{"type": "string", "description": "Date certified"},
+						"url":     map[string]any{"type": "string", "description": "Verification link"},
+						"summary": map[string]any{"type": "string", "description": "Credential summary"},
+					},
+					"required": []string{"id", "name"},
+				},
+			},
+			"facts": map[string]any{
+				"type":        "array",
+				"description": "Atomic factual achievements and responsibilities",
+				"items":       leanFactItemSchema(),
+			},
+		},
+		"required": []string{"profile"},
+	}
+}
+
+// LeanMasterProfileSchemaJSON returns the indented JSON representation of LeanMasterProfileSchema().
+func LeanMasterProfileSchemaJSON() (string, error) {
+	b, err := json.MarshalIndent(LeanMasterProfileSchema(), "", "  ")
 	if err != nil {
 		return "", err
 	}

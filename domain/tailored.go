@@ -19,11 +19,11 @@ const (
 // TailoredContent is the canonical structured payload produced by the LLM (or manual edit) and passed to Go templates.
 type TailoredContent struct {
 	Summary        string               `json:"summary"`
-	SkillGroups    []TailoredSkillGroup `json:"skill_groups"`
-	Experiences    []TailoredExperience `json:"experiences"`
-	Projects       []TailoredProject    `json:"projects"`
-	Education      []TailoredEducation  `json:"education"`
-	Certifications []TailoredCert       `json:"certifications"`
+	SkillGroups    []TailoredSkillGroup `json:"skill_groups,omitempty"`
+	Experiences    []TailoredExperience `json:"experiences,omitempty"`
+	Projects       []TailoredProject    `json:"projects,omitempty"`
+	Education      []TailoredEducation  `json:"education,omitempty"`
+	Certifications []TailoredCert       `json:"certifications,omitempty"`
 }
 
 // TailoredSkillGroup groups categorized skills with citations to source Skill.IDs.
@@ -40,8 +40,8 @@ type TailoredExperience struct {
 	RoleTitle         string           `json:"role_title"`
 	StartDate         Date             `json:"start_date"`
 	EndDate           *Date            `json:"end_date,omitempty"`
-	Location          Location         `json:"location"`
-	CompanyLocation   Location         `json:"company_location,omitempty"`
+	Location          Location         `json:"location,omitempty,omitzero"`
+	CompanyLocation   Location         `json:"company_location,omitempty,omitzero"`
 	CompanyContact    *ContactDetail   `json:"company_contact,omitempty"`
 	HoursPerWeek      *int             `json:"hours_per_week,omitempty"`
 	SupervisorName    string           `json:"supervisor_name,omitempty"`
@@ -76,6 +76,7 @@ type TailoredEducation struct {
 	Field          string           `json:"field"`
 	StartDate      *Date            `json:"start_date,omitempty"`
 	EndDate        *Date            `json:"end_date,omitempty"`
+	Location       Location         `json:"location,omitempty,omitzero"`
 	Score          string           `json:"score,omitempty"`
 	Bullets        []TailoredBullet `json:"bullets,omitempty"`
 }

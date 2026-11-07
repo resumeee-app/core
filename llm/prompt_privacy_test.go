@@ -118,8 +118,8 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 	if !strings.Contains(payload.UserPrompt, privacy.PlaceholderPhone) {
 		t.Errorf("UserPrompt missing PlaceholderPhone %q", privacy.PlaceholderPhone)
 	}
-	if !strings.Contains(payload.UserPrompt, "https://social.example.com/profile-1") {
-		t.Errorf("UserPrompt missing social profile URL placeholder")
+	if strings.Contains(payload.UserPrompt, "https://social.example.com/profile-1") {
+		t.Errorf("UserPrompt should not contain stripped social profile URL placeholder")
 	}
 
 	// Verify original request MasterProfile was NOT mutated

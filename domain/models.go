@@ -58,6 +58,11 @@ type Location struct {
 	Region      string `json:"region,omitempty"`
 }
 
+// IsZero reports whether all location attributes are empty.
+func (l Location) IsZero() bool {
+	return l.Address == "" && l.PostalCode == "" && l.City == "" && l.CountryCode == "" && l.Region == ""
+}
+
 // SocialLink represents an external digital presence or portfolio URL.
 type SocialLink struct {
 	Network  string `json:"network"`

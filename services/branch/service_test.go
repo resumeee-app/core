@@ -1059,11 +1059,43 @@ func TestService_GetPromptPreview_ContactPrivacy(t *testing.T) {
 	if !strings.Contains(preview.UserPrompt, privacy.PlaceholderFullName) {
 		t.Errorf("UserPrompt missing PlaceholderFullName %q", privacy.PlaceholderFullName)
 	}
-	if !strings.Contains(preview.UserPrompt, privacy.PlaceholderEmail) {
-		t.Errorf("UserPrompt missing PlaceholderEmail %q", privacy.PlaceholderEmail)
+	if strings.Contains(preview.UserPrompt, privacy.PlaceholderEmail) {
+		t.Errorf("UserPrompt should not contain stripped PlaceholderEmail %q", privacy.PlaceholderEmail)
 	}
-	if !strings.Contains(preview.UserPrompt, privacy.PlaceholderPhone) {
-		t.Errorf("UserPrompt missing PlaceholderPhone %q", privacy.PlaceholderPhone)
+	if strings.Contains(preview.UserPrompt, privacy.PlaceholderPhone) {
+		t.Errorf("UserPrompt should not contain stripped PlaceholderPhone %q", privacy.PlaceholderPhone)
+	}
+}
+
+func TestService_GetPromptPreview_ZeroInternalLeakage(t *testing.T) {
+	ctx := context.Background()
+	env := setupTestBranchEnv(t, 10)
+
+	preview, err := env.svc.GetPromptPreview(ctx, env.defaultUser, env.branchID, nil)
+	if err != nil {
+		t.Fatalf("GetPromptPreview failed: %v", err)
+	}
+
+	combined := preview.SystemPrompt + "\n" + preview.UserPrompt
+
+	forbiddenTokens := []string{
+		`"user_id"`,
+		env.defaultUser,
+		`"created_at"`,
+		`"updated_at"`,
+		`"is_global"`,
+		`"metadata"`,
+		`"master_revision"`,
+		`"exported_at"`,
+		`"default_provider"`,
+		`"default_model"`,
+		`"short_id"`,
+	}
+
+	for _, token := range forbiddenTokens {
+		if strings.Contains(combined, token) {
+			t.Errorf("GetPromptPreview leaked internal token %s into prompt", token)
+		}
 	}
 }
 

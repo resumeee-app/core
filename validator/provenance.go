@@ -376,6 +376,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				Degree:         origEdu.Degree,
 				Field:          origEdu.Field,
 				StartDate:      origEdu.StartDate,
+				Location:       origEdu.Location,
 				Score:          origEdu.Score,
 				Bullets:        sanitizedBullets,
 			}

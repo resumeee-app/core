@@ -140,6 +140,7 @@ func SnapshotToTailoredContent(snapshot *MasterProfileSnapshot) *TailoredContent
 			Field:          edu.Field,
 			StartDate:      edu.StartDate,
 			EndDate:        edu.EndDate,
+			Location:       edu.Location,
 			Score:          edu.Score,
 			Bullets:        mapFactsToBullets(facts),
 		})

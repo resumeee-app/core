@@ -59,6 +59,15 @@ func TestGapAnalysisResponseSchema_EnrichedFieldDescriptions(t *testing.T) {
 	recursivelyCheckDescriptions(t, "root", schema)
 }
 
+func TestLeanMasterProfileSchema_EnrichedFieldDescriptions(t *testing.T) {
+	schema := llm.LeanMasterProfileSchema()
+	if schema == nil {
+		t.Fatal("LeanMasterProfileSchema returned nil")
+	}
+
+	recursivelyCheckDescriptions(t, "root", schema)
+}
+
 func TestGapReportSchema_Integrity(t *testing.T) {
 	schema := llm.GapReportSchema()
 	if schema == nil {
@@ -103,6 +112,11 @@ func TestSchemaJSON_Helpers(t *testing.T) {
 			name:       "ResumeExtractResponseSchemaJSON",
 			jsonGetter: llm.ResumeExtractResponseSchemaJSON,
 			checkKey:   `"basics"`,
+		},
+		{
+			name:       "LeanMasterProfileSchemaJSON",
+			jsonGetter: llm.LeanMasterProfileSchemaJSON,
+			checkKey:   `"profile"`,
 		},
 	}
 

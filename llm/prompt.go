@@ -261,13 +261,14 @@ func buildShortIDMap(snapshot *domain.MasterProfileSnapshot) map[string]string {
 	return idMap
 }
 
-// serializeProjectedMasterProfile projects the profile snapshot using short IDs and serializes it to formatted JSON.
+// serializeProjectedMasterProfile projects the profile snapshot using short IDs into a lean master profile structure
+// and serializes it to formatted JSON, preventing leakage of internal database and multi-tenancy attributes.
 func serializeProjectedMasterProfile(snapshot *domain.MasterProfileSnapshot, idMap map[string]string) (string, error) {
 	if snapshot == nil {
 		return "", nil
 	}
-	projectedProfile := projectMasterProfileSnapshot(snapshot, idMap)
-	profileJSON, err := json.MarshalIndent(projectedProfile, "", "  ")
+	leanProfile := ProjectLeanMasterProfile(snapshot, idMap)
+	profileJSON, err := json.MarshalIndent(leanProfile, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed to serialize master profile snapshot: %w", err)
 	}
@@ -295,26 +296,64 @@ func resolveShortID(id string, idMap map[string]string) string {
 	return domain.ShortenID(trimmed)
 }
 
-// projectPriorVersion deep-copies and transforms a prior TailoredContent version, rewriting all
+// projectPriorBullets transforms a slice of TailoredBullets to compact short IDs.
+func projectPriorBullets(bullets []domain.TailoredBullet, idMap map[string]string) []domain.TailoredBullet {
+	if len(bullets) == 0 {
+		return nil
+	}
+	res := make([]domain.TailoredBullet, len(bullets))
+	for i, b := range bullets {
+		var fids []string
+		if len(b.SourceFactIDs) > 0 {
+			fids = make([]string, len(b.SourceFactIDs))
+			for k, fid := range b.SourceFactIDs {
+				fids[k] = resolveShortID(fid, idMap)
+			}
+		}
+		var sids []string
+		if len(b.SourceSkillIDs) > 0 {
+			sids = make([]string, len(b.SourceSkillIDs))
+			for k, sid := range b.SourceSkillIDs {
+				sids[k] = resolveShortID(sid, idMap)
+			}
+		}
+		res[i] = domain.TailoredBullet{
+			Text:           b.Text,
+			SourceFactIDs:  fids,
+			SourceSkillIDs: sids,
+		}
+	}
+	return res
+}
+
+// projectPriorVersion deep-copies and transforms a prior TailoredContent version,
+// stripping all non-tailoring contact, supervisory, and location metadata while rewriting all
 // experience/project/education/certification source entity IDs and bullet fact/skill citations to
-// their corresponding compact short identifiers. This prevents UUID pollution across generation revisions.
+// their corresponding compact short identifiers. Non-tailoring struct and pointer fields are zeroed,
+// taking advantage of omitzero and omitempty tags on domain.TailoredContent to prevent data leakage
+// across revisions without maintaining duplicate struct definitions.
 //
 // Parameters:
 //   - prior: The baseline tailored content to project. If nil, returns nil.
 //   - idMap: Lookup map converting canonical UUIDs to short IDs.
 //
 // Returns:
-//   - A new TailoredContent instance projected to compact short identifiers.
+//   - A new domain.TailoredContent instance stripped of non-tailoring data and projected to compact short identifiers.
 func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string) *domain.TailoredContent {
 	if prior == nil {
 		return nil
 	}
-	projected := *prior
+	projected := &domain.TailoredContent{
+		Summary: prior.Summary,
+	}
 
 	if len(prior.SkillGroups) > 0 {
 		sgs := make([]domain.TailoredSkillGroup, len(prior.SkillGroups))
 		for i, sg := range prior.SkillGroups {
-			sgs[i] = sg
+			sgs[i] = domain.TailoredSkillGroup{
+				Category: sg.Category,
+				Skills:   append([]string(nil), sg.Skills...),
+			}
 			if len(sg.SourceSkillIDs) > 0 {
 				sids := make([]string, len(sg.SourceSkillIDs))
 				for j, sid := range sg.SourceSkillIDs {
@@ -329,28 +368,14 @@ func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string)
 	if len(prior.Experiences) > 0 {
 		exps := make([]domain.TailoredExperience, len(prior.Experiences))
 		for i, exp := range prior.Experiences {
-			exps[i] = exp
-			exps[i].SourceEntityID = resolveShortID(exp.SourceEntityID, idMap)
-			if len(exp.Bullets) > 0 {
-				bullets := make([]domain.TailoredBullet, len(exp.Bullets))
-				for j, b := range exp.Bullets {
-					bullets[j] = b
-					if len(b.SourceFactIDs) > 0 {
-						fids := make([]string, len(b.SourceFactIDs))
-						for k, fid := range b.SourceFactIDs {
-							fids[k] = resolveShortID(fid, idMap)
-						}
-						bullets[j].SourceFactIDs = fids
-					}
-					if len(b.SourceSkillIDs) > 0 {
-						sids := make([]string, len(b.SourceSkillIDs))
-						for k, sid := range b.SourceSkillIDs {
-							sids[k] = resolveShortID(sid, idMap)
-						}
-						bullets[j].SourceSkillIDs = sids
-					}
-				}
-				exps[i].Bullets = bullets
+			exps[i] = domain.TailoredExperience{
+				SourceEntityID: resolveShortID(exp.SourceEntityID, idMap),
+				Company:        exp.Company,
+				RoleTitle:      exp.RoleTitle,
+				StartDate:      exp.StartDate,
+				EndDate:        exp.EndDate,
+				DutiesSummary:  exp.DutiesSummary,
+				Bullets:        projectPriorBullets(exp.Bullets, idMap),
 			}
 		}
 		projected.Experiences = exps
@@ -359,28 +384,15 @@ func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string)
 	if len(prior.Projects) > 0 {
 		projs := make([]domain.TailoredProject, len(prior.Projects))
 		for i, proj := range prior.Projects {
-			projs[i] = proj
-			projs[i].SourceEntityID = resolveShortID(proj.SourceEntityID, idMap)
-			if len(proj.Bullets) > 0 {
-				bullets := make([]domain.TailoredBullet, len(proj.Bullets))
-				for j, b := range proj.Bullets {
-					bullets[j] = b
-					if len(b.SourceFactIDs) > 0 {
-						fids := make([]string, len(b.SourceFactIDs))
-						for k, fid := range b.SourceFactIDs {
-							fids[k] = resolveShortID(fid, idMap)
-						}
-						bullets[j].SourceFactIDs = fids
-					}
-					if len(b.SourceSkillIDs) > 0 {
-						sids := make([]string, len(b.SourceSkillIDs))
-						for k, sid := range b.SourceSkillIDs {
-							sids[k] = resolveShortID(sid, idMap)
-						}
-						bullets[j].SourceSkillIDs = sids
-					}
-				}
-				projs[i].Bullets = bullets
+			projs[i] = domain.TailoredProject{
+				SourceEntityID: resolveShortID(proj.SourceEntityID, idMap),
+				Name:           proj.Name,
+				Role:           proj.Role,
+				URL:            proj.URL,
+				StartDate:      proj.StartDate,
+				EndDate:        proj.EndDate,
+				Summary:        proj.Summary,
+				Bullets:        projectPriorBullets(proj.Bullets, idMap),
 			}
 		}
 		projected.Projects = projs
@@ -389,28 +401,15 @@ func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string)
 	if len(prior.Education) > 0 {
 		edus := make([]domain.TailoredEducation, len(prior.Education))
 		for i, edu := range prior.Education {
-			edus[i] = edu
-			edus[i].SourceEntityID = resolveShortID(edu.SourceEntityID, idMap)
-			if len(edu.Bullets) > 0 {
-				bullets := make([]domain.TailoredBullet, len(edu.Bullets))
-				for j, b := range edu.Bullets {
-					bullets[j] = b
-					if len(b.SourceFactIDs) > 0 {
-						fids := make([]string, len(b.SourceFactIDs))
-						for k, fid := range b.SourceFactIDs {
-							fids[k] = resolveShortID(fid, idMap)
-						}
-						bullets[j].SourceFactIDs = fids
-					}
-					if len(b.SourceSkillIDs) > 0 {
-						sids := make([]string, len(b.SourceSkillIDs))
-						for k, sid := range b.SourceSkillIDs {
-							sids[k] = resolveShortID(sid, idMap)
-						}
-						bullets[j].SourceSkillIDs = sids
-					}
-				}
-				edus[i].Bullets = bullets
+			edus[i] = domain.TailoredEducation{
+				SourceEntityID: resolveShortID(edu.SourceEntityID, idMap),
+				Institution:    edu.Institution,
+				Degree:         edu.Degree,
+				Field:          edu.Field,
+				StartDate:      edu.StartDate,
+				EndDate:        edu.EndDate,
+				Score:          edu.Score,
+				Bullets:        projectPriorBullets(edu.Bullets, idMap),
 			}
 		}
 		projected.Education = edus
@@ -419,144 +418,18 @@ func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string)
 	if len(prior.Certifications) > 0 {
 		certs := make([]domain.TailoredCert, len(prior.Certifications))
 		for i, cert := range prior.Certifications {
-			certs[i] = cert
-			certs[i].SourceEntityID = resolveShortID(cert.SourceEntityID, idMap)
+			certs[i] = domain.TailoredCert{
+				SourceEntityID: resolveShortID(cert.SourceEntityID, idMap),
+				Name:           cert.Name,
+				Issuer:         cert.Issuer,
+				Date:           cert.Date,
+				URL:            cert.URL,
+			}
 		}
 		projected.Certifications = certs
 	}
 
-	return &projected
+	return projected
 }
 
-// projectSkillsToShortIDs projects a slice of skills to their EffectiveShortID.
-func projectSkillsToShortIDs(skills []domain.Skill) []domain.Skill {
-	if len(skills) == 0 {
-		return nil
-	}
-	res := make([]domain.Skill, len(skills))
-	for i, s := range skills {
-		res[i] = s
-		shortID := s.EffectiveShortID()
-		res[i].ID = shortID
-		res[i].ShortID = shortID
-	}
-	return res
-}
 
-// projectFactsToShortIDs projects a slice of facts and their child skills to their EffectiveShortIDs.
-func projectFactsToShortIDs(facts []domain.Fact, ownerShortID string) []domain.Fact {
-	if len(facts) == 0 {
-		return nil
-	}
-	res := make([]domain.Fact, len(facts))
-	for i, f := range facts {
-		res[i] = f
-		fShort := f.EffectiveShortID()
-		res[i].ID = fShort
-		res[i].ShortID = fShort
-		if ownerShortID != "" {
-			res[i].OwnerID = ownerShortID
-		}
-		if len(f.Skills) > 0 {
-			res[i].Skills = projectSkillsToShortIDs(f.Skills)
-		}
-	}
-	return res
-}
-
-// projectMasterProfileSnapshot clones and transforms a MasterProfileSnapshot so that all entities
-// and facts (skills, experiences, projects, education, certifications, and child facts) use their
-// EffectiveShortID as their primary ID in the prompt payload serialized to the LLM.
-//
-// Parameters:
-//   - snap: MasterProfileSnapshot representing the authoritative master profile state. If nil, returns nil.
-//   - idMap: Lookup map associating canonical IDs with their short equivalent for resolving foreign keys (e.g. OwnerID).
-//
-// Returns:
-//   - A new MasterProfileSnapshot instance with all entities and foreign key references projected to short IDs.
-func projectMasterProfileSnapshot(snap *domain.MasterProfileSnapshot, idMap map[string]string) *domain.MasterProfileSnapshot {
-	if snap == nil {
-		return nil
-	}
-	projected := *snap
-
-	if len(snap.Skills) > 0 {
-		projected.Skills = projectSkillsToShortIDs(snap.Skills)
-	}
-
-	if len(snap.Experiences) > 0 {
-		exps := make([]domain.WorkExperience, len(snap.Experiences))
-		for i, exp := range snap.Experiences {
-			shortID := exp.EffectiveShortID()
-			exps[i] = exp
-			exps[i].ID = shortID
-			exps[i].ShortID = shortID
-			if len(exp.Skills) > 0 {
-				exps[i].Skills = projectSkillsToShortIDs(exp.Skills)
-			}
-			if len(exp.Facts) > 0 {
-				exps[i].Facts = projectFactsToShortIDs(exp.Facts, shortID)
-			}
-		}
-		projected.Experiences = exps
-	}
-
-	if len(snap.Projects) > 0 {
-		projs := make([]domain.Project, len(snap.Projects))
-		for i, proj := range snap.Projects {
-			shortID := proj.EffectiveShortID()
-			projs[i] = proj
-			projs[i].ID = shortID
-			projs[i].ShortID = shortID
-			if len(proj.Skills) > 0 {
-				projs[i].Skills = projectSkillsToShortIDs(proj.Skills)
-			}
-			if len(proj.Facts) > 0 {
-				projs[i].Facts = projectFactsToShortIDs(proj.Facts, shortID)
-			}
-		}
-		projected.Projects = projs
-	}
-
-	if len(snap.Education) > 0 {
-		edus := make([]domain.Education, len(snap.Education))
-		for i, edu := range snap.Education {
-			shortID := edu.EffectiveShortID()
-			edus[i] = edu
-			edus[i].ID = shortID
-			edus[i].ShortID = shortID
-			if len(edu.Facts) > 0 {
-				edus[i].Facts = projectFactsToShortIDs(edu.Facts, shortID)
-			}
-		}
-		projected.Education = edus
-	}
-
-	if len(snap.Certifications) > 0 {
-		certs := make([]domain.Certification, len(snap.Certifications))
-		for i, cert := range snap.Certifications {
-			shortID := cert.EffectiveShortID()
-			certs[i] = cert
-			certs[i].ID = shortID
-			certs[i].ShortID = shortID
-		}
-		projected.Certifications = certs
-	}
-
-	if len(snap.Facts) > 0 {
-		facts := make([]domain.Fact, len(snap.Facts))
-		for i, f := range snap.Facts {
-			facts[i] = f
-			fShort := f.EffectiveShortID()
-			facts[i].ID = fShort
-			facts[i].ShortID = fShort
-			facts[i].OwnerID = resolveShortID(f.OwnerID, idMap)
-			if len(f.Skills) > 0 {
-				facts[i].Skills = projectSkillsToShortIDs(f.Skills)
-			}
-		}
-		projected.Facts = facts
-	}
-
-	return &projected
-}

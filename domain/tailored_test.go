@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"resumeee/internal/domain"
@@ -235,4 +236,88 @@ func TestCalculateSkillCoverageRatio(t *testing.T) {
 		}
 	})
 }
+
+func TestTailoredContent_OmitZeroNonTailoringFields(t *testing.T) {
+	t.Run("Location.IsZero correctly identifies empty locations", func(t *testing.T) {
+		emptyLoc := domain.Location{}
+		if !emptyLoc.IsZero() {
+			t.Errorf("expected empty Location to be zero")
+		}
+
+		populatedLoc := domain.Location{City: "San Francisco"}
+		if populatedLoc.IsZero() {
+			t.Errorf("expected populated Location to not be zero")
+		}
+	})
+
+	t.Run("omitzero and omitempty omit unpopulated location and contact fields", func(t *testing.T) {
+		content := domain.TailoredContent{
+			Summary: "Lead developer summary.",
+			Experiences: []domain.TailoredExperience{
+				{
+					SourceEntityID: "exp-1",
+					Company:        "Stripe",
+					RoleTitle:      "Staff Engineer",
+					StartDate:      domain.NewDate(2022, 1, 1),
+					Bullets: []domain.TailoredBullet{
+						{
+							Text:          "Scaled payment engine.",
+							SourceFactIDs: []string{"fact-1"},
+						},
+					},
+				},
+			},
+			Education: []domain.TailoredEducation{
+				{
+					SourceEntityID: "edu-1",
+					Institution:    "Stanford",
+					Degree:         "B.S.",
+					Field:          "CS",
+				},
+			},
+		}
+
+		bytes, err := json.Marshal(content)
+		if err != nil {
+			t.Fatalf("json.Marshal failed: %v", err)
+		}
+
+		jsonStr := string(bytes)
+		forbiddenKeys := []string{
+			`"location"`,
+			`"company_location"`,
+			`"company_contact"`,
+			`"hours_per_week"`,
+			`"supervisor_name"`,
+			`"supervisor_contact"`,
+			`"skill_groups"`,
+			`"projects"`,
+			`"certifications"`,
+		}
+
+		for _, key := range forbiddenKeys {
+			if strings.Contains(jsonStr, key) {
+				t.Errorf("serialized TailoredContent unexpectedly contained %s: %s", key, jsonStr)
+			}
+		}
+
+		expectedKeys := []string{
+			`"summary"`,
+			`"experiences"`,
+			`"education"`,
+			`"source_entity_id"`,
+			`"company"`,
+			`"role_title"`,
+			`"start_date"`,
+			`"bullets"`,
+		}
+
+		for _, key := range expectedKeys {
+			if !strings.Contains(jsonStr, key) {
+				t.Errorf("serialized TailoredContent missing expected key %s: %s", key, jsonStr)
+			}
+		}
+	})
+}
+
 

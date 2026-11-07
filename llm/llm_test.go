@@ -243,12 +243,12 @@ func TestPromptBuilder_Composition(t *testing.T) {
 		t.Errorf("user prompt missing continuity instructions")
 	}
 
-	// Check Master Profile Graph presence with privacy masking
+	// Check Master Profile Graph presence with privacy masking and stripped contact data
 	if strings.Contains(prompts.UserPrompt, "Ada Lovelace") {
 		t.Errorf("user prompt leaked candidate real name 'Ada Lovelace'")
 	}
-	if !strings.Contains(prompts.UserPrompt, privacy.PlaceholderFullName) {
-		t.Errorf("user prompt missing obfuscated candidate placeholder %q", privacy.PlaceholderFullName)
+	if strings.Contains(prompts.UserPrompt, privacy.PlaceholderFullName) {
+		t.Errorf("user prompt should not contain candidate name placeholder %q", privacy.PlaceholderFullName)
 	}
 }
 

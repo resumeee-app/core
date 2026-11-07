@@ -37,44 +37,59 @@ type Service interface {
 
 // Config defines the dependencies required by the branch domain service.
 type Config struct {
-	BranchRepo   domain.BranchRepository
-	ProfileRepo  domain.ProfileRepository
-	PresetRepo   domain.PresetRepository
-	TemplateRepo domain.TemplateRepository
-	QuotaRepo    domain.QuotaRepository
-	JobEnqueuer  worker.JobEnqueuer
-	Validator    validator.ProvenanceValidator
-	Renderer     domain.TemplateRenderer
-	LLMService   worker.LLMService
-	Logger       *slog.Logger
+	BranchRepo        domain.BranchRepository
+	ProfileRepo       domain.ProfileRepository
+	PresetRepo        domain.PresetRepository
+	TemplateRepo      domain.TemplateRepository
+	QuotaRepo         domain.QuotaRepository
+	JobEnqueuer       worker.JobEnqueuer
+	Validator         validator.ProvenanceValidator
+	Renderer          domain.TemplateRenderer
+	LLMService        worker.LLMService
+	Logger            *slog.Logger
+	DailyRequestLimit int
+	MonthlyTokenLimit int
 }
 
 type service struct {
-	branchRepo   domain.BranchRepository
-	profileRepo  domain.ProfileRepository
-	presetRepo   domain.PresetRepository
-	templateRepo domain.TemplateRepository
-	quotaRepo    domain.QuotaRepository
-	jobEnqueuer  worker.JobEnqueuer
-	validator    validator.ProvenanceValidator
-	renderer     domain.TemplateRenderer
-	llmService   worker.LLMService
-	logger       *slog.Logger
+	branchRepo        domain.BranchRepository
+	profileRepo       domain.ProfileRepository
+	presetRepo        domain.PresetRepository
+	templateRepo      domain.TemplateRepository
+	quotaRepo         domain.QuotaRepository
+	jobEnqueuer       worker.JobEnqueuer
+	validator         validator.ProvenanceValidator
+	renderer          domain.TemplateRenderer
+	llmService        worker.LLMService
+	logger            *slog.Logger
+	dailyRequestLimit int
+	monthlyTokenLimit int
 }
 
 // NewService constructs a new Branch service.
 func NewService(cfg Config) Service {
+	dailyLimit := cfg.DailyRequestLimit
+	if dailyLimit <= 0 {
+		dailyLimit = 50
+	}
+	monthlyLimit := cfg.MonthlyTokenLimit
+	if monthlyLimit <= 0 {
+		monthlyLimit = 1000000
+	}
+
 	return &service{
-		branchRepo:   cfg.BranchRepo,
-		profileRepo:  cfg.ProfileRepo,
-		presetRepo:   cfg.PresetRepo,
-		templateRepo: cfg.TemplateRepo,
-		quotaRepo:    cfg.QuotaRepo,
-		jobEnqueuer:  cfg.JobEnqueuer,
-		validator:    cfg.Validator,
-		renderer:     cfg.Renderer,
-		llmService:   cfg.LLMService,
-		logger:       cfg.Logger,
+		branchRepo:        cfg.BranchRepo,
+		profileRepo:       cfg.ProfileRepo,
+		presetRepo:        cfg.PresetRepo,
+		templateRepo:      cfg.TemplateRepo,
+		quotaRepo:         cfg.QuotaRepo,
+		jobEnqueuer:       cfg.JobEnqueuer,
+		validator:         cfg.Validator,
+		renderer:          cfg.Renderer,
+		llmService:        cfg.LLMService,
+		logger:            cfg.Logger,
+		dailyRequestLimit: dailyLimit,
+		monthlyTokenLimit: monthlyLimit,
 	}
 }
 
@@ -291,7 +306,7 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 
 	var reservationID string
 	if s.quotaRepo != nil {
-		rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationResumeTailoring, 2000, 50, 1000000)
+		rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationResumeTailoring, 2000, s.dailyRequestLimit, s.monthlyTokenLimit)
 		if qErr != nil {
 			return nil, qErr
 		}
@@ -396,6 +411,15 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 			model = defaultModel
 		}
 
+		var reservationID string
+		if s.quotaRepo != nil {
+			rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationResumeTailoring, 2000, s.dailyRequestLimit, s.monthlyTokenLimit)
+			if qErr != nil {
+				return enqueuedIDs, qErr
+			}
+			reservationID = rec.ID
+		}
+
 		ver := &domain.BranchVersion{
 			ID:                 "ver-" + uuid.New().String(),
 			UserID:             userID,
@@ -410,16 +434,10 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 		}
 
 		if err := s.branchRepo.CreateVersion(ctx, ver); err != nil {
-			return enqueuedIDs, err
-		}
-
-		var reservationID string
-		if s.quotaRepo != nil {
-			rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationResumeTailoring, 2000, 50, 1000000)
-			if qErr != nil {
-				return enqueuedIDs, qErr
+			if reservationID != "" && s.quotaRepo != nil {
+				_ = s.quotaRepo.ReleaseQuota(ctx, reservationID, err.Error())
 			}
-			reservationID = rec.ID
+			return enqueuedIDs, err
 		}
 
 		if s.jobEnqueuer != nil {
@@ -614,7 +632,7 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 		usage  domain.TokenUsage
 	)
 	if s.llmService != nil && s.quotaRepo != nil {
-		r, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationGapAnalysis, 1000, 50, 1000000)
+		r, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationGapAnalysis, 1000, s.dailyRequestLimit, s.monthlyTokenLimit)
 		if qErr != nil {
 			return nil, qErr
 		}

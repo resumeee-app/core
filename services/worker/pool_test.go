@@ -798,35 +798,42 @@ type mockResumeExtractor struct {
 	fail       bool
 	failErrMsg string
 	result     *profile.JSONResume
+	usage      domain.TokenUsage
 }
 
 func (m *mockResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+	res, _, err := m.ExtractResumeWithUsage(ctx, text, provider, model)
+	return res, err
+}
+
+func (m *mockResumeExtractor) ExtractResumeWithUsage(ctx context.Context, text, provider, model string) (*profile.JSONResume, domain.TokenUsage, error) {
 	m.mu.Lock()
 	delay := m.delay
 	fail := m.fail
 	failErrMsg := m.failErrMsg
 	result := m.result
+	usage := m.usage
 	m.mu.Unlock()
 
 	if delay > 0 {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, domain.TokenUsage{}, ctx.Err()
 		}
 	}
 	if fail {
-		return nil, errors.New(failErrMsg)
+		return nil, domain.TokenUsage{}, errors.New(failErrMsg)
 	}
 	if result != nil {
-		return result, nil
+		return result, usage, nil
 	}
 	return &profile.JSONResume{
 		Basics: profile.JSONResumeBasics{
 			Name:  "Test Candidate",
 			Email: "candidate@test.com",
 		},
-	}, nil
+	}, usage, nil
 }
 
 func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
@@ -1844,6 +1851,99 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 	}
 	if remainingA < 2 {
 		t.Fatalf("expected at least 2 of tenant A's generation jobs to still be incomplete when B finished, got remaining %d", remainingA)
+	}
+}
+
+func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, err := memory.NewSeeded(ctx, "user-quota-worker")
+	if err != nil {
+		t.Fatalf("failed to seed store: %v", err)
+	}
+
+	mockExt := &mockResumeExtractor{
+		delay: 5 * time.Millisecond,
+		result: &profile.JSONResume{
+			Basics: profile.JSONResumeBasics{
+				Name: "Usage Candidate",
+			},
+		},
+		usage: domain.TokenUsage{
+			PromptTokens:     100,
+			CompletionTokens: 250,
+			TotalTokens:      350,
+		},
+	}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:     2,
+		QueueSize:       10,
+		PDFJobRepo:      store,
+		QuotaRepo:        store,
+		ResumeExtractor: mockExt,
+		LLMTimeout:      5 * time.Second,
+	})
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	// Reserve quota first
+	rec, err := store.ReserveQuota(ctx, "user-quota-worker", domain.OperationPDFParse, 1000, 50, 1000000)
+	if err != nil {
+		t.Fatalf("failed to reserve quota: %v", err)
+	}
+
+	jobID := "pdf-job-usage-1"
+	job := &domain.PDFParseJob{
+		ID:        jobID,
+		UserID:    "user-quota-worker",
+		Status:    domain.PDFParseJobStatusPending,
+		Filename:  "usage.pdf",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("failed to create job: %v", err)
+	}
+
+	task := worker.PDFParseJobTask{
+		JobID:         jobID,
+		UserID:        "user-quota-worker",
+		RawText:       "Candidate resume content",
+		Provider:      "mock",
+		Model:         "mock-model",
+		ReservationID: rec.ID,
+	}
+	if err := pool.EnqueuePDFJob(task); err != nil {
+		t.Fatalf("failed to enqueue pdf job: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		j, err := store.GetJob(ctx, "user-quota-worker", jobID)
+		if err != nil {
+			t.Fatalf("get job failed: %v", err)
+		}
+		if j.Status == domain.PDFParseJobStatusCompleted {
+			break
+		}
+		if j.Status == domain.PDFParseJobStatusFailed {
+			t.Fatalf("pdf job unexpectedly failed: %s", j.ErrorMessage)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for pdf job to complete")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Verify committed quota: monthly tokens should reflect actual 350 tokens rather than 1000 estimate
+	quota, err := store.GetQuota(ctx, "user-quota-worker")
+	if err != nil {
+		t.Fatalf("failed to get quota: %v", err)
+	}
+	if quota.MonthlyTokensUsed != 350 {
+		t.Errorf("expected monthly_tokens_used 350 (actual usage), got %d", quota.MonthlyTokensUsed)
 	}
 }
 

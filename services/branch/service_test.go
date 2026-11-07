@@ -1067,5 +1067,182 @@ func TestService_GetPromptPreview_ContactPrivacy(t *testing.T) {
 	}
 }
 
+type spyQuotaRepo struct {
+	mu           sync.Mutex
+	reservations []struct {
+		UserID          string
+		Op              domain.LLMOperationType
+		EstimatedTokens int
+		DailyLimit      int
+		MonthlyLimit    int
+	}
+}
+
+func (s *spyQuotaRepo) ReserveQuota(_ context.Context, userID string, op domain.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*domain.LLMUsageRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reservations = append(s.reservations, struct {
+		UserID          string
+		Op              domain.LLMOperationType
+		EstimatedTokens int
+		DailyLimit      int
+		MonthlyLimit    int
+	}{
+		UserID:          userID,
+		Op:              op,
+		EstimatedTokens: estimatedTokens,
+		DailyLimit:      dailyLimit,
+		MonthlyLimit:    monthlyLimit,
+	})
+	return &domain.LLMUsageRecord{
+		ID:              "res-test-1",
+		UserID:          userID,
+		Operation:       op,
+		EstimatedTokens: estimatedTokens,
+		Status:          domain.ReservationStatusPending,
+	}, nil
+}
+
+func (s *spyQuotaRepo) GetQuota(_ context.Context, userID string) (*domain.TenantQuota, error) {
+	return &domain.TenantQuota{UserID: userID}, nil
+}
+
+func (s *spyQuotaRepo) CommitUsage(_ context.Context, _ string, _ domain.TokenUsage) error {
+	return nil
+}
+
+func (s *spyQuotaRepo) ReleaseQuota(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+func (s *spyQuotaRepo) ListUsageRecords(_ context.Context, _ string, _ int) ([]domain.LLMUsageRecord, error) {
+	return nil, nil
+}
+
+func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
+	ctx := context.Background()
+	defaultUser := "user-custom-quota"
+
+	store, err := memory.NewSeeded(ctx, defaultUser)
+	if err != nil {
+		t.Fatalf("failed to seed memory store: %v", err)
+	}
+
+	b := &domain.Branch{
+		ID:            "branch-quota-test",
+		UserID:        defaultUser,
+		Name:          "DevOps Lead",
+		TemplateSetID: renderer.TemplateStandardCleanID,
+	}
+	err = store.CreateBranch(ctx, b)
+	if err != nil {
+		t.Fatalf("failed to create branch: %v", err)
+	}
+
+	stubLLM := &stubLLMService{
+		gapReport: &domain.GapReport{OverallMatchSummary: "Quota test gap report"},
+	}
+
+	t.Run("Custom limits propagated across GenerateVersion, SyncBranches, and AnalyzeGaps", func(t *testing.T) {
+		spyQuota := &spyQuotaRepo{}
+		enqueuer := newStubEnqueuer(10)
+
+		svc := branch.NewService(branch.Config{
+			BranchRepo:        store,
+			ProfileRepo:       store,
+			PresetRepo:        store,
+			TemplateRepo:      store,
+			QuotaRepo:         spyQuota,
+			JobEnqueuer:       enqueuer,
+			LLMService:        stubLLM,
+			DailyRequestLimit: 25,
+			MonthlyTokenLimit: 250000,
+		})
+
+		// 1. GenerateVersion
+		_, err := svc.GenerateVersion(ctx, defaultUser, b.ID)
+		if err != nil {
+			t.Fatalf("GenerateVersion failed: %v", err)
+		}
+
+		// 2. SyncBranches
+		_, err = svc.SyncBranches(ctx, defaultUser, []string{b.ID})
+		if err != nil {
+			t.Fatalf("SyncBranches failed: %v", err)
+		}
+
+		// 3. AnalyzeGaps
+		_, err = svc.AnalyzeGaps(ctx, defaultUser, b.ID)
+		if err != nil {
+			t.Fatalf("AnalyzeGaps failed: %v", err)
+		}
+
+		spyQuota.mu.Lock()
+		defer spyQuota.mu.Unlock()
+
+		if len(spyQuota.reservations) != 3 {
+			t.Fatalf("expected 3 reservations, got %d", len(spyQuota.reservations))
+		}
+
+		for i, res := range spyQuota.reservations {
+			if res.DailyLimit != 25 {
+				t.Errorf("reservation %d: expected DailyLimit 25, got %d", i, res.DailyLimit)
+			}
+			if res.MonthlyLimit != 250000 {
+				t.Errorf("reservation %d: expected MonthlyLimit 250000, got %d", i, res.MonthlyLimit)
+			}
+		}
+	})
+
+	t.Run("Fallback default limits 50 and 1000000 applied when limits are <= 0", func(t *testing.T) {
+		spyQuota := &spyQuotaRepo{}
+		enqueuer := newStubEnqueuer(10)
+
+		svcDefault := branch.NewService(branch.Config{
+			BranchRepo:        store,
+			ProfileRepo:       store,
+			PresetRepo:        store,
+			TemplateRepo:      store,
+			QuotaRepo:         spyQuota,
+			JobEnqueuer:       enqueuer,
+			LLMService:        stubLLM,
+			DailyRequestLimit: 0,
+			MonthlyTokenLimit: -100,
+		})
+
+		_, err := svcDefault.GenerateVersion(ctx, defaultUser, b.ID)
+		if err != nil {
+			t.Fatalf("GenerateVersion failed: %v", err)
+		}
+
+		_, err = svcDefault.SyncBranches(ctx, defaultUser, []string{b.ID})
+		if err != nil {
+			t.Fatalf("SyncBranches failed: %v", err)
+		}
+
+		_, err = svcDefault.AnalyzeGaps(ctx, defaultUser, b.ID)
+		if err != nil {
+			t.Fatalf("AnalyzeGaps failed: %v", err)
+		}
+
+		spyQuota.mu.Lock()
+		defer spyQuota.mu.Unlock()
+
+		if len(spyQuota.reservations) != 3 {
+			t.Fatalf("expected 3 reservations, got %d", len(spyQuota.reservations))
+		}
+
+		for i, res := range spyQuota.reservations {
+			if res.DailyLimit != 50 {
+				t.Errorf("reservation %d: expected fallback DailyLimit 50, got %d", i, res.DailyLimit)
+			}
+			if res.MonthlyLimit != 1000000 {
+				t.Errorf("reservation %d: expected fallback MonthlyLimit 1000000, got %d", i, res.MonthlyLimit)
+			}
+		}
+	})
+}
+
+
 
 

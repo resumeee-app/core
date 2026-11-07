@@ -186,7 +186,13 @@ func (p *OpenAIProvider) GenerateTailoredResume(ctx context.Context, req domain.
 }
 
 // CompleteText implements RawCompleter for OpenAI.
-func (p *OpenAIProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (text string, retErr error) {
+func (p *OpenAIProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
+	text, _, err := p.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
+	return text, err
+}
+
+// CompleteTextWithUsage implements RawUsageCompleter for OpenAI.
+func (p *OpenAIProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt, userPrompt, model string) (text string, usage domain.TokenUsage, retErr error) {
 	if strings.TrimSpace(model) == "" {
 		model = p.defaultModel
 	}
@@ -220,14 +226,14 @@ func (p *OpenAIProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 	reqBodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		retErr = fmt.Errorf("failed to marshal openai request: %w", err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
 	url := fmt.Sprintf("%s/v1/chat/completions", strings.TrimRight(p.baseURL, "/"))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
 	if err != nil {
 		retErr = fmt.Errorf("failed to create http request: %w", err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -236,14 +242,14 @@ func (p *OpenAIProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
 		retErr = fmt.Errorf("openai http request failed: %w", err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := readBoundedBody(resp.Body)
 	if err != nil {
 		retErr = fmt.Errorf("failed to read response body: %w", err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
 	statusCode = resp.StatusCode
@@ -251,7 +257,7 @@ func (p *OpenAIProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 
 	if err := checkStatusError("openai", resp.StatusCode, bodyBytes); err != nil {
 		retErr = err
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
 	type openAIResponse struct {
@@ -270,13 +276,22 @@ func (p *OpenAIProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 	var openAIResp openAIResponse
 	if err := json.Unmarshal(bodyBytes, &openAIResp); err != nil {
 		retErr = fmt.Errorf("%w: malformed openai response: %v", ErrInvalidResponse, err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
 	if len(openAIResp.Choices) == 0 {
 		retErr = fmt.Errorf("%w: no choices returned by openai", ErrInvalidResponse)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
-	return strings.TrimSpace(openAIResp.Choices[0].Message.Content), nil
+	usage = domain.TokenUsage{
+		PromptTokens:     openAIResp.Usage.PromptTokens,
+		CompletionTokens: openAIResp.Usage.CompletionTokens,
+		TotalTokens:      openAIResp.Usage.TotalTokens,
+	}
+	if usage.TotalTokens == 0 && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+
+	return strings.TrimSpace(openAIResp.Choices[0].Message.Content), usage, nil
 }

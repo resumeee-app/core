@@ -203,7 +203,13 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 }
 
 // CompleteText implements RawCompleter for Anthropic Claude.
-func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (text string, retErr error) {
+func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
+	text, _, err := p.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
+	return text, err
+}
+
+// CompleteTextWithUsage implements RawUsageCompleter for Anthropic Claude.
+func (p *AnthropicProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt, userPrompt, model string) (text string, usage domain.TokenUsage, retErr error) {
 	if strings.TrimSpace(model) == "" {
 		model = p.defaultModel
 	}
@@ -240,14 +246,14 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 	reqBodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		retErr = fmt.Errorf("failed to marshal anthropic request: %w", err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
 	url := fmt.Sprintf("%s/v1/messages", strings.TrimRight(p.baseURL, "/"))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
 	if err != nil {
 		retErr = fmt.Errorf("failed to create http request: %w", err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -257,14 +263,14 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
 		retErr = fmt.Errorf("anthropic http request failed: %w", err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := readBoundedBody(resp.Body)
 	if err != nil {
 		retErr = fmt.Errorf("failed to read response body: %w", err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
 	statusCode = resp.StatusCode
@@ -272,7 +278,7 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 
 	if err := checkStatusError("anthropic", resp.StatusCode, bodyBytes); err != nil {
 		retErr = err
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
 	}
 
 	type contentBlock struct {
@@ -291,15 +297,21 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 	var anthropicResp anthropicResponse
 	if err := json.Unmarshal(bodyBytes, &anthropicResp); err != nil {
 		retErr = fmt.Errorf("%w: malformed anthropic response: %v", ErrInvalidResponse, err)
-		return "", retErr
+		return "", domain.TokenUsage{}, retErr
+	}
+
+	usage = domain.TokenUsage{
+		PromptTokens:     anthropicResp.Usage.InputTokens,
+		CompletionTokens: anthropicResp.Usage.OutputTokens,
+		TotalTokens:      anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens,
 	}
 
 	for _, block := range anthropicResp.Content {
 		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-			return strings.TrimSpace(block.Text), nil
+			return strings.TrimSpace(block.Text), usage, nil
 		}
 	}
 
 	retErr = fmt.Errorf("%w: no text content returned by anthropic", ErrInvalidResponse)
-	return "", retErr
+	return "", domain.TokenUsage{}, retErr
 }

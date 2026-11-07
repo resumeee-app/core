@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"resumeee/internal/domain"
+	"resumeee/internal/llm"
 )
 
 // safeProcessPDFJob executes a PDF parse task with panic recovery to prevent worker goroutines from terminating
@@ -53,7 +54,7 @@ func (p *Pool) processPDFJob(ctx context.Context, task PDFParseJobTask) {
 	extractCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	extracted, err := p.resumeExtractor.ExtractResume(extractCtx, task.RawText, task.Provider, task.Model)
+	extracted, usage, err := llm.ExtractResumeWithTokenUsage(extractCtx, p.resumeExtractor, task.RawText, task.Provider, task.Model, 1000)
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Error("pdf resume extraction failed", "job_id", task.JobID, "error", err)
@@ -72,7 +73,7 @@ func (p *Pool) processPDFJob(ctx context.Context, task PDFParseJobTask) {
 	}
 
 	if p.quotaRepo != nil && task.ReservationID != "" {
-		_ = p.quotaRepo.CommitUsage(ctx, task.ReservationID, domain.TokenUsage{TotalTokens: 1000})
+		_ = p.quotaRepo.CommitUsage(ctx, task.ReservationID, usage)
 	}
 
 	// 3. Mark job completed with candidate JSONResume result

@@ -187,3 +187,88 @@ func TestResumeExtractor_Table(t *testing.T) {
 		}
 	})
 }
+
+type stubUsageCompleter struct {
+	response string
+	usage    domain.TokenUsage
+}
+
+func (s *stubUsageCompleter) Complete(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, error) {
+	return s.response, nil
+}
+
+func (s *stubUsageCompleter) CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, domain.TokenUsage, error) {
+	return s.response, s.usage, nil
+}
+
+func TestResumeExtractor_WithUsage(t *testing.T) {
+	minimalJSON := `{"basics": {"name": "Usage Test", "email": "usage@test.com"}}`
+
+	t.Run("UsageCompleter propagates actual token usage", func(t *testing.T) {
+		completer := &stubUsageCompleter{
+			response: minimalJSON,
+			usage: domain.TokenUsage{
+				PromptTokens:     150,
+				CompletionTokens: 250,
+				TotalTokens:      400,
+			},
+		}
+		extractor := llm.NewResumeExtractor(completer)
+		ue, ok := extractor.(llm.UsageResumeExtractor)
+		if !ok {
+			t.Fatalf("expected extractor to implement UsageResumeExtractor")
+		}
+
+		res, usage, err := ue.ExtractResumeWithUsage(context.Background(), "Sample text", "test-prov", "test-mod")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Basics.Name != "Usage Test" {
+			t.Errorf("expected Basics.Name 'Usage Test', got %q", res.Basics.Name)
+		}
+		if usage.TotalTokens != 400 || usage.PromptTokens != 150 || usage.CompletionTokens != 250 {
+			t.Errorf("expected 400 total tokens (150/250), got %+v", usage)
+		}
+	})
+
+	t.Run("Ordinary Completer fallback returns zero usage without error", func(t *testing.T) {
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return minimalJSON, nil
+		})
+		extractor := llm.NewResumeExtractor(completer)
+		ue, ok := extractor.(llm.UsageResumeExtractor)
+		if !ok {
+			t.Fatalf("expected extractor to implement UsageResumeExtractor")
+		}
+
+		res, usage, err := ue.ExtractResumeWithUsage(context.Background(), "Sample text", "test-prov", "test-mod")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Basics.Name != "Usage Test" {
+			t.Errorf("expected Basics.Name 'Usage Test', got %q", res.Basics.Name)
+		}
+		if usage.TotalTokens != 0 {
+			t.Errorf("expected zero token usage fallback, got %+v", usage)
+		}
+	})
+
+	t.Run("ExtractResumeWithTokenUsage applies default tokens when usage is zero", func(t *testing.T) {
+		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+			return minimalJSON, nil
+		})
+		extractor := llm.NewResumeExtractor(completer)
+
+		res, usage, err := llm.ExtractResumeWithTokenUsage(context.Background(), extractor, "Sample text", "test-prov", "test-mod", 1000)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Basics.Name != "Usage Test" {
+			t.Errorf("expected Basics.Name 'Usage Test', got %q", res.Basics.Name)
+		}
+		if usage.TotalTokens != 1000 {
+			t.Errorf("expected default 1000 total tokens, got %+v", usage)
+		}
+	})
+}
+

@@ -1050,3 +1050,800 @@ func TestWorkerPool_TailoringPipeline_LLMTimeout(t *testing.T) {
 		t.Fatalf("expected remaining timeout around 7 minutes, got %v", remaining)
 	}
 }
+
+// 12. Per-Tenant Concurrency Cap Test
+func TestPool_PerTenantConcurrencyCap(t *testing.T) {
+	pdfRepo := memory.New()
+	var (
+		activeCount sync.Mutex
+		current     int
+		peak        int
+	)
+
+	mockExt := &callbackResumeExtractor{
+		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+			activeCount.Lock()
+			current++
+			if current > peak {
+				peak = current
+			}
+			activeCount.Unlock()
+
+			time.Sleep(30 * time.Millisecond)
+
+			activeCount.Lock()
+			current--
+			activeCount.Unlock()
+
+			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: "Alpha"}}, nil
+		},
+	}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:            4,
+		MaxConcurrentPerTenant: 2,
+		QueueSize:              20,
+		PDFJobRepo:             pdfRepo,
+		ResumeExtractor:        mockExt,
+		LLMTimeout:             5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	const jobCount = 6
+	tenantID := "tenant-alpha"
+	jobIDs := make([]string, jobCount)
+	for i := 0; i < jobCount; i++ {
+		jobID := fmt.Sprintf("job-cap-%d", i)
+		jobIDs[i] = jobID
+		job := &domain.PDFParseJob{
+			ID:        jobID,
+			UserID:    tenantID,
+			Status:    domain.PDFParseJobStatusPending,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		if err := pdfRepo.CreateJob(ctx, job); err != nil {
+			t.Fatalf("failed to create pdf job %d: %v", i, err)
+		}
+		if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: jobID, UserID: tenantID}); err != nil {
+			t.Fatalf("failed to enqueue job %d: %v", i, err)
+		}
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for _, id := range jobIDs {
+		for {
+			j, err := pdfRepo.GetJob(ctx, tenantID, id)
+			if err != nil {
+				t.Fatalf("failed to get job %s: %v", id, err)
+			}
+			if j.Status == domain.PDFParseJobStatusCompleted {
+				break
+			}
+			if j.Status == domain.PDFParseJobStatusFailed {
+				t.Fatalf("job %s unexpectedly failed: %s", id, j.ErrorMessage)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timeout waiting for job %s to complete, got %s", id, j.Status)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	activeCount.Lock()
+	maxObserved := peak
+	activeCount.Unlock()
+
+	if maxObserved > 2 {
+		t.Fatalf("expected peak concurrent jobs for tenant <= 2, got %d", maxObserved)
+	}
+	if maxObserved < 2 {
+		t.Errorf("expected peak concurrent jobs to reach cap of 2, got %d", maxObserved)
+	}
+}
+
+// 13. Noisy-Neighbor Fair Share Anti-Starvation Test
+func TestPool_NoisyNeighborFairShareAntiStarvation(t *testing.T) {
+	pdfRepo := memory.New()
+
+	mockExt := &callbackResumeExtractor{
+		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+			if provider == "slow" {
+				time.Sleep(120 * time.Millisecond)
+			} else {
+				time.Sleep(10 * time.Millisecond)
+			}
+			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: text}}, nil
+		},
+	}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:            2,
+		MaxConcurrentPerTenant: 1,
+		QueueSize:              20,
+		PDFJobRepo:             pdfRepo,
+		ResumeExtractor:        mockExt,
+		LLMTimeout:             5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	// Tenant A floods with 8 slow jobs
+	tenantA := "tenant-a-noisy"
+	const tenantAJobs = 8
+	tenantAJobIDs := make([]string, tenantAJobs)
+	for i := 0; i < tenantAJobs; i++ {
+		jobID := fmt.Sprintf("job-tenant-a-%d", i)
+		tenantAJobIDs[i] = jobID
+		j := &domain.PDFParseJob{
+			ID:        jobID,
+			UserID:    tenantA,
+			Status:    domain.PDFParseJobStatusPending,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		if err := pdfRepo.CreateJob(ctx, j); err != nil {
+			t.Fatalf("failed to create tenant A job %d: %v", i, err)
+		}
+		if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: jobID, UserID: tenantA, Provider: "slow"}); err != nil {
+			t.Fatalf("failed to enqueue tenant A job %d: %v", i, err)
+		}
+	}
+
+	// Wait briefly for Tenant A's first job to be picked up
+	time.Sleep(15 * time.Millisecond)
+
+	// Tenant B enqueues 1 fast job
+	tenantB := "tenant-b-fast"
+	tenantBJobID := "job-tenant-b-0"
+	jB := &domain.PDFParseJob{
+		ID:        tenantBJobID,
+		UserID:    tenantB,
+		Status:    domain.PDFParseJobStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := pdfRepo.CreateJob(ctx, jB); err != nil {
+		t.Fatalf("failed to create tenant B job: %v", err)
+	}
+	if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: tenantBJobID, UserID: tenantB, Provider: "fast"}); err != nil {
+		t.Fatalf("failed to enqueue tenant B job: %v", err)
+	}
+
+	// Tenant B's job should complete promptly (< 60ms) while Tenant A's jobs are still executing
+	deadlineB := time.Now().Add(500 * time.Millisecond)
+	var tenantBCompleted bool
+	for {
+		jb, err := pdfRepo.GetJob(ctx, tenantB, tenantBJobID)
+		if err != nil {
+			t.Fatalf("failed to get tenant B job: %v", err)
+		}
+		if jb.Status == domain.PDFParseJobStatusCompleted {
+			tenantBCompleted = true
+			break
+		}
+		if time.Now().After(deadlineB) {
+			t.Fatalf("tenant B fast job timed out waiting for completion; noisy neighbor starved it!")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if !tenantBCompleted {
+		t.Fatalf("expected tenant B job to be completed")
+	}
+
+	// Verify Tenant A still has incomplete jobs when Tenant B finished
+	var remainingA int
+	for _, id := range tenantAJobIDs {
+		ja, err := pdfRepo.GetJob(ctx, tenantA, id)
+		if err != nil {
+			t.Fatalf("failed to get tenant A job %s: %v", id, err)
+		}
+		if ja.Status != domain.PDFParseJobStatusCompleted {
+			remainingA++
+		}
+	}
+	if remainingA < 4 {
+		t.Fatalf("expected at least 4 of tenant A's jobs to still be incomplete when B finished, got remaining %d", remainingA)
+	}
+}
+
+// 14. Multi-Tenant Round-Robin Ordering Test
+func TestPool_MultiTenantRoundRobinOrdering(t *testing.T) {
+	pdfRepo := memory.New()
+	var (
+		mu              sync.Mutex
+		dispatchHistory []string
+	)
+
+	mockExt := &callbackResumeExtractor{
+		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+			mu.Lock()
+			dispatchHistory = append(dispatchHistory, text)
+			mu.Unlock()
+			time.Sleep(5 * time.Millisecond)
+			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: text}}, nil
+		},
+	}
+
+	// 1 worker, max 1 concurrent per tenant
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:            1,
+		MaxConcurrentPerTenant: 1,
+		QueueSize:              20,
+		PDFJobRepo:             pdfRepo,
+		ResumeExtractor:        mockExt,
+		LLMTimeout:             5 * time.Second,
+	})
+
+	ctx := context.Background()
+
+	// Enqueue before Start so all jobs are queued before dispatch begins:
+	// A1, A2, B1, B2, C1, C2
+	tenants := []string{"tenant-a", "tenant-b", "tenant-c"}
+	totalJobs := 0
+	for _, tID := range tenants {
+		for j := 1; j <= 2; j++ {
+			jobID := fmt.Sprintf("%s-job-%d", tID, j)
+			job := &domain.PDFParseJob{
+				ID:        jobID,
+				UserID:    tID,
+				Status:    domain.PDFParseJobStatusPending,
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			}
+			if err := pdfRepo.CreateJob(ctx, job); err != nil {
+				t.Fatalf("create job failed: %v", err)
+			}
+			if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: jobID, UserID: tID, RawText: tID}); err != nil {
+				t.Fatalf("enqueue failed: %v", err)
+			}
+			totalJobs++
+		}
+	}
+
+	pool.Start(ctx)
+
+	// Wait for all 6 jobs to finish
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		count := len(dispatchHistory)
+		mu.Unlock()
+		if count >= totalJobs {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for all jobs to complete, got %d of %d", count, totalJobs)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	pool.Stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	expectedOrder := []string{"tenant-a", "tenant-b", "tenant-c", "tenant-a", "tenant-b", "tenant-c"}
+	if len(dispatchHistory) != len(expectedOrder) {
+		t.Fatalf("expected %d dispatches, got %d: %v", len(expectedOrder), len(dispatchHistory), dispatchHistory)
+	}
+	for i, exp := range expectedOrder {
+		if dispatchHistory[i] != exp {
+			t.Errorf("turn %d: expected %s, got %s (full history: %v)", i, exp, dispatchHistory[i], dispatchHistory)
+		}
+	}
+}
+
+// 15. Panic Recovery Slot Release Test
+func TestPool_PanicSlotRelease(t *testing.T) {
+	pdfRepo := memory.New()
+	var (
+		callCount int
+		mu        sync.Mutex
+	)
+
+	mockExt := &callbackResumeExtractor{
+		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+			mu.Lock()
+			callCount++
+			currentCall := callCount
+			mu.Unlock()
+
+			if currentCall == 1 {
+				panic("simulated fatal crash in model parsing")
+			}
+			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: "Recovered"}}, nil
+		},
+	}
+
+	// Concurrency 2, MaxConcurrentPerTenant: 1
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:            2,
+		MaxConcurrentPerTenant: 1,
+		QueueSize:              10,
+		PDFJobRepo:             pdfRepo,
+		ResumeExtractor:        mockExt,
+		LLMTimeout:             5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	tenantID := "tenant-panic-test"
+
+	// 1. Enqueue job 1 which will panic
+	job1ID := "panic-job-1"
+	j1 := &domain.PDFParseJob{
+		ID:        job1ID,
+		UserID:    tenantID,
+		Status:    domain.PDFParseJobStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := pdfRepo.CreateJob(ctx, j1); err != nil {
+		t.Fatalf("failed to create job 1: %v", err)
+	}
+	if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: job1ID, UserID: tenantID}); err != nil {
+		t.Fatalf("failed to enqueue job 1: %v", err)
+	}
+
+	// Wait for job 1 to fail via panic recovery
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		job1, err := pdfRepo.GetJob(ctx, tenantID, job1ID)
+		if err != nil {
+			t.Fatalf("failed to get job 1: %v", err)
+		}
+		if job1.Status == domain.PDFParseJobStatusFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for job 1 to fail, got %s", job1.Status)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// 2. Enqueue job 2 for the same tenant. If slot was leaked, this job would hang forever because MaxConcurrentPerTenant is 1!
+	job2ID := "panic-job-2"
+	j2 := &domain.PDFParseJob{
+		ID:        job2ID,
+		UserID:    tenantID,
+		Status:    domain.PDFParseJobStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := pdfRepo.CreateJob(ctx, j2); err != nil {
+		t.Fatalf("failed to create job 2: %v", err)
+	}
+	if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: job2ID, UserID: tenantID}); err != nil {
+		t.Fatalf("failed to enqueue job 2: %v", err)
+	}
+
+	// Wait for job 2 to complete successfully
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		job2, err := pdfRepo.GetJob(ctx, tenantID, job2ID)
+		if err != nil {
+			t.Fatalf("failed to get job 2: %v", err)
+		}
+		if job2.Status == domain.PDFParseJobStatusCompleted {
+			break
+		}
+		if job2.Status == domain.PDFParseJobStatusFailed {
+			t.Fatalf("job 2 failed unexpectedly: %s", job2.ErrorMessage)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job 2 timed out waiting for completion; tenant concurrency slot was leaked on panic!")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+type callbackResumeExtractor struct {
+	fn func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error)
+}
+
+func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+	if c.fn != nil {
+		return c.fn(ctx, text, provider, model)
+	}
+	return &profile.JSONResume{}, nil
+}
+
+type callbackLLM struct {
+	fn func(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error)
+}
+
+func (m *callbackLLM) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+	if m.fn != nil {
+		return m.fn(ctx, req)
+	}
+	return &domain.GenerationResponse{TailoredContent: domain.TailoredContent{Summary: "OK"}}, nil
+}
+
+func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error) {
+	resp, err := m.GenerateTailoredResume(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &resp.GapReport, nil
+}
+
+// 16. GenerationJob Per-Tenant Concurrency Cap Test
+func TestPool_GenerationJob_PerTenantConcurrencyCap(t *testing.T) {
+	env := setupTestWorkerEnv(t)
+	var (
+		activeMu sync.Mutex
+		current  int
+		peak     int
+	)
+
+	llm := &callbackLLM{
+		fn: func(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+			activeMu.Lock()
+			current++
+			if current > peak {
+				peak = current
+			}
+			activeMu.Unlock()
+
+			time.Sleep(30 * time.Millisecond)
+
+			activeMu.Lock()
+			current--
+			activeMu.Unlock()
+
+			return &domain.GenerationResponse{
+				TailoredContent: domain.TailoredContent{
+					Summary: "Test summary",
+				},
+			}, nil
+		},
+	}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:            4,
+		MaxConcurrentPerTenant: 2,
+		QueueSize:              20,
+		BranchRepo:             env.branchRepo,
+		ProfileRepo:            env.profileRepo,
+		PresetRepo:             env.presetRepo,
+		TemplateRepo:           env.templateRepo,
+		LLMService:             llm,
+		Validator:              env.validator,
+		Renderer:               env.renderer,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	const jobCount = 6
+	versionIDs := make([]string, jobCount)
+	for i := 0; i < jobCount; i++ {
+		vID := fmt.Sprintf("ver-gen-cap-%d", i)
+		versionIDs[i] = vID
+		ver := &domain.BranchVersion{
+			ID:                 vID,
+			BranchID:           env.branchID,
+			Status:             domain.VersionStatusPending,
+			MasterRevisionUsed: 1,
+			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		}
+		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
+			t.Fatalf("failed to create version %d: %v", i, err)
+		}
+		if err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: vID}); err != nil {
+			t.Fatalf("failed to enqueue generation job %d: %v", i, err)
+		}
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for _, vID := range versionIDs {
+		for {
+			ver, err := env.branchRepo.GetVersion(ctx, env.branchID, vID)
+			if err != nil {
+				t.Fatalf("failed to get version %s: %v", vID, err)
+			}
+			if ver.Status == domain.VersionStatusCompleted {
+				break
+			}
+			if ver.Status == domain.VersionStatusFailed {
+				t.Fatalf("version %s failed: %s", vID, ver.ErrorMessage)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for version %s", vID)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	activeMu.Lock()
+	maxObserved := peak
+	activeMu.Unlock()
+
+	if maxObserved > 2 {
+		t.Fatalf("expected peak GenerationJob concurrency <= 2, got %d", maxObserved)
+	}
+	if maxObserved < 2 {
+		t.Errorf("expected peak GenerationJob concurrency to reach cap of 2, got %d", maxObserved)
+	}
+}
+
+// 17. Mixed Workload Shared Tenant Concurrency Cap Test
+func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
+	env := setupTestWorkerEnv(t)
+	pdfRepo := memory.New()
+
+	var (
+		activeMu sync.Mutex
+		current  int
+		peak     int
+	)
+
+	trackStart := func() {
+		activeMu.Lock()
+		current++
+		if current > peak {
+			peak = current
+		}
+		activeMu.Unlock()
+	}
+
+	trackEnd := func() {
+		activeMu.Lock()
+		current--
+		activeMu.Unlock()
+	}
+
+	llm := &callbackLLM{
+		fn: func(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+			trackStart()
+			time.Sleep(30 * time.Millisecond)
+			trackEnd()
+			return &domain.GenerationResponse{
+				TailoredContent: domain.TailoredContent{Summary: "Mixed gen"},
+			}, nil
+		},
+	}
+
+	extractor := &callbackResumeExtractor{
+		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+			trackStart()
+			time.Sleep(30 * time.Millisecond)
+			trackEnd()
+			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: "Mixed pdf"}}, nil
+		},
+	}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:            4,
+		MaxConcurrentPerTenant: 2,
+		QueueSize:              20,
+		BranchRepo:             env.branchRepo,
+		ProfileRepo:            env.profileRepo,
+		PresetRepo:             env.presetRepo,
+		TemplateRepo:           env.templateRepo,
+		PDFJobRepo:             pdfRepo,
+		ResumeExtractor:        extractor,
+		LLMService:             llm,
+		Validator:              env.validator,
+		Renderer:               env.renderer,
+		LLMTimeout:             5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	tenantID := env.defaultUser
+
+	const genCount = 3
+	const pdfCount = 3
+	versionIDs := make([]string, genCount)
+	pdfJobIDs := make([]string, pdfCount)
+
+	for i := 0; i < genCount; i++ {
+		vID := fmt.Sprintf("ver-mixed-%d", i)
+		versionIDs[i] = vID
+		ver := &domain.BranchVersion{
+			ID:                 vID,
+			BranchID:           env.branchID,
+			Status:             domain.VersionStatusPending,
+			MasterRevisionUsed: 1,
+			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		}
+		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
+			t.Fatalf("failed to create version %d: %v", i, err)
+		}
+		if err := pool.Enqueue(worker.GenerationJob{UserID: tenantID, BranchID: env.branchID, VersionID: vID}); err != nil {
+			t.Fatalf("failed to enqueue gen job %d: %v", i, err)
+		}
+	}
+
+	for i := 0; i < pdfCount; i++ {
+		pID := fmt.Sprintf("pdf-mixed-%d", i)
+		pdfJobIDs[i] = pID
+		pj := &domain.PDFParseJob{
+			ID:        pID,
+			UserID:    tenantID,
+			Status:    domain.PDFParseJobStatusPending,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		if err := pdfRepo.CreateJob(ctx, pj); err != nil {
+			t.Fatalf("failed to create pdf job %d: %v", i, err)
+		}
+		if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: pID, UserID: tenantID}); err != nil {
+			t.Fatalf("failed to enqueue pdf task %d: %v", i, err)
+		}
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for _, vID := range versionIDs {
+		for {
+			ver, err := env.branchRepo.GetVersion(ctx, env.branchID, vID)
+			if err != nil {
+				t.Fatalf("failed to get version %s: %v", vID, err)
+			}
+			if ver.Status == domain.VersionStatusCompleted {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for version %s", vID)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	for _, pID := range pdfJobIDs {
+		for {
+			pj, err := pdfRepo.GetJob(ctx, tenantID, pID)
+			if err != nil {
+				t.Fatalf("failed to get pdf job %s: %v", pID, err)
+			}
+			if pj.Status == domain.PDFParseJobStatusCompleted {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for pdf job %s", pID)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	activeMu.Lock()
+	maxObserved := peak
+	activeMu.Unlock()
+
+	if maxObserved > 2 {
+		t.Fatalf("expected combined peak concurrency across mixed workloads <= 2, got %d", maxObserved)
+	}
+	if maxObserved < 2 {
+		t.Errorf("expected combined peak concurrency to reach 2, got %d", maxObserved)
+	}
+}
+
+// 18. Mixed Workload Fair-Share Multi-Tenant Anti-Starvation Test
+func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
+	env := setupTestWorkerEnv(t)
+	pdfRepo := memory.New()
+
+	llm := &callbackLLM{
+		fn: func(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+			time.Sleep(120 * time.Millisecond)
+			return &domain.GenerationResponse{
+				TailoredContent: domain.TailoredContent{Summary: "Slow gen"},
+			}, nil
+		},
+	}
+
+	extractor := &callbackResumeExtractor{
+		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+			time.Sleep(10 * time.Millisecond)
+			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: "Fast pdf"}}, nil
+		},
+	}
+
+	pool := worker.NewPool(worker.PoolConfig{
+		Concurrency:            2,
+		MaxConcurrentPerTenant: 1,
+		QueueSize:              20,
+		BranchRepo:             env.branchRepo,
+		ProfileRepo:            env.profileRepo,
+		PresetRepo:             env.presetRepo,
+		TemplateRepo:           env.templateRepo,
+		PDFJobRepo:             pdfRepo,
+		ResumeExtractor:        extractor,
+		LLMService:             llm,
+		Validator:              env.validator,
+		Renderer:               env.renderer,
+		LLMTimeout:             5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	tenantA := env.defaultUser
+	const countA = 4
+	versionIDs := make([]string, countA)
+	for i := 0; i < countA; i++ {
+		vID := fmt.Sprintf("ver-slow-gen-%d", i)
+		versionIDs[i] = vID
+		ver := &domain.BranchVersion{
+			ID:                 vID,
+			BranchID:           env.branchID,
+			Status:             domain.VersionStatusPending,
+			MasterRevisionUsed: 1,
+			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		}
+		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
+			t.Fatalf("failed to create version %d: %v", i, err)
+		}
+		if err := pool.Enqueue(worker.GenerationJob{UserID: tenantA, BranchID: env.branchID, VersionID: vID}); err != nil {
+			t.Fatalf("failed to enqueue gen job %d: %v", i, err)
+		}
+	}
+
+	time.Sleep(15 * time.Millisecond)
+
+	tenantB := "tenant-b-fast-pdf"
+	fastJobID := "pdf-fast-job-1"
+	pj := &domain.PDFParseJob{
+		ID:        fastJobID,
+		UserID:    tenantB,
+		Status:    domain.PDFParseJobStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := pdfRepo.CreateJob(ctx, pj); err != nil {
+		t.Fatalf("failed to create pdf job: %v", err)
+	}
+	if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: fastJobID, UserID: tenantB}); err != nil {
+		t.Fatalf("failed to enqueue fast pdf job: %v", err)
+	}
+
+	deadlineB := time.Now().Add(500 * time.Millisecond)
+	for {
+		jobB, err := pdfRepo.GetJob(ctx, tenantB, fastJobID)
+		if err != nil {
+			t.Fatalf("failed to get fast job: %v", err)
+		}
+		if jobB.Status == domain.PDFParseJobStatusCompleted {
+			break
+		}
+		if time.Now().After(deadlineB) {
+			t.Fatalf("tenant B fast job timed out waiting for completion")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	var remainingA int
+	for _, vID := range versionIDs {
+		ver, err := env.branchRepo.GetVersion(ctx, env.branchID, vID)
+		if err != nil {
+			t.Fatalf("failed to get version %s: %v", vID, err)
+		}
+		if ver.Status != domain.VersionStatusCompleted {
+			remainingA++
+		}
+	}
+	if remainingA < 2 {
+		t.Fatalf("expected at least 2 of tenant A's generation jobs to still be incomplete when B finished, got remaining %d", remainingA)
+	}
+}
+

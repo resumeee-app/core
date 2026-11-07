@@ -1137,7 +1137,7 @@ func TestRegistry_AvailableModels_FilterMatrix(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// Gemini Schema Sanitizer & Error Parsing Tests (Issue #67)
+// Gemini Schema Sanitizer & Error Parsing Tests
 // -----------------------------------------------------------------------------
 
 func TestSanitizeGeminiSchema(t *testing.T) {

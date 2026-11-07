@@ -27,8 +27,6 @@ func logLLMRequest(ctx context.Context, logger *slog.Logger, debugger PromptDebu
 		slog.String("provider", provider),
 		slog.String("model", model),
 		slog.String("operation", operation),
-		slog.String("system_prompt", systemPrompt),
-		slog.String("user_prompt", userPrompt),
 	)
 
 	trace := &llmTrace{
@@ -90,7 +88,6 @@ func logLLMResponse(ctx context.Context, logger *slog.Logger, trace *llmTrace, s
 		slog.String("operation", operation),
 		slog.Int64("duration_ms", duration.Milliseconds()),
 		slog.Int("status_code", statusCode),
-		slog.String("response", rawResponse),
 	}
 	if err != nil {
 		attrs = append(attrs, slog.String("error", err.Error()))

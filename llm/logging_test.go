@@ -67,7 +67,6 @@ func TestLLMLogging_Table(t *testing.T) {
 		execute           func(t *testing.T, baseURL string, logger *slog.Logger)
 		expectError       bool
 		expectedStatus    int
-		validateRawResp   func(t *testing.T, rawResp string)
 	}{
 		{
 			name:          "gemini_tailored_resume_success",
@@ -104,11 +103,6 @@ func TestLLMLogging_Table(t *testing.T) {
 			},
 			expectError:    false,
 			expectedStatus: http.StatusOK,
-			validateRawResp: func(t *testing.T, rawResp string) {
-				if !strings.Contains(rawResp, "candidates") {
-					t.Errorf("expected raw response to contain candidates, got: %s", rawResp)
-				}
-			},
 		},
 		{
 			name:          "gemini_complete_text_success",
@@ -145,11 +139,6 @@ func TestLLMLogging_Table(t *testing.T) {
 			},
 			expectError:    false,
 			expectedStatus: http.StatusOK,
-			validateRawResp: func(t *testing.T, rawResp string) {
-				if !strings.Contains(rawResp, "Gemini extracted resume content") {
-					t.Errorf("expected raw response to contain generated text, got: %s", rawResp)
-				}
-			},
 		},
 		{
 			name:          "openai_tailored_resume_success",
@@ -184,11 +173,6 @@ func TestLLMLogging_Table(t *testing.T) {
 			},
 			expectError:    false,
 			expectedStatus: http.StatusOK,
-			validateRawResp: func(t *testing.T, rawResp string) {
-				if !strings.Contains(rawResp, "choices") {
-					t.Errorf("expected raw response to contain choices, got: %s", rawResp)
-				}
-			},
 		},
 		{
 			name:          "openai_complete_text_success",
@@ -223,11 +207,6 @@ func TestLLMLogging_Table(t *testing.T) {
 			},
 			expectError:    false,
 			expectedStatus: http.StatusOK,
-			validateRawResp: func(t *testing.T, rawResp string) {
-				if !strings.Contains(rawResp, "OpenAI completion text") {
-					t.Errorf("expected raw response to contain completion text, got: %s", rawResp)
-				}
-			},
 		},
 		{
 			name:          "anthropic_tailored_resume_success",
@@ -262,11 +241,6 @@ func TestLLMLogging_Table(t *testing.T) {
 			},
 			expectError:    false,
 			expectedStatus: http.StatusOK,
-			validateRawResp: func(t *testing.T, rawResp string) {
-				if !strings.Contains(rawResp, anthropicToolName) {
-					t.Errorf("expected raw response to contain tool name, got: %s", rawResp)
-				}
-			},
 		},
 		{
 			name:          "anthropic_complete_text_success",
@@ -300,11 +274,6 @@ func TestLLMLogging_Table(t *testing.T) {
 			},
 			expectError:    false,
 			expectedStatus: http.StatusOK,
-			validateRawResp: func(t *testing.T, rawResp string) {
-				if !strings.Contains(rawResp, "Anthropic message reply text") {
-					t.Errorf("expected raw response to contain reply text, got: %s", rawResp)
-				}
-			},
 		},
 		{
 			name:          "compat_tailored_resume_success",
@@ -338,11 +307,6 @@ func TestLLMLogging_Table(t *testing.T) {
 			},
 			expectError:    false,
 			expectedStatus: http.StatusOK,
-			validateRawResp: func(t *testing.T, rawResp string) {
-				if !strings.Contains(rawResp, "choices") {
-					t.Errorf("expected raw response to contain choices, got: %s", rawResp)
-				}
-			},
 		},
 		{
 			name:          "compat_complete_text_success",
@@ -376,11 +340,6 @@ func TestLLMLogging_Table(t *testing.T) {
 			},
 			expectError:    false,
 			expectedStatus: http.StatusOK,
-			validateRawResp: func(t *testing.T, rawResp string) {
-				if !strings.Contains(rawResp, "OpenAI-compatible text response") {
-					t.Errorf("expected raw response to contain text, got: %s", rawResp)
-				}
-			},
 		},
 		{
 			name:          "provider_http_error_logging",
@@ -403,11 +362,6 @@ func TestLLMLogging_Table(t *testing.T) {
 			},
 			expectError:    true,
 			expectedStatus: http.StatusBadRequest,
-			validateRawResp: func(t *testing.T, rawResp string) {
-				if !strings.Contains(rawResp, "Invalid argument provided") {
-					t.Errorf("expected error response to contain message, got: %s", rawResp)
-				}
-			},
 		},
 	}
 
@@ -454,11 +408,11 @@ func TestLLMLogging_Table(t *testing.T) {
 			if reqRec.Operation != tc.operation {
 				t.Errorf("expected operation %q, got %q", tc.operation, reqRec.Operation)
 			}
-			if strings.TrimSpace(reqRec.SystemPrompt) == "" {
-				t.Error("expected non-empty system_prompt")
+			if reqRec.SystemPrompt != "" {
+				t.Errorf("expected empty system_prompt in slog record to prevent console dump, got %q", reqRec.SystemPrompt)
 			}
-			if strings.TrimSpace(reqRec.UserPrompt) == "" {
-				t.Error("expected non-empty user_prompt")
+			if reqRec.UserPrompt != "" {
+				t.Errorf("expected empty user_prompt in slog record to prevent console dump, got %q", reqRec.UserPrompt)
 			}
 
 			// Verify Response Record
@@ -484,8 +438,8 @@ func TestLLMLogging_Table(t *testing.T) {
 			if respRec.DurationMS == nil || *respRec.DurationMS < 0 {
 				t.Errorf("expected non-negative duration_ms, got %v", respRec.DurationMS)
 			}
-			if tc.validateRawResp != nil {
-				tc.validateRawResp(t, respRec.Response)
+			if respRec.Response != "" {
+				t.Errorf("expected empty response in slog record to prevent console dump, got %q", respRec.Response)
 			}
 			if tc.expectError {
 				if strings.TrimSpace(respRec.Error) == "" {
@@ -696,8 +650,14 @@ func TestLLMPromptDebugging_Integration(t *testing.T) {
 					t.Errorf("expected tailor files, got prompt=%q, output=%q", promptTailor, outputTailor)
 				}
 
-				promptData, _ := os.ReadFile(filepath.Join(targetDir, promptTailor))
-				outputData, _ := os.ReadFile(filepath.Join(targetDir, outputTailor))
+				promptData, err := os.ReadFile(filepath.Join(targetDir, promptTailor))
+				if err != nil {
+					t.Fatalf("failed to read prompt file: %v", err)
+				}
+				outputData, err := os.ReadFile(filepath.Join(targetDir, outputTailor))
+				if err != nil {
+					t.Fatalf("failed to read output file: %v", err)
+				}
 
 				if !strings.Contains(string(promptData), "# LLM Prompt: tailor") {
 					t.Errorf("prompt missing tailor header: %s", string(promptData))
@@ -757,7 +717,10 @@ func TestLLMPromptDebugging_Integration(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		entries, _ := os.ReadDir(tmpDir)
+		entries, err := os.ReadDir(tmpDir)
+		if err != nil {
+			t.Fatalf("failed to read dir: %v", err)
+		}
 		if len(entries) != 0 {
 			t.Errorf("expected 0 files, got %d", len(entries))
 		}

@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -151,8 +152,9 @@ func TestFilePromptDebugger_WritePromptAndResponse(t *testing.T) {
 	if !strings.Contains(outputContent, "**Status Code**: 200") {
 		t.Errorf("output file missing status code: %s", outputContent)
 	}
-	if !strings.Contains(outputContent, `{"basics": {"name": "Jane Doe"}}`) {
-		t.Errorf("output file missing raw response: %s", outputContent)
+	expectedFormattedOutput := "```json\n{\n  \"basics\": {\n    \"name\": \"Jane Doe\"\n  }\n}\n```"
+	if !strings.Contains(outputContent, expectedFormattedOutput) {
+		t.Errorf("output file missing formatted json block:\nexpected:\n%s\ngot:\n%s", expectedFormattedOutput, outputContent)
 	}
 }
 
@@ -422,7 +424,10 @@ func TestFilePromptDebugger_TenantIsolationAndTraversal(t *testing.T) {
 
 	// Ensure no files escaped outside tmpDir
 	parentDir := filepath.Dir(tmpDir)
-	entries, _ := os.ReadDir(parentDir)
+	entries, err := os.ReadDir(parentDir)
+	if err != nil {
+		t.Fatalf("failed to read parent dir: %v", err)
+	}
 	for _, e := range entries {
 		if e.Name() == "etc" {
 			t.Errorf("file escaped to parent directory: %s", e.Name())
@@ -482,4 +487,616 @@ func TestOptions_WithPromptDebuggerAndDebugPrompts(t *testing.T) {
 		}
 	})
 }
+
+func TestFilePromptDebugger_DecodesAndFormatsPromptsAndResponses(t *testing.T) {
+	fixedTime := time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC)
+
+	t.Run("Encoded JSON prompts are decoded and wrapped in json code fences", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		meta := llm.PromptDebugMeta{
+			TenantID:     "tenant-test",
+			Provider:     "openai",
+			Model:        "gpt-4o",
+			Operation:    "tailor",
+			SystemPrompt: "\"{\\n  \\\"role\\\": \\\"expert\\\"\\n}\"",
+			UserPrompt:   "{\"candidate\": \"Alice\"}",
+			Timestamp:    fixedTime,
+		}
+
+		session, err := debugger.StartSession(meta)
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+
+		promptPath := filepath.Join(tmpDir, "tenant-test", "tailor_20261107100000.md")
+		promptBytes, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("read prompt file failed: %v", err)
+		}
+		promptContent := string(promptBytes)
+
+		expectedSys := "```json\n{\n  \"role\": \"expert\"\n}\n```"
+		if !strings.Contains(promptContent, expectedSys) {
+			t.Errorf("prompt missing formatted system prompt:\nexpected:\n%s\ngot:\n%s", expectedSys, promptContent)
+		}
+
+		expectedUser := "```json\n{\n  \"candidate\": \"Alice\"\n}\n```"
+		if !strings.Contains(promptContent, expectedUser) {
+			t.Errorf("prompt missing formatted user prompt:\nexpected:\n%s\ngot:\n%s", expectedUser, promptContent)
+		}
+
+		// Also verify response with encoded JSON string
+		respMeta := llm.ResponseDebugMeta{
+			Provider:    "openai",
+			Model:       "gpt-4o",
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: "\"{\\n  \\\"name\\\": \\\"Bob\\\"\\n}\"",
+			Timestamp:   fixedTime,
+		}
+		if err := session.WriteResponse(respMeta); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		outputPath := filepath.Join(tmpDir, "tenant-test", "tailor_20261107100000_output.md")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("read output file failed: %v", err)
+		}
+		outputContent := string(outputBytes)
+
+		expectedOutput := "```json\n{\n  \"name\": \"Bob\"\n}\n```"
+		if !strings.Contains(outputContent, expectedOutput) {
+			t.Errorf("output missing formatted response:\nexpected:\n%s\ngot:\n%s", expectedOutput, outputContent)
+		}
+	})
+
+	t.Run("Encoded plain text prompts are unquoted without json code fences", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		meta := llm.PromptDebugMeta{
+			Operation:    "extract",
+			SystemPrompt: "\"You are a resume parser.\\nExtract all fields.\"",
+			UserPrompt:   "\"Please parse this text:\\nLine 1\\nLine 2\"",
+			Timestamp:    fixedTime,
+		}
+
+		session, err := debugger.StartSession(meta)
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+
+		promptPath := filepath.Join(tmpDir, "default", "extract_20261107100000.md")
+		promptBytes, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("read prompt file failed: %v", err)
+		}
+		promptContent := string(promptBytes)
+
+		expectedSysText := "You are a resume parser.\nExtract all fields."
+		if !strings.Contains(promptContent, expectedSysText) {
+			t.Errorf("prompt missing unescaped system text:\nexpected to contain: %q\ngot:\n%s", expectedSysText, promptContent)
+		}
+		if strings.Contains(promptContent, "```json") {
+			t.Errorf("plain text prompt should not be wrapped in ```json:\n%s", promptContent)
+		}
+
+		expectedUserText := "Please parse this text:\nLine 1\nLine 2"
+		if !strings.Contains(promptContent, expectedUserText) {
+			t.Errorf("prompt missing unescaped user text:\nexpected to contain: %q\ngot:\n%s", expectedUserText, promptContent)
+		}
+
+		// Non-JSON response
+		respMeta := llm.ResponseDebugMeta{
+			Operation:   "extract",
+			StatusCode:  500,
+			RawResponse: "Service Unavailable: high upstream demand",
+			Timestamp:   fixedTime,
+		}
+		if err := session.WriteResponse(respMeta); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		outputPath := filepath.Join(tmpDir, "default", "extract_20261107100000_output.md")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("read output file failed: %v", err)
+		}
+		outputContent := string(outputBytes)
+		if !strings.Contains(outputContent, "Service Unavailable: high upstream demand") {
+			t.Errorf("output missing plain text response:\n%s", outputContent)
+		}
+		if strings.Contains(outputContent, "```json") {
+			t.Errorf("plain text output should not be wrapped in ```json:\n%s", outputContent)
+		}
+	})
+
+	t.Run("OpenAI response with nested encoded JSON string is fully decoded", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		meta := llm.PromptDebugMeta{
+			Operation:    "tailor",
+			SystemPrompt: "Tailor",
+			UserPrompt:   "Candidate",
+			Timestamp:    fixedTime,
+		}
+
+		session, err := debugger.StartSession(meta)
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+
+		rawOpenAI := `{
+			"choices": [
+				{
+					"message": {
+						"role": "assistant",
+						"content": "{\n  \"tailored_content\": {\n    \"summary\": \"Senior Engineer\"\n  }\n}"
+					}
+				}
+			],
+			"usage": {
+				"total_tokens": 42
+			}
+		}`
+
+		respMeta := llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: rawOpenAI,
+			Timestamp:   fixedTime,
+		}
+
+		if err := session.WriteResponse(respMeta); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		outputPath := filepath.Join(tmpDir, "default", "tailor_20261107100000_output.md")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("read output file failed: %v", err)
+		}
+		outputContent := string(outputBytes)
+
+		// Must be wrapped in ```json
+		if !strings.Contains(outputContent, "```json\n") {
+			t.Errorf("output missing ```json wrapper:\n%s", outputContent)
+		}
+		// Inner JSON should be decoded as an object, NOT an escaped string containing `\"tailored_content\"`
+		if strings.Contains(outputContent, `\"tailored_content\"`) {
+			t.Errorf("inner json content should be decoded, but found escaped quotes:\n%s", outputContent)
+		}
+		if !strings.Contains(outputContent, `"summary": "Senior Engineer"`) {
+			t.Errorf("output missing decoded summary:\n%s", outputContent)
+		}
+	})
+
+	t.Run("Gemini response with nested encoded JSON string in parts is fully decoded", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		session, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:    "tailor",
+			SystemPrompt: "Tailor",
+			UserPrompt:   "Candidate",
+			Timestamp:    fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+
+		rawGemini := `{
+			"candidates": [
+				{
+					"content": {
+						"parts": [
+							{
+								"text": "{\n  \"basics\": {\n    \"name\": \"Alice\"\n  }\n}"
+							}
+						]
+					}
+				}
+			]
+		}`
+
+		if err := session.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: rawGemini,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		outputPath := filepath.Join(tmpDir, "default", "tailor_20261107100000_output.md")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("read output file failed: %v", err)
+		}
+		outputContent := string(outputBytes)
+
+		if !strings.Contains(outputContent, "```json\n") {
+			t.Errorf("output missing ```json wrapper:\n%s", outputContent)
+		}
+		if strings.Contains(outputContent, `\"basics\"`) {
+			t.Errorf("inner parts text should be decoded, but found escaped quotes:\n%s", outputContent)
+		}
+		if !strings.Contains(outputContent, `"name": "Alice"`) {
+			t.Errorf("output missing decoded name:\n%s", outputContent)
+		}
+	})
+
+	t.Run("Already fenced JSON is preserved without double wrapping", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		fencedJSON := "```json\n{\n  \"already\": \"fenced\"\n}\n```"
+		session, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:    "tailor",
+			SystemPrompt: fencedJSON,
+			UserPrompt:   fencedJSON,
+			Timestamp:    fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+
+		if err := session.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: fencedJSON,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		promptPath := filepath.Join(tmpDir, "default", "tailor_20261107100000.md")
+		promptBytes, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("failed to read prompt file: %v", err)
+		}
+		promptContent := string(promptBytes)
+
+		if strings.Contains(promptContent, "```json\n```json") {
+			t.Errorf("found duplicate nested code fences in prompt:\n%s", promptContent)
+		}
+
+		outputPath := filepath.Join(tmpDir, "default", "tailor_20261107100000_output.md")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("failed to read output file: %v", err)
+		}
+		outputContent := string(outputBytes)
+
+		if strings.Contains(outputContent, "```json\n```json") {
+			t.Errorf("found duplicate nested code fences in output:\n%s", outputContent)
+		}
+	})
+
+	t.Run("JSON array and nested arrays with escaped strings are decoded and formatted", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		session, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:    "extract",
+			SystemPrompt: "[{\"role\": \"system\"}]",
+			UserPrompt:   "[{\"role\": \"user\", \"payload\": \"{\\\"data\\\": 123}\"}]",
+			Timestamp:    fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+
+		rawArrayResponse := `["{\"item\": 1}", "normal_string", 42]`
+		if err := session.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "extract",
+			StatusCode:  200,
+			RawResponse: rawArrayResponse,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		promptPath := filepath.Join(tmpDir, "default", "extract_20261107100000.md")
+		promptBytes, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("failed to read prompt file: %v", err)
+		}
+		promptContent := string(promptBytes)
+
+		if !strings.Contains(promptContent, "```json\n[\n  {\n    \"role\": \"system\"\n  }\n]\n```") {
+			t.Errorf("prompt missing formatted system array:\n%s", promptContent)
+		}
+		if strings.Contains(promptContent, `\"data\"`) {
+			t.Errorf("prompt should have decoded nested json in payload:\n%s", promptContent)
+		}
+
+		outputPath := filepath.Join(tmpDir, "default", "extract_20261107100000_output.md")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("failed to read output file: %v", err)
+		}
+		outputContent := string(outputBytes)
+
+		if !strings.Contains(outputContent, "```json\n") {
+			t.Errorf("output missing ```json wrapper:\n%s", outputContent)
+		}
+		if strings.Contains(outputContent, `\"item\"`) {
+			t.Errorf("output should have decoded nested json in array item:\n%s", outputContent)
+		}
+		if !strings.Contains(outputContent, "\"item\": 1") {
+			t.Errorf("output missing decoded item:\n%s", outputContent)
+		}
+	})
+
+	t.Run("Unquoted string with escaped characters is decoded and formatted", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		// Unquoted string containing \n and \"
+		unquotedEscaped := `{\n  \"key\": \"value\"\n}`
+		session, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:    "tailor",
+			SystemPrompt: "System",
+			UserPrompt:   unquotedEscaped,
+			Timestamp:    fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+
+		if err := session.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: unquotedEscaped,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		outputPath := filepath.Join(tmpDir, "default", "tailor_20261107100000_output.md")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("failed to read output file: %v", err)
+		}
+		outputContent := string(outputBytes)
+
+		expectedBlock := "```json\n{\n  \"key\": \"value\"\n}\n```"
+		if !strings.Contains(outputContent, expectedBlock) {
+			t.Errorf("expected formatted json block:\n%s\ngot:\n%s", expectedBlock, outputContent)
+		}
+	})
+
+	t.Run("Dynamic code fence selects 4 backticks when JSON contains triple backticks", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		jsonWithBackticks := "{\"code\": \"```python\\nprint('hello')\\n```\"}"
+		session, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:  "tailor",
+			UserPrompt: jsonWithBackticks,
+			Timestamp:  fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+
+		if err := session.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: jsonWithBackticks,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		promptPath := filepath.Join(tmpDir, "default", "tailor_20261107100000.md")
+		promptBytes, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("failed to read prompt file: %v", err)
+		}
+		promptContent := string(promptBytes)
+
+		if !strings.Contains(promptContent, "````json\n") || !strings.Contains(promptContent, "\n````") {
+			t.Errorf("expected 4 backticks fence for payload containing triple backticks, got:\n%s", promptContent)
+		}
+
+		outputPath := filepath.Join(tmpDir, "default", "tailor_20261107100000_output.md")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("failed to read output file: %v", err)
+		}
+		outputContent := string(outputBytes)
+
+		if !strings.Contains(outputContent, "````json\n") || !strings.Contains(outputContent, "\n````") {
+			t.Errorf("expected 4 backticks fence for response containing triple backticks, got:\n%s", outputContent)
+		}
+	})
+
+	t.Run("Embedded JSON inside XML tags is formatted with json code fences", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		xmlPrompt := "System instruction\n<master_profile_data>{\"name\": \"Alice\", \"role\": \"developer\"}</master_profile_data>\nPlease tailor."
+		session, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:  "tailor",
+			UserPrompt: xmlPrompt,
+			Timestamp:  fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+		if err := session.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: xmlPrompt,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		promptPath := filepath.Join(tmpDir, "default", "tailor_20261107100000.md")
+		promptBytes, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("failed to read prompt file: %v", err)
+		}
+		promptContent := string(promptBytes)
+
+		if !strings.Contains(promptContent, "<master_profile_data>\n```json\n{\n  \"name\": \"Alice\",\n  \"role\": \"developer\"\n}\n```\n</master_profile_data>") {
+			t.Errorf("expected embedded json in xml tag to be formatted, got:\n%s", promptContent)
+		}
+
+		outputPath := filepath.Join(tmpDir, "default", "tailor_20261107100000_output.md")
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("failed to read output file: %v", err)
+		}
+		outputContent := string(outputBytes)
+		if !strings.Contains(outputContent, "<master_profile_data>\n```json\n{\n  \"name\": \"Alice\",\n  \"role\": \"developer\"\n}\n```\n</master_profile_data>") {
+			t.Errorf("expected embedded json in xml tag output to be formatted, got:\n%s", outputContent)
+		}
+
+		// Also verify non-JSON XML tag is untouched
+		plainXML := "<instructions>Plain instructions here</instructions>"
+		session2, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:  "tailor",
+			UserPrompt: plainXML,
+			Timestamp:  fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession2 failed: %v", err)
+		}
+		if err := session2.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: plainXML,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		promptPath2 := filepath.Join(tmpDir, "default", "tailor_20261107100000_1.md")
+		promptBytes2, err := os.ReadFile(promptPath2)
+		if err != nil {
+			t.Fatalf("failed to read prompt file 2: %v", err)
+		}
+		promptContent2 := string(promptBytes2)
+
+		if strings.Contains(promptContent2, "```json") {
+			t.Errorf("plain xml tag should not contain json code fence:\n%s", promptContent2)
+		}
+		if !strings.Contains(promptContent2, "<instructions>Plain instructions here</instructions>") {
+			t.Errorf("expected plain xml tag to be preserved:\n%s", promptContent2)
+		}
+	})
+
+	t.Run("Payload exceeding 10MB bypasses formatting safely", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		// Create a large JSON payload > 10MB
+		hugePayload := "{\"data\": \"" + strings.Repeat("A", (10<<20)+100) + "\"}"
+		session, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:  "tailor",
+			UserPrompt: hugePayload,
+			Timestamp:  fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+		if err := session.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: hugePayload,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		promptPath := filepath.Join(tmpDir, "default", "tailor_20261107100000.md")
+		promptBytes, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("failed to read prompt file: %v", err)
+		}
+		promptContent := string(promptBytes)
+
+		// Must not be indented or formatted in ```json
+		if strings.Contains(promptContent, "```json") {
+			t.Errorf("payload > 10MB should bypass json formatting")
+		}
+		if !strings.Contains(promptContent, hugePayload) {
+			t.Errorf("expected raw huge payload to be preserved verbatim")
+		}
+	})
+
+	t.Run("Deep JSON decode terminates at maxJSONDecodeDepth limit without error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+			return fixedTime
+		}))
+
+		// Construct 15 levels of nested JSON strings
+		current := `{"leaf": "deep_value"}`
+		for i := 0; i < 15; i++ {
+			b, err := json.Marshal(map[string]any{"nested": current})
+			if err != nil {
+				t.Fatalf("marshal error: %v", err)
+			}
+			current = string(b)
+		}
+
+		session, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:  "tailor",
+			UserPrompt: current,
+			Timestamp:  fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession failed: %v", err)
+		}
+		if err := session.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: current,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		promptPath := filepath.Join(tmpDir, "default", "tailor_20261107100000.md")
+		promptBytes, err := os.ReadFile(promptPath)
+		if err != nil {
+			t.Fatalf("failed to read prompt file: %v", err)
+		}
+		promptContent := string(promptBytes)
+
+		if !strings.Contains(promptContent, "```json\n") {
+			t.Errorf("expected outer json formatting:\n%s", promptContent)
+		}
+	})
+}
+
 

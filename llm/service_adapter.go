@@ -1,4 +1,3 @@
-// Package llm provides LLM provider integrations, registry routing, prompt templates, and generation adapters.
 package llm
 
 import (

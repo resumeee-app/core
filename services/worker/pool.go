@@ -1,5 +1,3 @@
-// Package worker provides an in-memory concurrent worker pool and execution pipeline
-// for asynchronous resume generation and background batch synchronization.
 package worker
 
 import (

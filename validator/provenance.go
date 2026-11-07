@@ -1,5 +1,3 @@
-// Package validator implements anti-hallucination provenance validation ("No Lies" invariant),
-// verifying that all tailored achievements cite verified Master Profile facts and skills.
 package validator
 
 import (

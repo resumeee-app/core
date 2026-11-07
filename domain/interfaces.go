@@ -1,5 +1,3 @@
-// Package domain defines the core domain models, interfaces, entities, error sentinels,
-// and invariants for the Resumeee resume tailoring engine.
 package domain
 
 import "context"

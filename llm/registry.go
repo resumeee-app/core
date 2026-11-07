@@ -1,5 +1,3 @@
-// Package llm provides client adapters, prompt engineering pipelines, schema enforcement,
-// and provider registry resolution for generative AI providers (Gemini, OpenAI, Anthropic, OpenAI-compatible).
 package llm
 
 import (

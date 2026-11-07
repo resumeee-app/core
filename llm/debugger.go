@@ -1,5 +1,3 @@
-// Package llm provides client adapters, prompt engineering pipelines, schema enforcement,
-// and debugging mechanisms for generative AI model providers.
 package llm
 
 import (

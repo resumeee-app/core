@@ -8,6 +8,7 @@ import (
 	"text/template"
 
 	"resumeee/internal/domain"
+	"resumeee/internal/privacy"
 )
 
 //go:embed templates/*
@@ -82,7 +83,7 @@ func recordFacts(idMap map[string]string, facts []domain.Fact) {
 
 // BuildPrompt constructs a structured prompt payload enforcing the 3-tier rules hierarchy,
 // anti-hallucination grounding constraints ("No Lies" invariant), prior active version continuity (ADR-002),
-// and serialized Master Profile snapshot data projected with compact short identifiers.
+// and serialized Master Profile snapshot data projected with compact short identifiers and PII obfuscated.
 //
 // Parameters:
 //   - req: GenerationRequest containing JobDescription, WritingRules, TargetRole, MasterProfile,
@@ -91,8 +92,12 @@ func recordFacts(idMap map[string]string, facts []domain.Fact) {
 // Returns:
 //   - PromptPayload with populated SystemPrompt and UserPrompt strings, or an error if generation fails.
 func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
+	// Obfuscate candidate contact PII before compiling prompts
+	session := privacy.NewSessionFromRequest(req)
+	obfReq := session.ObfuscateRequest(req)
+
 	// 1. Build idMap for projecting snapshot, pinned/excluded entities, and prior version
-	idMap := buildShortIDMap(req.MasterProfile)
+	idMap := buildShortIDMap(obfReq.MasterProfile)
 
 	// 2. Render System Prompt from template
 	var sysBuilder strings.Builder
@@ -103,8 +108,8 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 
 	// 3. Prepare data and render User Prompt from template
 	var priorJSONStr string
-	if req.PriorVersion != nil {
-		projectedPrior := projectPriorVersion(req.PriorVersion, idMap)
+	if obfReq.PriorVersion != nil {
+		projectedPrior := projectPriorVersion(obfReq.PriorVersion, idMap)
 		priorJSON, err := json.MarshalIndent(projectedPrior, "", "  ")
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize prior version: %w", err)
@@ -112,36 +117,36 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 		priorJSONStr = string(priorJSON)
 	}
 
-	profileJSONStr, err := serializeProjectedMasterProfile(req.MasterProfile, idMap)
+	profileJSONStr, err := serializeProjectedMasterProfile(obfReq.MasterProfile, idMap)
 	if err != nil {
 		return nil, err
 	}
 
 	pinned := ""
-	if len(req.BranchContext.PinnedEntityIDs) > 0 {
-		projectedPinned := make([]string, len(req.BranchContext.PinnedEntityIDs))
-		for i, id := range req.BranchContext.PinnedEntityIDs {
+	if len(obfReq.BranchContext.PinnedEntityIDs) > 0 {
+		projectedPinned := make([]string, len(obfReq.BranchContext.PinnedEntityIDs))
+		for i, id := range obfReq.BranchContext.PinnedEntityIDs {
 			projectedPinned[i] = resolveShortID(id, idMap)
 		}
 		pinned = strings.Join(projectedPinned, ", ")
 	}
 
 	excluded := ""
-	if len(req.BranchContext.ExcludedEntityIDs) > 0 {
-		projectedExcluded := make([]string, len(req.BranchContext.ExcludedEntityIDs))
-		for i, id := range req.BranchContext.ExcludedEntityIDs {
+	if len(obfReq.BranchContext.ExcludedEntityIDs) > 0 {
+		projectedExcluded := make([]string, len(obfReq.BranchContext.ExcludedEntityIDs))
+		for i, id := range obfReq.BranchContext.ExcludedEntityIDs {
 			projectedExcluded[i] = resolveShortID(id, idMap)
 		}
 		excluded = strings.Join(projectedExcluded, ", ")
 	}
 
 	ctx := tailorPromptContext{
-		GlobalRules:        strings.TrimSpace(req.GlobalRules),
-		PresetInstructions: strings.TrimSpace(req.PresetInstructions),
-		TargetRole:         strings.TrimSpace(req.BranchContext.TargetRole),
-		TargetCompany:      strings.TrimSpace(req.BranchContext.TargetCompany),
-		TargetRequirements: strings.TrimSpace(req.BranchContext.TargetRequirements),
-		BranchInstructions: strings.TrimSpace(req.BranchContext.BranchInstructions),
+		GlobalRules:        strings.TrimSpace(obfReq.GlobalRules),
+		PresetInstructions: strings.TrimSpace(obfReq.PresetInstructions),
+		TargetRole:         strings.TrimSpace(obfReq.BranchContext.TargetRole),
+		TargetCompany:      strings.TrimSpace(obfReq.BranchContext.TargetCompany),
+		TargetRequirements: strings.TrimSpace(obfReq.BranchContext.TargetRequirements),
+		BranchInstructions: strings.TrimSpace(obfReq.BranchContext.BranchInstructions),
 		PinnedEntities:     pinned,
 		ExcludedEntities:   excluded,
 		PriorVersionJSON:   priorJSONStr,
@@ -163,7 +168,11 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 // BuildGapAnalysisPrompt constructs a targeted prompt payload designed exclusively for evaluating
 // candidate qualifications against target job requirements, avoiding full resume generation overhead.
 func BuildGapAnalysisPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
-	idMap := buildShortIDMap(req.MasterProfile)
+	// Obfuscate candidate contact PII before compiling prompts
+	session := privacy.NewSessionFromRequest(req)
+	obfReq := session.ObfuscateRequest(req)
+
+	idMap := buildShortIDMap(obfReq.MasterProfile)
 
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(1024)
@@ -171,16 +180,16 @@ func BuildGapAnalysisPrompt(req domain.GenerationRequest) (*PromptPayload, error
 		return nil, fmt.Errorf("failed to render gap analysis system prompt template: %w", err)
 	}
 
-	profileJSONStr, err := serializeProjectedMasterProfile(req.MasterProfile, idMap)
+	profileJSONStr, err := serializeProjectedMasterProfile(obfReq.MasterProfile, idMap)
 	if err != nil {
 		return nil, err
 	}
 
 	ctx := gapAnalysisPromptContext{
-		TargetRole:         strings.TrimSpace(req.BranchContext.TargetRole),
-		TargetCompany:      strings.TrimSpace(req.BranchContext.TargetCompany),
-		TargetRequirements: strings.TrimSpace(req.BranchContext.TargetRequirements),
-		BranchInstructions: strings.TrimSpace(req.BranchContext.BranchInstructions),
+		TargetRole:         strings.TrimSpace(obfReq.BranchContext.TargetRole),
+		TargetCompany:      strings.TrimSpace(obfReq.BranchContext.TargetCompany),
+		TargetRequirements: strings.TrimSpace(obfReq.BranchContext.TargetRequirements),
+		BranchInstructions: strings.TrimSpace(obfReq.BranchContext.BranchInstructions),
 		MasterProfileJSON:  profileJSONStr,
 	}
 

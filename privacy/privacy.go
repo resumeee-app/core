@@ -1,0 +1,700 @@
+// Package privacy provides deterministic PII obfuscation and deobfuscation for LLM interactions.
+package privacy
+
+import (
+	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"unicode"
+
+	"resumeee/internal/domain"
+)
+
+// Canonical deterministic PII placeholder constants.
+const (
+	PlaceholderFullName         = "[John Doe]"
+	PlaceholderEmail            = "candidate@email.com"
+	PlaceholderPhone            = "+1 111 111 1111"
+	PlaceholderWebsite          = "https://candidate.example.com"
+	PlaceholderSocialURLPrefix  = "https://social.example.com/profile-"
+	PlaceholderSocialUserPrefix = "candidate-social-"
+)
+
+type textRule struct {
+	re      *regexp.Regexp
+	replace string
+}
+
+// Session manages deterministic PII masking and unmasking for a generation lifecycle.
+type Session struct {
+	obfRules   []textRule
+	deobfRules []textRule
+}
+
+type rawMapping struct {
+	source        string
+	replacement   string
+	wordBound     bool
+	customPattern string
+	customReplace string
+}
+
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
+
+func isWordBounded(s string) bool {
+	if s == "" {
+		return false
+	}
+	runes := []rune(s)
+	return isWordRune(runes[0]) && isWordRune(runes[len(runes)-1])
+}
+
+func countDigits(s string) int {
+	cnt := 0
+	for _, r := range s {
+		if unicode.IsDigit(r) {
+			cnt++
+		}
+	}
+	return cnt
+}
+
+func isValidURL(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if len(s) < 8 {
+		return false
+	}
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		rest := lower[strings.Index(lower, "://")+3:]
+		parts := strings.Split(rest, "/")
+		domainPart := parts[0]
+		return strings.Contains(domainPart, ".") && !strings.HasPrefix(domainPart, ".") && !strings.HasSuffix(domainPart, ".") && len(domainPart) >= 4
+	}
+	parts := strings.Split(lower, "/")
+	domainPart := parts[0]
+	return strings.Contains(domainPart, ".") && !strings.HasPrefix(domainPart, ".") && !strings.HasSuffix(domainPart, ".") && len(domainPart) >= 4
+}
+
+// NewSession constructs a Session from a Profile.
+func NewSession(profile *domain.Profile) *Session {
+	var targetProfile domain.Profile
+	if profile != nil {
+		targetProfile = *profile
+	}
+
+	var forwardMappings []rawMapping
+	var reverseMappings []rawMapping
+
+	addPair := func(orig, placeholder string, wordBound bool) {
+		orig = strings.TrimSpace(orig)
+		placeholder = strings.TrimSpace(placeholder)
+		if orig == "" || placeholder == "" || strings.EqualFold(orig, placeholder) {
+			return
+		}
+		forwardMappings = append(forwardMappings, rawMapping{
+			source:      orig,
+			replacement: placeholder,
+			wordBound:   wordBound,
+		})
+		reverseMappings = append(reverseMappings, rawMapping{
+			source:      placeholder,
+			replacement: orig,
+			wordBound:   false,
+		})
+	}
+
+	// 1. Full Name
+	if targetProfile.FullName != "" {
+		addPair(targetProfile.FullName, PlaceholderFullName, isWordBounded(targetProfile.FullName))
+		// Also support reverse deobfuscation if LLM dropped the brackets
+		if !strings.EqualFold(targetProfile.FullName, "John Doe") {
+			reverseMappings = append(reverseMappings, rawMapping{
+				source:      "John Doe",
+				replacement: targetProfile.FullName,
+				wordBound:   true,
+			})
+		}
+	}
+
+	// 2. Email
+	if targetProfile.Email != "" {
+		addPair(targetProfile.Email, PlaceholderEmail, false)
+	}
+
+	// 3. Phone
+	cleanPhone := strings.TrimSpace(targetProfile.Phone)
+	if cleanPhone != "" {
+		// Minimum 7 substantive digits required to avoid false positives on country codes like "+1"
+		if countDigits(cleanPhone) >= 7 {
+			if isWordBounded(cleanPhone) {
+				addPair(cleanPhone, PlaceholderPhone, true)
+			} else {
+				// Phone starts with non-word rune (e.g. '+' or '(').
+				// Require leading boundary (^ or non-word, non-'+' character) and trailing word boundary \b.
+				// Delimiter character is captured in ${1} to prevent stripping preceding whitespace.
+				forwardMappings = append(forwardMappings, rawMapping{
+					source:        cleanPhone,
+					replacement:   PlaceholderPhone,
+					customPattern: fmt.Sprintf(`(?i)(^|[^\w+])%s\b`, regexp.QuoteMeta(cleanPhone)),
+					customReplace: fmt.Sprintf(`${1}%s`, PlaceholderPhone),
+				})
+				reverseMappings = append(reverseMappings, rawMapping{
+					source:      PlaceholderPhone,
+					replacement: cleanPhone,
+					wordBound:   false,
+				})
+			}
+		} else {
+			// Substantive digits < 7: only register reverse deobfuscation rule for synthetic placeholder
+			reverseMappings = append(reverseMappings, rawMapping{
+				source:      PlaceholderPhone,
+				replacement: cleanPhone,
+				wordBound:   false,
+			})
+		}
+	}
+
+	// 4. Website
+	var realWebsite string
+	for _, p := range targetProfile.Profiles {
+		if strings.EqualFold(p.Network, "website") || strings.EqualFold(p.Network, "portfolio") {
+			realWebsite = strings.TrimSpace(p.URL)
+			break
+		}
+	}
+	if realWebsite == "" && targetProfile.Metadata != nil {
+		if w, ok := targetProfile.Metadata["website"].(string); ok {
+			realWebsite = strings.TrimSpace(w)
+		}
+	}
+	if realWebsite != "" {
+		if isValidURL(realWebsite) {
+			addPair(realWebsite, PlaceholderWebsite, false)
+		} else {
+			reverseMappings = append(reverseMappings, rawMapping{
+				source:      PlaceholderWebsite,
+				replacement: realWebsite,
+				wordBound:   false,
+			})
+		}
+	}
+
+	// 5. Social Links (Profiles)
+	for i, p := range targetProfile.Profiles {
+		idx := strconv.Itoa(i + 1)
+		placeholderURL := PlaceholderSocialURLPrefix + idx
+		placeholderUser := PlaceholderSocialUserPrefix + idx
+
+		cleanURL := strings.TrimSpace(p.URL)
+		if cleanURL != "" && cleanURL != realWebsite {
+			if isValidURL(cleanURL) {
+				addPair(cleanURL, placeholderURL, false)
+			} else {
+				reverseMappings = append(reverseMappings, rawMapping{
+					source:      placeholderURL,
+					replacement: cleanURL,
+					wordBound:   false,
+				})
+			}
+		}
+
+		cleanUser := strings.TrimSpace(p.Username)
+		if cleanUser != "" {
+			if len(cleanUser) >= 3 {
+				addPair(cleanUser, placeholderUser, isWordBounded(cleanUser))
+			} else {
+				// Usernames shorter than 3 characters (e.g. "go", "ai", "x") are masked in structured profiles,
+				// but excluded from free-text replacement to prevent corrupting technical terms and common words.
+				reverseMappings = append(reverseMappings, rawMapping{
+					source:      placeholderUser,
+					replacement: cleanUser,
+					wordBound:   false,
+				})
+			}
+		}
+	}
+
+	// Sort forward mappings by source length descending to prevent partial prefix collision
+	sort.Slice(forwardMappings, func(i, j int) bool {
+		return len(forwardMappings[i].source) > len(forwardMappings[j].source)
+	})
+
+	// Sort reverse mappings by source length descending
+	sort.Slice(reverseMappings, func(i, j int) bool {
+		return len(reverseMappings[i].source) > len(reverseMappings[j].source)
+	})
+
+	compileRules := func(mappings []rawMapping) []textRule {
+		var rules []textRule
+		seen := make(map[string]bool)
+		for _, m := range mappings {
+			key := fmt.Sprintf("%t:%s:%s:%s", m.wordBound, m.source, m.replacement, m.customPattern)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			pattern := m.customPattern
+			replace := m.customReplace
+			if pattern == "" {
+				pattern = regexp.QuoteMeta(m.source)
+				if m.wordBound {
+					pattern = fmt.Sprintf(`(?i)\b%s\b`, pattern)
+				} else {
+					pattern = fmt.Sprintf(`(?i)%s`, pattern)
+				}
+				replace = m.replacement
+			}
+
+			re, err := regexp.Compile(pattern)
+			if err == nil {
+				rules = append(rules, textRule{
+					re:      re,
+					replace: replace,
+				})
+			}
+		}
+		return rules
+	}
+
+	return &Session{
+		obfRules:   compileRules(forwardMappings),
+		deobfRules: compileRules(reverseMappings),
+	}
+}
+
+// NewSessionFromSnapshot constructs a Session from a MasterProfileSnapshot.
+func NewSessionFromSnapshot(snapshot *domain.MasterProfileSnapshot) *Session {
+	if snapshot == nil {
+		return NewSession(nil)
+	}
+	return NewSession(&snapshot.Profile)
+}
+
+// NewSessionFromRequest constructs a Session from a GenerationRequest.
+func NewSessionFromRequest(req domain.GenerationRequest) *Session {
+	return NewSessionFromSnapshot(req.MasterProfile)
+}
+
+// ObfuscateString replaces occurrences of real contact details with placeholders.
+func (s *Session) ObfuscateString(input string) string {
+	if s == nil || input == "" || len(s.obfRules) == 0 {
+		return input
+	}
+	res := input
+	for _, rule := range s.obfRules {
+		res = rule.re.ReplaceAllString(res, rule.replace)
+	}
+	return res
+}
+
+// DeobfuscateString replaces occurrences of placeholders with real contact details.
+func (s *Session) DeobfuscateString(input string) string {
+	if s == nil || input == "" || len(s.deobfRules) == 0 {
+		return input
+	}
+	res := input
+	for _, rule := range s.deobfRules {
+		res = rule.re.ReplaceAllString(res, rule.replace)
+	}
+	return res
+}
+
+func cloneSnapshot(snap *domain.MasterProfileSnapshot) *domain.MasterProfileSnapshot {
+	if snap == nil {
+		return nil
+	}
+	res := *snap
+	res.Profile = snap.Profile
+	if snap.Profile.Profiles != nil {
+		res.Profile.Profiles = make([]domain.SocialLink, len(snap.Profile.Profiles))
+		copy(res.Profile.Profiles, snap.Profile.Profiles)
+	}
+	if snap.Profile.Metadata != nil {
+		res.Profile.Metadata = make(map[string]any, len(snap.Profile.Metadata))
+		for k, v := range snap.Profile.Metadata {
+			res.Profile.Metadata[k] = v
+		}
+	}
+	if snap.Skills != nil {
+		res.Skills = make([]domain.Skill, len(snap.Skills))
+		copy(res.Skills, snap.Skills)
+	}
+	if snap.Experiences != nil {
+		res.Experiences = make([]domain.WorkExperience, len(snap.Experiences))
+		for i, exp := range snap.Experiences {
+			res.Experiences[i] = exp
+			if exp.CompanyContact != nil {
+				cc := *exp.CompanyContact
+				res.Experiences[i].CompanyContact = &cc
+			}
+			if exp.EndDate != nil {
+				ed := *exp.EndDate
+				res.Experiences[i].EndDate = &ed
+			}
+			if exp.HoursPerWeek != nil {
+				hpw := *exp.HoursPerWeek
+				res.Experiences[i].HoursPerWeek = &hpw
+			}
+			if exp.Facts != nil {
+				res.Experiences[i].Facts = make([]domain.Fact, len(exp.Facts))
+				copy(res.Experiences[i].Facts, exp.Facts)
+			}
+			if exp.Skills != nil {
+				res.Experiences[i].Skills = make([]domain.Skill, len(exp.Skills))
+				copy(res.Experiences[i].Skills, exp.Skills)
+			}
+		}
+	}
+	if snap.Projects != nil {
+		res.Projects = make([]domain.Project, len(snap.Projects))
+		for i, proj := range snap.Projects {
+			res.Projects[i] = proj
+			if proj.EndDate != nil {
+				ed := *proj.EndDate
+				res.Projects[i].EndDate = &ed
+			}
+			if proj.Facts != nil {
+				res.Projects[i].Facts = make([]domain.Fact, len(proj.Facts))
+				copy(res.Projects[i].Facts, proj.Facts)
+			}
+			if proj.Skills != nil {
+				res.Projects[i].Skills = make([]domain.Skill, len(proj.Skills))
+				copy(res.Projects[i].Skills, proj.Skills)
+			}
+		}
+	}
+	if snap.Education != nil {
+		res.Education = make([]domain.Education, len(snap.Education))
+		for i, edu := range snap.Education {
+			res.Education[i] = edu
+			if edu.EndDate != nil {
+				ed := *edu.EndDate
+				res.Education[i].EndDate = &ed
+			}
+			if edu.Facts != nil {
+				res.Education[i].Facts = make([]domain.Fact, len(edu.Facts))
+				copy(res.Education[i].Facts, edu.Facts)
+			}
+		}
+	}
+	if snap.Certifications != nil {
+		res.Certifications = make([]domain.Certification, len(snap.Certifications))
+		copy(res.Certifications, snap.Certifications)
+	}
+	if snap.Facts != nil {
+		res.Facts = make([]domain.Fact, len(snap.Facts))
+		copy(res.Facts, snap.Facts)
+	}
+	return &res
+}
+
+// ObfuscateSnapshot returns an isolated deep clone of the snapshot with PII obfuscated.
+func (s *Session) ObfuscateSnapshot(snap *domain.MasterProfileSnapshot) *domain.MasterProfileSnapshot {
+	if snap == nil {
+		return nil
+	}
+	res := cloneSnapshot(snap)
+
+	if res.Profile.FullName != "" {
+		res.Profile.FullName = PlaceholderFullName
+	}
+	if res.Profile.Email != "" {
+		res.Profile.Email = PlaceholderEmail
+	}
+	if res.Profile.Phone != "" {
+		res.Profile.Phone = PlaceholderPhone
+	}
+	if len(res.Profile.Profiles) > 0 {
+		for i := range res.Profile.Profiles {
+			idx := strconv.Itoa(i + 1)
+			if res.Profile.Profiles[i].URL != "" {
+				res.Profile.Profiles[i].URL = PlaceholderSocialURLPrefix + idx
+			}
+			if res.Profile.Profiles[i].Username != "" {
+				res.Profile.Profiles[i].Username = PlaceholderSocialUserPrefix + idx
+			}
+		}
+	}
+	if res.Profile.Metadata != nil {
+		if _, ok := res.Profile.Metadata["website"]; ok {
+			res.Profile.Metadata["website"] = PlaceholderWebsite
+		}
+	}
+
+	res.Profile.Headline = s.ObfuscateString(res.Profile.Headline)
+	res.Profile.Summary = s.ObfuscateString(res.Profile.Summary)
+
+	for i := range res.Experiences {
+		res.Experiences[i].Company = s.ObfuscateString(res.Experiences[i].Company)
+		res.Experiences[i].RoleTitle = s.ObfuscateString(res.Experiences[i].RoleTitle)
+		res.Experiences[i].DutiesSummary = s.ObfuscateString(res.Experiences[i].DutiesSummary)
+		res.Experiences[i].SupervisorName = s.ObfuscateString(res.Experiences[i].SupervisorName)
+		res.Experiences[i].SupervisorContact = s.ObfuscateString(res.Experiences[i].SupervisorContact)
+		if res.Experiences[i].CompanyContact != nil {
+			res.Experiences[i].CompanyContact.Value = s.ObfuscateString(res.Experiences[i].CompanyContact.Value)
+		}
+		for j := range res.Experiences[i].Facts {
+			res.Experiences[i].Facts[j].Statement = s.ObfuscateString(res.Experiences[i].Facts[j].Statement)
+			res.Experiences[i].Facts[j].Impact = s.ObfuscateString(res.Experiences[i].Facts[j].Impact)
+		}
+	}
+
+	for i := range res.Projects {
+		res.Projects[i].Name = s.ObfuscateString(res.Projects[i].Name)
+		res.Projects[i].Role = s.ObfuscateString(res.Projects[i].Role)
+		res.Projects[i].URL = s.ObfuscateString(res.Projects[i].URL)
+		res.Projects[i].Summary = s.ObfuscateString(res.Projects[i].Summary)
+		for j := range res.Projects[i].Facts {
+			res.Projects[i].Facts[j].Statement = s.ObfuscateString(res.Projects[i].Facts[j].Statement)
+			res.Projects[i].Facts[j].Impact = s.ObfuscateString(res.Projects[i].Facts[j].Impact)
+		}
+	}
+
+	for i := range res.Education {
+		res.Education[i].Institution = s.ObfuscateString(res.Education[i].Institution)
+		res.Education[i].Degree = s.ObfuscateString(res.Education[i].Degree)
+		res.Education[i].Field = s.ObfuscateString(res.Education[i].Field)
+		for j := range res.Education[i].Facts {
+			res.Education[i].Facts[j].Statement = s.ObfuscateString(res.Education[i].Facts[j].Statement)
+			res.Education[i].Facts[j].Impact = s.ObfuscateString(res.Education[i].Facts[j].Impact)
+		}
+	}
+
+	for i := range res.Certifications {
+		res.Certifications[i].Name = s.ObfuscateString(res.Certifications[i].Name)
+		res.Certifications[i].Issuer = s.ObfuscateString(res.Certifications[i].Issuer)
+		res.Certifications[i].Summary = s.ObfuscateString(res.Certifications[i].Summary)
+		res.Certifications[i].URL = s.ObfuscateString(res.Certifications[i].URL)
+	}
+
+	for i := range res.Facts {
+		res.Facts[i].Statement = s.ObfuscateString(res.Facts[i].Statement)
+		res.Facts[i].Impact = s.ObfuscateString(res.Facts[i].Impact)
+	}
+
+	return res
+}
+
+func cloneTailoredContent(tc *domain.TailoredContent) *domain.TailoredContent {
+	if tc == nil {
+		return nil
+	}
+	res := *tc
+	if tc.SkillGroups != nil {
+		res.SkillGroups = make([]domain.TailoredSkillGroup, len(tc.SkillGroups))
+		for i, sg := range tc.SkillGroups {
+			res.SkillGroups[i] = sg
+			if sg.Skills != nil {
+				res.SkillGroups[i].Skills = append([]string(nil), sg.Skills...)
+			}
+			if sg.SourceSkillIDs != nil {
+				res.SkillGroups[i].SourceSkillIDs = append([]string(nil), sg.SourceSkillIDs...)
+			}
+		}
+	}
+	if tc.Experiences != nil {
+		res.Experiences = make([]domain.TailoredExperience, len(tc.Experiences))
+		for i, exp := range tc.Experiences {
+			res.Experiences[i] = exp
+			if exp.Bullets != nil {
+				res.Experiences[i].Bullets = make([]domain.TailoredBullet, len(exp.Bullets))
+				for j, b := range exp.Bullets {
+					res.Experiences[i].Bullets[j] = b
+					if b.SourceFactIDs != nil {
+						res.Experiences[i].Bullets[j].SourceFactIDs = append([]string(nil), b.SourceFactIDs...)
+					}
+					if b.SourceSkillIDs != nil {
+						res.Experiences[i].Bullets[j].SourceSkillIDs = append([]string(nil), b.SourceSkillIDs...)
+					}
+				}
+			}
+		}
+	}
+	if tc.Projects != nil {
+		res.Projects = make([]domain.TailoredProject, len(tc.Projects))
+		for i, proj := range tc.Projects {
+			res.Projects[i] = proj
+			if proj.Bullets != nil {
+				res.Projects[i].Bullets = make([]domain.TailoredBullet, len(proj.Bullets))
+				for j, b := range proj.Bullets {
+					res.Projects[i].Bullets[j] = b
+					if b.SourceFactIDs != nil {
+						res.Projects[i].Bullets[j].SourceFactIDs = append([]string(nil), b.SourceFactIDs...)
+					}
+					if b.SourceSkillIDs != nil {
+						res.Projects[i].Bullets[j].SourceSkillIDs = append([]string(nil), b.SourceSkillIDs...)
+					}
+				}
+			}
+		}
+	}
+	if tc.Education != nil {
+		res.Education = make([]domain.TailoredEducation, len(tc.Education))
+		for i, edu := range tc.Education {
+			res.Education[i] = edu
+			if edu.Bullets != nil {
+				res.Education[i].Bullets = make([]domain.TailoredBullet, len(edu.Bullets))
+				for j, b := range edu.Bullets {
+					res.Education[i].Bullets[j] = b
+					if b.SourceFactIDs != nil {
+						res.Education[i].Bullets[j].SourceFactIDs = append([]string(nil), b.SourceFactIDs...)
+					}
+					if b.SourceSkillIDs != nil {
+						res.Education[i].Bullets[j].SourceSkillIDs = append([]string(nil), b.SourceSkillIDs...)
+					}
+				}
+			}
+		}
+	}
+	if tc.Certifications != nil {
+		res.Certifications = make([]domain.TailoredCert, len(tc.Certifications))
+		copy(res.Certifications, tc.Certifications)
+	}
+	return &res
+}
+
+// ObfuscatePriorVersion returns an isolated clone of prior tailored content with PII obfuscated.
+func (s *Session) ObfuscatePriorVersion(prior *domain.TailoredContent) *domain.TailoredContent {
+	if prior == nil {
+		return nil
+	}
+	res := cloneTailoredContent(prior)
+	res.Summary = s.ObfuscateString(res.Summary)
+
+	for i := range res.Experiences {
+		res.Experiences[i].Company = s.ObfuscateString(res.Experiences[i].Company)
+		res.Experiences[i].RoleTitle = s.ObfuscateString(res.Experiences[i].RoleTitle)
+		res.Experiences[i].DutiesSummary = s.ObfuscateString(res.Experiences[i].DutiesSummary)
+		for j := range res.Experiences[i].Bullets {
+			res.Experiences[i].Bullets[j].Text = s.ObfuscateString(res.Experiences[i].Bullets[j].Text)
+		}
+	}
+
+	for i := range res.Projects {
+		res.Projects[i].Name = s.ObfuscateString(res.Projects[i].Name)
+		res.Projects[i].Role = s.ObfuscateString(res.Projects[i].Role)
+		res.Projects[i].URL = s.ObfuscateString(res.Projects[i].URL)
+		res.Projects[i].Summary = s.ObfuscateString(res.Projects[i].Summary)
+		for j := range res.Projects[i].Bullets {
+			res.Projects[i].Bullets[j].Text = s.ObfuscateString(res.Projects[i].Bullets[j].Text)
+		}
+	}
+
+	for i := range res.Education {
+		res.Education[i].Institution = s.ObfuscateString(res.Education[i].Institution)
+		res.Education[i].Degree = s.ObfuscateString(res.Education[i].Degree)
+		res.Education[i].Field = s.ObfuscateString(res.Education[i].Field)
+		for j := range res.Education[i].Bullets {
+			res.Education[i].Bullets[j].Text = s.ObfuscateString(res.Education[i].Bullets[j].Text)
+		}
+	}
+
+	return res
+}
+
+// ObfuscateRequest returns a deep copy of req with contact details and text occurrences obfuscated.
+func (s *Session) ObfuscateRequest(req domain.GenerationRequest) domain.GenerationRequest {
+	res := req
+	res.MasterProfile = s.ObfuscateSnapshot(req.MasterProfile)
+	res.PriorVersion = s.ObfuscatePriorVersion(req.PriorVersion)
+	res.GlobalRules = s.ObfuscateString(req.GlobalRules)
+	res.PresetInstructions = s.ObfuscateString(req.PresetInstructions)
+
+	// Copy and scrub BranchContext
+	res.BranchContext = req.BranchContext
+	res.BranchContext.TargetRole = s.ObfuscateString(res.BranchContext.TargetRole)
+	res.BranchContext.TargetCompany = s.ObfuscateString(res.BranchContext.TargetCompany)
+	res.BranchContext.TargetRequirements = s.ObfuscateString(res.BranchContext.TargetRequirements)
+	res.BranchContext.BranchInstructions = s.ObfuscateString(res.BranchContext.BranchInstructions)
+	res.BranchContext.CustomDirectives = s.ObfuscateString(res.BranchContext.CustomDirectives)
+
+	return res
+}
+
+// DeobfuscateTailoredContent restores original contact details into the provided TailoredContent.
+func (s *Session) DeobfuscateTailoredContent(content *domain.TailoredContent) {
+	if s == nil || content == nil {
+		return
+	}
+	content.Summary = s.DeobfuscateString(content.Summary)
+
+	for i := range content.Experiences {
+		content.Experiences[i].Company = s.DeobfuscateString(content.Experiences[i].Company)
+		content.Experiences[i].RoleTitle = s.DeobfuscateString(content.Experiences[i].RoleTitle)
+		content.Experiences[i].DutiesSummary = s.DeobfuscateString(content.Experiences[i].DutiesSummary)
+		content.Experiences[i].SupervisorName = s.DeobfuscateString(content.Experiences[i].SupervisorName)
+		content.Experiences[i].SupervisorContact = s.DeobfuscateString(content.Experiences[i].SupervisorContact)
+		if content.Experiences[i].CompanyContact != nil {
+			content.Experiences[i].CompanyContact.Value = s.DeobfuscateString(content.Experiences[i].CompanyContact.Value)
+		}
+		for j := range content.Experiences[i].Bullets {
+			content.Experiences[i].Bullets[j].Text = s.DeobfuscateString(content.Experiences[i].Bullets[j].Text)
+		}
+	}
+
+	for i := range content.Projects {
+		content.Projects[i].Name = s.DeobfuscateString(content.Projects[i].Name)
+		content.Projects[i].Role = s.DeobfuscateString(content.Projects[i].Role)
+		content.Projects[i].URL = s.DeobfuscateString(content.Projects[i].URL)
+		content.Projects[i].Summary = s.DeobfuscateString(content.Projects[i].Summary)
+		for j := range content.Projects[i].Bullets {
+			content.Projects[i].Bullets[j].Text = s.DeobfuscateString(content.Projects[i].Bullets[j].Text)
+		}
+	}
+
+	for i := range content.Education {
+		content.Education[i].Institution = s.DeobfuscateString(content.Education[i].Institution)
+		content.Education[i].Degree = s.DeobfuscateString(content.Education[i].Degree)
+		content.Education[i].Field = s.DeobfuscateString(content.Education[i].Field)
+		for j := range content.Education[i].Bullets {
+			content.Education[i].Bullets[j].Text = s.DeobfuscateString(content.Education[i].Bullets[j].Text)
+		}
+	}
+
+	for i := range content.Certifications {
+		content.Certifications[i].Name = s.DeobfuscateString(content.Certifications[i].Name)
+		content.Certifications[i].Issuer = s.DeobfuscateString(content.Certifications[i].Issuer)
+		content.Certifications[i].URL = s.DeobfuscateString(content.Certifications[i].URL)
+	}
+}
+
+// DeobfuscateGapReport restores original contact details into the provided GapReport.
+func (s *Session) DeobfuscateGapReport(report *domain.GapReport) {
+	if s == nil || report == nil {
+		return
+	}
+	report.OverallMatchSummary = s.DeobfuscateString(report.OverallMatchSummary)
+
+	for i := range report.StrategicRecommendations {
+		report.StrategicRecommendations[i] = s.DeobfuscateString(report.StrategicRecommendations[i])
+	}
+
+	for i := range report.MissingRequirements {
+		report.MissingRequirements[i].Requirement = s.DeobfuscateString(report.MissingRequirements[i].Requirement)
+		report.MissingRequirements[i].MissingArea = s.DeobfuscateString(report.MissingRequirements[i].MissingArea)
+		report.MissingRequirements[i].ClarifyingPrompt = s.DeobfuscateString(report.MissingRequirements[i].ClarifyingPrompt)
+		report.MissingRequirements[i].RecommendedAction = s.DeobfuscateString(report.MissingRequirements[i].RecommendedAction)
+	}
+
+	for i := range report.IdentifiedGaps {
+		report.IdentifiedGaps[i].Requirement = s.DeobfuscateString(report.IdentifiedGaps[i].Requirement)
+		report.IdentifiedGaps[i].MissingArea = s.DeobfuscateString(report.IdentifiedGaps[i].MissingArea)
+		report.IdentifiedGaps[i].ClarifyingPrompt = s.DeobfuscateString(report.IdentifiedGaps[i].ClarifyingPrompt)
+		report.IdentifiedGaps[i].RecommendedAction = s.DeobfuscateString(report.IdentifiedGaps[i].RecommendedAction)
+	}
+}
+
+// DeobfuscateGenerationResponse restores original contact details across TailoredContent and GapReport.
+func (s *Session) DeobfuscateGenerationResponse(resp *domain.GenerationResponse) {
+	if s == nil || resp == nil {
+		return
+	}
+	s.DeobfuscateTailoredContent(&resp.TailoredContent)
+	s.DeobfuscateGapReport(&resp.GapReport)
+}

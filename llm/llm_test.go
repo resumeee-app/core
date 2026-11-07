@@ -15,6 +15,7 @@ import (
 
 	"resumeee/internal/config"
 	"resumeee/internal/domain"
+	"resumeee/internal/privacy"
 )
 
 var sampleResponse = domain.GenerationResponse{
@@ -242,9 +243,12 @@ func TestPromptBuilder_Composition(t *testing.T) {
 		t.Errorf("user prompt missing continuity instructions")
 	}
 
-	// Check Master Profile Graph presence
-	if !strings.Contains(prompts.UserPrompt, "Ada Lovelace") {
-		t.Errorf("user prompt missing master profile snapshot data")
+	// Check Master Profile Graph presence with privacy masking
+	if strings.Contains(prompts.UserPrompt, "Ada Lovelace") {
+		t.Errorf("user prompt leaked candidate real name 'Ada Lovelace'")
+	}
+	if !strings.Contains(prompts.UserPrompt, privacy.PlaceholderFullName) {
+		t.Errorf("user prompt missing obfuscated candidate placeholder %q", privacy.PlaceholderFullName)
 	}
 }
 

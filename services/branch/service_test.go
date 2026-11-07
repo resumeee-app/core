@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 
 	"resumeee/internal/branch"
 	"resumeee/internal/domain"
+	"resumeee/internal/privacy"
 	"resumeee/internal/renderer"
 	"resumeee/internal/repository/memory"
 	"resumeee/internal/validator"
@@ -962,6 +964,107 @@ func TestService_AnalyzeGaps(t *testing.T) {
 			t.Errorf("expected ratio between 0.0 and 1.0, got %v", *report.SkillCoverageRatio)
 		}
 	})
+
+	t.Run("deobfuscates gap report returned by LLM to candidate authentic name", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+		realName := "Grace Hopper"
+		prof, _ := env.profileRepo.GetProfile(ctx, env.defaultUser)
+		prof.FullName = realName
+		prof.Email = "grace.hopper@navy.mil"
+		_ = env.profileRepo.UpsertProfile(ctx, prof)
+
+		stubLLM := &stubLLMService{
+			gapReport: &domain.GapReport{
+				OverallMatchSummary: realName + " matches compiler design requirements.",
+				StrategicRecommendations: []string{
+					realName + " should highlight COBOL leadership.",
+				},
+				MissingRequirements: []domain.GapItem{
+					{
+						Requirement:       "Machine code optimization",
+						ClarifyingPrompt:  "Does " + realName + " have machine code experience?",
+						RecommendedAction: "Consult with " + realName,
+					},
+				},
+			},
+		}
+
+		svcWithLLM := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			LLMService:  stubLLM,
+		})
+
+		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("AnalyzeGaps failed: %v", err)
+		}
+
+		if strings.Contains(report.OverallMatchSummary, "[John Doe]") {
+			t.Errorf("gap report leaked placeholder [John Doe]")
+		}
+		if !strings.Contains(report.OverallMatchSummary, realName) {
+			t.Errorf("gap report missing authentic name %q", realName)
+		}
+		if !strings.Contains(report.StrategicRecommendations[0], realName) {
+			t.Errorf("strategic recommendation missing authentic name %q", realName)
+		}
+		if !strings.Contains(report.MissingRequirements[0].ClarifyingPrompt, realName) {
+			t.Errorf("clarifying prompt missing authentic name %q", realName)
+		}
+	})
+}
+
+func TestService_GetPromptPreview_ContactPrivacy(t *testing.T) {
+	ctx := context.Background()
+	env := setupTestBranchEnv(t, 10)
+
+	realName := "Barbara Liskov"
+	realEmail := "liskov@csail.mit.edu"
+	realPhone := "+1 (617) 253-5860"
+	prof, _ := env.profileRepo.GetProfile(ctx, env.defaultUser)
+	prof.FullName = realName
+	prof.Email = realEmail
+	prof.Phone = realPhone
+	prof.Summary = realName + " created the Liskov substitution principle."
+	prof.Profiles = []domain.SocialLink{
+		{Network: "Website", URL: "https://liskov.csail.mit.edu"},
+	}
+	_ = env.profileRepo.UpsertProfile(ctx, prof)
+
+	preview, err := env.svc.GetPromptPreview(ctx, env.defaultUser, env.branchID, nil)
+	if err != nil {
+		t.Fatalf("GetPromptPreview failed: %v", err)
+	}
+
+	assertNoPII := func(t *testing.T, field, text string) {
+		t.Helper()
+		if strings.Contains(text, realName) {
+			t.Errorf("%s leaked realName %q", field, realName)
+		}
+		if strings.Contains(text, realEmail) {
+			t.Errorf("%s leaked realEmail %q", field, realEmail)
+		}
+		if strings.Contains(text, realPhone) {
+			t.Errorf("%s leaked realPhone %q", field, realPhone)
+		}
+		if strings.Contains(text, "https://liskov.csail.mit.edu") {
+			t.Errorf("%s leaked real website", field)
+		}
+	}
+
+	assertNoPII(t, "SystemPrompt", preview.SystemPrompt)
+	assertNoPII(t, "UserPrompt", preview.UserPrompt)
+
+	if !strings.Contains(preview.UserPrompt, privacy.PlaceholderFullName) {
+		t.Errorf("UserPrompt missing PlaceholderFullName %q", privacy.PlaceholderFullName)
+	}
+	if !strings.Contains(preview.UserPrompt, privacy.PlaceholderEmail) {
+		t.Errorf("UserPrompt missing PlaceholderEmail %q", privacy.PlaceholderEmail)
+	}
+	if !strings.Contains(preview.UserPrompt, privacy.PlaceholderPhone) {
+		t.Errorf("UserPrompt missing PlaceholderPhone %q", privacy.PlaceholderPhone)
+	}
 }
 
 

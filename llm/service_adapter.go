@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"resumeee/internal/domain"
+	"resumeee/internal/privacy"
 )
 
 // ServiceAdapter adapts an LLM Registry into the worker.LLMService and branch domain service interfaces,
@@ -43,7 +44,13 @@ func (a *ServiceAdapter) GenerateTailoredResume(ctx context.Context, req domain.
 		return nil, err
 	}
 	req.Model = model
-	return provider.GenerateTailoredResume(ctx, req)
+	resp, err := provider.GenerateTailoredResume(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	session := privacy.NewSessionFromRequest(req)
+	session.DeobfuscateGenerationResponse(resp)
+	return resp, nil
 }
 
 // GenerateGapAnalysis performs a lightweight, decoupled ATS qualification and keyword gap analysis
@@ -77,11 +84,15 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req domain.Gen
 					GapReport *domain.GapReport `json:"gap_report"`
 				}
 				if err := json.Unmarshal([]byte(cleaned), &wrapper); err == nil && wrapper.GapReport != nil {
+					session := privacy.NewSessionFromRequest(req)
+					session.DeobfuscateGapReport(wrapper.GapReport)
 					wrapper.GapReport.Normalize()
 					return wrapper.GapReport, nil
 				}
 				var direct domain.GapReport
 				if err := json.Unmarshal([]byte(cleaned), &direct); err == nil && (direct.OverallMatchSummary != "" || len(direct.MissingRequirements) > 0 || len(direct.IdentifiedGaps) > 0) {
+					session := privacy.NewSessionFromRequest(req)
+					session.DeobfuscateGapReport(&direct)
 					direct.Normalize()
 					return &direct, nil
 				}
@@ -94,6 +105,8 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req domain.Gen
 	if err != nil {
 		return nil, err
 	}
+	session := privacy.NewSessionFromRequest(req)
+	session.DeobfuscateGenerationResponse(resp)
 	resp.GapReport.Normalize()
 	return &resp.GapReport, nil
 }

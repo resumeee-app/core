@@ -1010,6 +1010,39 @@ func TestFilePromptDebugger_DecodesAndFormatsPromptsAndResponses(t *testing.T) {
 		if !strings.Contains(promptContent2, "<instructions>Plain instructions here</instructions>") {
 			t.Errorf("expected plain xml tag to be preserved:\n%s", promptContent2)
 		}
+
+		// Also verify <prior_active_version> containing already-fenced JSON is not double-fenced
+		priorActiveXML := "<prior_active_version>\nA prior active tailored version exists for this branch.\n\n```json\n{\n  \"summary\": \"Custom prior summary\"\n}\n```\n</prior_active_version>"
+		session3, err := debugger.StartSession(llm.PromptDebugMeta{
+			Operation:  "tailor",
+			UserPrompt: priorActiveXML,
+			Timestamp:  fixedTime,
+		})
+		if err != nil {
+			t.Fatalf("StartSession3 failed: %v", err)
+		}
+		if err := session3.WriteResponse(llm.ResponseDebugMeta{
+			Operation:   "tailor",
+			StatusCode:  200,
+			RawResponse: priorActiveXML,
+			Timestamp:   fixedTime,
+		}); err != nil {
+			t.Fatalf("WriteResponse failed: %v", err)
+		}
+
+		promptPath3 := filepath.Join(tmpDir, "default", "tailor_20261107100000_2.md")
+		promptBytes3, err := os.ReadFile(promptPath3)
+		if err != nil {
+			t.Fatalf("failed to read prompt file 3: %v", err)
+		}
+		promptContent3 := string(promptBytes3)
+
+		if strings.Contains(promptContent3, "```json\n```json") || strings.Contains(promptContent3, "````") {
+			t.Errorf("fenced prior_active_version should not be double-fenced:\n%s", promptContent3)
+		}
+		if !strings.Contains(promptContent3, priorActiveXML) {
+			t.Errorf("expected prior_active_version with json fence to be preserved exactly, got:\n%s", promptContent3)
+		}
 	})
 
 	t.Run("Payload exceeding 10MB bypasses formatting safely", func(t *testing.T) {

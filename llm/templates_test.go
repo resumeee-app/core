@@ -350,3 +350,58 @@ func TestPromptTemplates_SpecificSchemaInstructions(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_PriorVersionFencedJSON(t *testing.T) {
+	req := domain.GenerationRequest{
+		PriorVersion: &domain.TailoredContent{
+			Summary: "Prior active summary with custom phrasing.",
+		},
+	}
+
+	payload, err := llm.BuildPrompt(req)
+	if err != nil {
+		t.Fatalf("unexpected error building prompt: %v", err)
+	}
+
+	if !strings.Contains(payload.UserPrompt, "<prior_active_version>") {
+		t.Fatalf("user prompt missing <prior_active_version> tag")
+	}
+
+	startIdx := strings.Index(payload.UserPrompt, "<prior_active_version>")
+	endIdx := strings.Index(payload.UserPrompt, "</prior_active_version>")
+	if startIdx == -1 || endIdx == -1 || endIdx <= startIdx {
+		t.Fatalf("malformed <prior_active_version> block in user prompt")
+	}
+	priorBlock := payload.UserPrompt[startIdx:endIdx]
+
+	expectedFencedJSON := "```json\n{\n  \"summary\": \"Prior active summary with custom phrasing.\"\n}\n```"
+	if !strings.Contains(priorBlock, expectedFencedJSON) {
+		t.Errorf("expected <prior_active_version> block to wrap prior version in ```json code fence, got:\n%s", priorBlock)
+	}
+}
+
+func TestBuildPrompt_NilPriorVersion_NoCodeFence(t *testing.T) {
+	req := domain.GenerationRequest{
+		PriorVersion: nil,
+	}
+
+	payload, err := llm.BuildPrompt(req)
+	if err != nil {
+		t.Fatalf("unexpected error building prompt: %v", err)
+	}
+
+	startIdx := strings.Index(payload.UserPrompt, "<prior_active_version>")
+	endIdx := strings.Index(payload.UserPrompt, "</prior_active_version>")
+	if startIdx == -1 || endIdx == -1 || endIdx <= startIdx {
+		t.Fatalf("malformed <prior_active_version> block in user prompt")
+	}
+	priorBlock := payload.UserPrompt[startIdx:endIdx]
+
+	if strings.Contains(priorBlock, "```json") {
+		t.Errorf("expected nil prior version to not contain ```json code fence, got:\n%s", priorBlock)
+	}
+	if !strings.Contains(priorBlock, "None (Initial generation)") {
+		t.Errorf("expected nil prior version fallback text 'None (Initial generation)', got:\n%s", priorBlock)
+	}
+}
+
+

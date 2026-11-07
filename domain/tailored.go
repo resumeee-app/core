@@ -38,8 +38,8 @@ type TailoredExperience struct {
 	SourceEntityID    string           `json:"source_entity_id"` // Must match a WorkExperience.ID
 	Company           string           `json:"company"`
 	RoleTitle         string           `json:"role_title"`
-	StartDate         string           `json:"start_date"`
-	EndDate           *string          `json:"end_date,omitempty"`
+	StartDate         Date             `json:"start_date"`
+	EndDate           *Date            `json:"end_date,omitempty"`
 	Location          Location         `json:"location"`
 	CompanyLocation   Location         `json:"company_location,omitempty"`
 	CompanyContact    *ContactDetail   `json:"company_contact,omitempty"`
@@ -59,8 +59,8 @@ type TailoredProject struct {
 	Name           string           `json:"name"`
 	Role           string           `json:"role,omitempty"`
 	URL            string           `json:"url,omitempty"`
-	StartDate      string           `json:"start_date,omitempty"`
-	EndDate        *string          `json:"end_date,omitempty"`
+	StartDate      *Date            `json:"start_date,omitempty"`
+	EndDate        *Date            `json:"end_date,omitempty"`
 	Summary        string           `json:"summary,omitempty"`
 	Bullets        []TailoredBullet `json:"bullets"`
 }
@@ -74,8 +74,8 @@ type TailoredEducation struct {
 	Institution    string           `json:"institution"`
 	Degree         string           `json:"degree"`
 	Field          string           `json:"field"`
-	StartDate      string           `json:"start_date"`
-	EndDate        *string          `json:"end_date,omitempty"`
+	StartDate      *Date            `json:"start_date,omitempty"`
+	EndDate        *Date            `json:"end_date,omitempty"`
 	Score          string           `json:"score,omitempty"`
 	Bullets        []TailoredBullet `json:"bullets,omitempty"`
 }
@@ -88,7 +88,7 @@ type TailoredCert struct {
 	SourceEntityID string `json:"source_entity_id"` // Must match a Certification.ID
 	Name           string `json:"name"`
 	Issuer         string `json:"issuer"`
-	Date           string `json:"date"`
+	Date           *Date  `json:"date,omitempty"`
 	URL            string `json:"url,omitempty"`
 }
 

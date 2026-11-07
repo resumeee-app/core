@@ -115,7 +115,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 		UserID:    defaultUser,
 		Company:   "Acme Corp",
 		RoleTitle: "Lead Systems Architect",
-		StartDate: "2020-01-01",
+		StartDate: domain.NewDate(2020, 1, 1),
 	}
 	if err := profileRepo.CreateExperience(ctx, exp); err != nil {
 		t.Fatalf("failed to create experience: %v", err)
@@ -191,7 +191,7 @@ func TestService_ConcurrentManualEditVersioning(t *testing.T) {
 						SourceEntityID: env.validExpID,
 						Company:        "Acme Corp",
 						RoleTitle:      "Engineer",
-						StartDate:      "2021-01-01",
+						StartDate:      domain.NewDate(2021, 1, 1),
 						Bullets: []domain.TailoredBullet{
 							{
 								Text:          fmt.Sprintf("Bullet point %d", idx),
@@ -258,7 +258,7 @@ func TestService_EditVersionProvenanceFailure(t *testing.T) {
 				SourceEntityID: env.validExpID,
 				Company:        "Acme Corp",
 				RoleTitle:      "Engineer",
-				StartDate:      "2021-01-01",
+				StartDate:      domain.NewDate(2021, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Claiming ungrounded achievement",
@@ -711,7 +711,7 @@ func TestService_EditVersionPreservesGapReport(t *testing.T) {
 				SourceEntityID: env.validExpID,
 				Company:        "Acme Corp",
 				RoleTitle:      "Lead Systems Architect",
-				StartDate:      "2020-01-01",
+				StartDate:      domain.NewDate(2020, 1, 1),
 				Location:       domain.Location{City: "San Francisco"},
 				Bullets: []domain.TailoredBullet{
 					{

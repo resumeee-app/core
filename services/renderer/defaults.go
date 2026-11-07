@@ -191,7 +191,7 @@ li { margin-bottom: 4px; font-size: 14px; color: #1e293b; }
     <h2 class="section-title">Certifications</h2>
     <ul class="bullet-list certifications-list">
       {{range .Certifications}}
-      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}</li>
+      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}</li>
       {{end}}
     </ul>
   </section>
@@ -240,7 +240,7 @@ li { margin-bottom: 4px; font-size: 14px; color: #1e293b; }
 {{end}}{{end}}
 {{if .Certifications}}
 ## Certifications
-{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}
+{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		TextTemplate: `{{.FullName}}
 {{if .Headline}}{{.Headline}}
@@ -279,7 +279,7 @@ EDUCATION:
 {{end}}{{end}}
 {{if .Certifications}}
 CERTIFICATIONS:
-{{range .Certifications}}* {{.Name}} - {{.Issuer}} ({{.Date}})
+{{range .Certifications}}* {{.Name}} - {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -461,7 +461,7 @@ li { margin-bottom: 4px; font-size: 14px; color: #111; }
     <h2 class="section-title">Professional Licenses & Certifications</h2>
     <ul class="bullet-list certifications-list">
       {{range .Certifications}}
-      <li><strong>{{.Name}}</strong> — Issued by {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}{{if .URL}} [<a href="{{.URL}}">{{.URL}}</a>]{{end}}</li>
+      <li><strong>{{.Name}}</strong> — Issued by {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}{{if .URL}} [<a href="{{.URL}}">{{.URL}}</a>]{{end}}</li>
       {{end}}
     </ul>
   </section>
@@ -516,7 +516,7 @@ li { margin-bottom: 4px; font-size: 14px; color: #111; }
 {{end}}{{end}}
 {{if .Certifications}}
 ## Certifications & Licenses
-{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}
+{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		TextTemplate: `{{.FullName}} - COMPREHENSIVE CURRICULUM VITAE
 {{if .Headline}}{{.Headline}}
@@ -561,7 +561,7 @@ ACADEMIC CREDENTIALS:
 {{end}}{{end}}
 {{if .Certifications}}
 CERTIFICATIONS:
-{{range .Certifications}}* {{.Name}} - {{.Issuer}} ({{.Date}})
+{{range .Certifications}}* {{.Name}} - {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -735,7 +735,7 @@ li { margin-bottom: 3px; font-size: 13px; color: #1f2937; }
     <h2 class="section-title">Certifications</h2>
     <ul class="bullet-list certifications-list">
       {{range .Certifications}}
-      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}</li>
+      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}</li>
       {{end}}
     </ul>
   </section>
@@ -784,7 +784,7 @@ li { margin-bottom: 3px; font-size: 13px; color: #1f2937; }
 {{end}}{{end}}
 {{if .Certifications}}
 ## Certifications
-{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}
+{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		TextTemplate: `{{.FullName}}
 {{if .Headline}}{{.Headline}}
@@ -827,7 +827,7 @@ Dates: {{formatDateRange .StartDate .EndDate "Present"}}{{if .Score}} | Score: {
 {{end}}{{end}}{{if .Certifications}}
 CERTIFICATIONS
 ------------------------------------------------------------------------
-{{range .Certifications}}- {{.Name}} - {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}
+{{range .Certifications}}- {{.Name}} - {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -1001,7 +1001,7 @@ li { margin-bottom: 4px; font-size: 14px; color: #334155; }
     <h2 class="section-title">Certifications</h2>
     <ul class="bullet-list certifications-list">
       {{range .Certifications}}
-      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}</li>
+      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}</li>
       {{end}}
     </ul>
   </section>
@@ -1050,7 +1050,7 @@ li { margin-bottom: 4px; font-size: 14px; color: #334155; }
 {{end}}{{end}}
 {{if .Certifications}}
 ## Certifications
-{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}
+{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		TextTemplate: `{{.FullName}}
 {{if .Headline}}{{.Headline}}
@@ -1087,7 +1087,7 @@ EDUCATION & CREDENTIALS
 {{end}}{{end}}{{if .Certifications}}
 CERTIFICATIONS
 ------------------------------------------------------------
-{{range .Certifications}}* {{.Name}} | {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}
+{{range .Certifications}}* {{.Name}} | {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -1261,7 +1261,7 @@ li { margin-bottom: 4px; font-size: 14px; color: #334155; }
     <h2 class="section-title">Certifications & Board Appointments</h2>
     <ul class="bullet-list certifications-list">
       {{range .Certifications}}
-      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}</li>
+      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}</li>
       {{end}}
     </ul>
   </section>
@@ -1310,7 +1310,7 @@ li { margin-bottom: 4px; font-size: 14px; color: #334155; }
 {{end}}{{end}}
 {{if .Certifications}}
 ## Certifications & Board Appointments
-{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}
+{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		TextTemplate: `{{.FullName}}
 {{if .Headline}}{{.Headline}}
@@ -1355,7 +1355,7 @@ EDUCATION
 ========================================================================
 CERTIFICATIONS & BOARD APPOINTMENTS
 ========================================================================
-{{range .Certifications}}- {{.Name}} - {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}
+{{range .Certifications}}- {{.Name}} - {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
 {{end}}{{end}}`,
 		CreatedAt: now,
 		UpdatedAt: now,

@@ -120,7 +120,7 @@ func TestBuildPrompt_Composition(t *testing.T) {
 					ShortID:   "exp-1",
 					Company:   "TechCorp",
 					RoleTitle: "Staff Engineer",
-					StartDate: "2020-01",
+					StartDate: domain.NewDate(2020, 1, 1),
 					Facts: []domain.Fact{
 						{ID: "fact-1111-2222", ShortID: "f-1", Statement: "Architected event-driven microservices platform."},
 					},

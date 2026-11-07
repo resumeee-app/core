@@ -11,7 +11,8 @@ import (
 // snapshotWithShortIDs constructs a sample MasterProfileSnapshot populated with both canonical UUIDs
 // and compact short IDs across skills, experiences, projects, and facts for provenance testing.
 func snapshotWithShortIDs() *domain.MasterProfileSnapshot {
-	endDate := "2023-12-31"
+	endDate := domain.NewDate(2023, 12, 31)
+	projStart := domain.NewDate(2021, 6, 1)
 	return &domain.MasterProfileSnapshot{
 		Profile: domain.Profile{
 			ID:       "prof-uuid-12345678-abcd-1111-2222-333344445555",
@@ -37,7 +38,7 @@ func snapshotWithShortIDs() *domain.MasterProfileSnapshot {
 				ShortID:   "exp-1",
 				Company:   "Acme Systems",
 				RoleTitle: "Staff Engineer",
-				StartDate: "2020-01-01",
+				StartDate: domain.NewDate(2020, 1, 1),
 				EndDate:   &endDate,
 				Facts: []domain.Fact{
 					{
@@ -61,7 +62,7 @@ func snapshotWithShortIDs() *domain.MasterProfileSnapshot {
 				ShortID:   "exp-2",
 				Company:   "Globex Corp",
 				RoleTitle: "Senior Developer",
-				StartDate: "2017-01-01",
+				StartDate: domain.NewDate(2017, 1, 1),
 				Facts: []domain.Fact{
 					{
 						ID:        "fact-uuid-2001-abcd-1111-2222-333344445555",
@@ -78,7 +79,7 @@ func snapshotWithShortIDs() *domain.MasterProfileSnapshot {
 				ID:        "proj-uuid-3333-abcd-1111-2222-333344445555",
 				ShortID:   "proj-1",
 				Name:      "Distributed KV Store",
-				StartDate: "2021-06-01",
+				StartDate: &projStart,
 				Facts: []domain.Fact{
 					{
 						ID:        "fact-uuid-3001-abcd-1111-2222-333344445555",
@@ -111,7 +112,7 @@ func TestValidate_ShortIDCitations(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      "2020-01-01",
+				StartDate:      domain.NewDate(2020, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:           "Designed distributed consensus engine handling enterprise workloads.",
@@ -151,7 +152,7 @@ func TestValidate_MixedCitations(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      "2020-01-01",
+				StartDate:      domain.NewDate(2020, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Optimized latency.",
@@ -164,7 +165,7 @@ func TestValidate_MixedCitations(t *testing.T) {
 				SourceEntityID: "exp-uuid-2222-abcd-1111-2222-333344445555",
 				Company:        "Globex Corp",
 				RoleTitle:      "Senior Developer",
-				StartDate:      "2017-01-01",
+				StartDate:      domain.NewDate(2017, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Led payment processing rewrite.",
@@ -197,7 +198,7 @@ func TestValidate_CrossEntitySpoof_ShortIDs(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      "2020-01-01",
+				StartDate:      domain.NewDate(2020, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						// fact-3 belongs to exp-2, not exp-1!
@@ -241,7 +242,7 @@ func TestValidate_FabricatedFact_ShortID(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      "2020-01-01",
+				StartDate:      domain.NewDate(2020, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Invented breakthrough AI chip.",
@@ -285,7 +286,7 @@ func TestValidate_BranchPinning_ShortID(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      "2020-01-01",
+				StartDate:      domain.NewDate(2020, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Designed distributed consensus engine.",
@@ -321,7 +322,7 @@ func TestValidate_BranchExclusion_ShortID(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      "2020-01-01",
+				StartDate:      domain.NewDate(2020, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Designed distributed consensus engine.",
@@ -333,7 +334,7 @@ func TestValidate_BranchExclusion_ShortID(t *testing.T) {
 				SourceEntityID: "exp-2",
 				Company:        "Globex Corp",
 				RoleTitle:      "Senior Developer",
-				StartDate:      "2017-01-01",
+				StartDate:      domain.NewDate(2017, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Led payment processing overhaul.",

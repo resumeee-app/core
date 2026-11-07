@@ -127,8 +127,8 @@ type WorkExperience struct {
 	Company           string         `json:"company" gorm:"not null"`
 	RoleTitle         string         `json:"role_title" gorm:"not null"`
 	EmploymentType    EmploymentType `json:"employment_type"`            // Full-time, Contract, Part-time, Internship
-	StartDate         string         `json:"start_date" gorm:"not null"` // ISO-8601 YYYY-MM-DD
-	EndDate           *string        `json:"end_date,omitempty"`         // nil if current
+	StartDate         Date           `json:"start_date" gorm:"not null"` // ISO-8601 YYYY-MM-DD
+	EndDate           *Date          `json:"end_date,omitempty"`         // nil if current
 	IsCurrent         bool           `json:"is_current"`
 	Location          Location       `json:"location" gorm:"serializer:json"`
 	CompanyLocation   Location       `json:"company_location,omitempty" gorm:"serializer:json"` // Location of the employing company (government/visa)
@@ -164,8 +164,8 @@ type Project struct {
 	Name      string         `json:"name" gorm:"not null"`
 	Role      string         `json:"role,omitempty"`
 	URL       string         `json:"url,omitempty"`
-	StartDate string         `json:"start_date,omitempty"`
-	EndDate   *string        `json:"end_date,omitempty"`
+	StartDate *Date          `json:"start_date,omitempty"`
+	EndDate   *Date          `json:"end_date,omitempty"`
 	Summary   string         `json:"summary,omitempty"`
 	Facts     []Fact         `json:"facts,omitempty" gorm:"polymorphic:Owner;polymorphicValue:project"`
 	Skills    []Skill        `json:"skills,omitempty" gorm:"many2many:project_skills;"`
@@ -194,8 +194,8 @@ type Education struct {
 	Institution string         `json:"institution" gorm:"not null"`
 	Degree      string         `json:"degree"` // StudyType in JSONResume
 	Field       string         `json:"field"`  // Area in JSONResume
-	StartDate   string         `json:"start_date,omitempty"`
-	EndDate     *string        `json:"end_date,omitempty"`
+	StartDate   *Date          `json:"start_date,omitempty"`
+	EndDate     *Date          `json:"end_date,omitempty"`
 	Score       string         `json:"score,omitempty"` // GPA / Honors
 	Location    Location       `json:"location" gorm:"serializer:json"`
 	Facts       []Fact         `json:"facts,omitempty" gorm:"polymorphic:Owner;polymorphicValue:education"`
@@ -223,7 +223,7 @@ type Certification struct {
 	UserID    string         `json:"user_id" gorm:"index;not null"`
 	Name      string         `json:"name" gorm:"not null"`
 	Issuer    string         `json:"issuer,omitempty"`
-	Date      string         `json:"date,omitempty"`
+	Date      *Date          `json:"date,omitempty"`
 	URL       string         `json:"url,omitempty"`
 	Summary   string         `json:"summary,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty" gorm:"serializer:json"`

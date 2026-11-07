@@ -11,11 +11,12 @@ import (
 )
 
 func sampleSnapshot() *domain.MasterProfileSnapshot {
-	endDate := "2023-12-31"
+	endDate := domain.NewDate(2023, 12, 31)
 	hours := 40
 	contact := domain.ContactDetail{Type: domain.ContactTypePhone, Value: "+1-555-0199"}
-	projEnd := "2022-12-31"
-	eduEnd := "2018-05-31"
+	projEnd := domain.NewDate(2022, 12, 31)
+	eduEnd := domain.NewDate(2018, 5, 31)
+	certDate := domain.NewDate(2022, 5, 1)
 
 	return &domain.MasterProfileSnapshot{
 		Profile: domain.Profile{
@@ -32,7 +33,7 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 				ID:             "exp-1",
 				Company:        "Acme Corp",
 				RoleTitle:      "Principal Engineer",
-				StartDate:      "2021-01-01",
+				StartDate:      domain.NewDate(2021, 1, 1),
 				EndDate:        &endDate,
 				CompanyContact: &contact,
 				HoursPerWeek:   &hours,
@@ -54,7 +55,7 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 				ID:        "exp-2",
 				Company:   "Beta LLC",
 				RoleTitle: "Senior Engineer",
-				StartDate: "2018-01-01",
+				StartDate: domain.NewDate(2018, 1, 1),
 				Facts: []domain.Fact{
 					{ID: "fact-exp-beta", OwnerID: "exp-2", OwnerType: domain.OwnerTypeWorkExperience, Statement: "Led rewrite of auth service"},
 				},
@@ -62,9 +63,9 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 		},
 		Projects: []domain.Project{
 			{
-				ID:        "proj-1",
-				Name:      "OpenTelemetry Collector Exporter",
-				EndDate:   &projEnd,
+				ID:      "proj-1",
+				Name:    "OpenTelemetry Collector Exporter",
+				EndDate: &projEnd,
 				Skills: []domain.Skill{
 					{ID: "skill-proj-nested", Name: "OTel", Category: "Observability"},
 				},
@@ -85,7 +86,7 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 				Institution: "MIT",
 				Degree:      "B.S.",
 				Field:       "Computer Science",
-				StartDate:   "2014-09-01",
+				StartDate:   domain.DatePtr(domain.NewDate(2014, 9, 1)),
 				EndDate:     &eduEnd,
 				Facts: []domain.Fact{
 					{
@@ -103,7 +104,7 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 				ID:     "cert-1",
 				Name:   "Certified Kubernetes Administrator",
 				Issuer: "CNCF",
-				Date:   "2022-05-01",
+				Date:   &certDate,
 			},
 		},
 		Facts: []domain.Fact{
@@ -121,11 +122,12 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 }
 
 func sampleValidContent() *domain.TailoredContent {
-	endDate := "2023-12-31"
+	endDate := domain.NewDate(2023, 12, 31)
 	hours := 40
 	contact := domain.ContactDetail{Type: domain.ContactTypePhone, Value: "+1-555-0199"}
-	projEnd := "2022-12-31"
-	eduEnd := "2018-05-31"
+	projEnd := domain.NewDate(2022, 12, 31)
+	eduEnd := domain.NewDate(2018, 5, 31)
+	certDate := domain.NewDate(2022, 5, 1)
 
 	return &domain.TailoredContent{
 		Summary: "Experienced systems engineer focused on distributed systems.",
@@ -146,7 +148,7 @@ func sampleValidContent() *domain.TailoredContent {
 				SourceEntityID: "exp-1",
 				Company:        "Acme Corp",
 				RoleTitle:      "Principal Engineer",
-				StartDate:      "2021-01-01",
+				StartDate:      domain.NewDate(2021, 1, 1),
 				EndDate:        &endDate,
 				CompanyContact: &contact,
 				HoursPerWeek:   &hours,
@@ -167,7 +169,7 @@ func sampleValidContent() *domain.TailoredContent {
 				SourceEntityID: "exp-2",
 				Company:        "Beta LLC",
 				RoleTitle:      "Senior Engineer",
-				StartDate:      "2018-01-01",
+				StartDate:      domain.NewDate(2018, 1, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Spearheaded auth rewrite with zero downtime.",
@@ -195,7 +197,7 @@ func sampleValidContent() *domain.TailoredContent {
 				Institution:    "MIT",
 				Degree:         "B.S.",
 				Field:          "Computer Science",
-				StartDate:      "2014-09-01",
+				StartDate:      domain.DatePtr(domain.NewDate(2014, 9, 1)),
 				EndDate:        &eduEnd,
 				Bullets: []domain.TailoredBullet{
 					{
@@ -210,7 +212,7 @@ func sampleValidContent() *domain.TailoredContent {
 				SourceEntityID: "cert-1",
 				Name:           "Certified Kubernetes Administrator",
 				Issuer:         "CNCF",
-				Date:           "2022-05-01",
+				Date:           &certDate,
 			},
 		},
 	}
@@ -862,7 +864,10 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	snapshot := sampleSnapshot()
 	snapshot.Experiences[0].Location = domain.Location{City: "San Francisco", Region: "CA", CountryCode: "USA"}
 
-	adversarialEndDate := "2099-01-01"
+	adversarialEndDate := domain.NewDate(2099, 1, 1)
+	advProjStart := domain.NewDate(1991, 1, 1)
+	advEduStart := domain.NewDate(1980, 1, 1)
+	advCertDate := domain.NewDate(1901, 1, 1)
 	adversarialContent := &domain.TailoredContent{
 		Summary: "Adversarial LLM content",
 		Experiences: []domain.TailoredExperience{
@@ -870,7 +875,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Hallucinated Stripe Inc",
 				RoleTitle:      "Chief Executive Officer",
-				StartDate:      "1990-01-01",
+				StartDate:      domain.NewDate(1990, 1, 1),
 				EndDate:        &adversarialEndDate,
 				Location:       domain.Location{City: "Atlantis", CountryCode: "XX"},
 				Bullets: []domain.TailoredBullet{
@@ -887,7 +892,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				Name:           "Hallucinated Linux Kernel",
 				Role:           "Lead Architect",
 				URL:            "https://fake.example.com",
-				StartDate:      "1991-01-01",
+				StartDate:      &advProjStart,
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Maintained custom exporter plugin",
@@ -902,7 +907,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				Institution:    "Hallucinated Oxford University",
 				Degree:         "Ph.D.",
 				Field:          "Astrophysics",
-				StartDate:      "1980-01-01",
+				StartDate:      &advEduStart,
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Published research on distributed consensus",
@@ -916,7 +921,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				SourceEntityID: "cert-1",
 				Name:           "Hallucinated Nobel Prize",
 				Issuer:         "Nobel Committee",
-				Date:           "1901-01-01",
+				Date:           &advCertDate,
 				URL:            "https://fake-nobel.com",
 			},
 		},
@@ -935,10 +940,10 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	if exp.RoleTitle != "Principal Engineer" {
 		t.Errorf("expected RoleTitle 'Principal Engineer', got '%s'", exp.RoleTitle)
 	}
-	if exp.StartDate != "2021-01-01" {
+	if exp.StartDate.String() != "2021-01-01" {
 		t.Errorf("expected StartDate '2021-01-01', got '%s'", exp.StartDate)
 	}
-	if exp.EndDate == nil || *exp.EndDate != "2023-12-31" {
+	if exp.EndDate == nil || exp.EndDate.String() != "2023-12-31" {
 		t.Errorf("expected EndDate '2023-12-31', got '%v'", exp.EndDate)
 	}
 	if exp.Location.City != "San Francisco" {
@@ -962,7 +967,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	if edu.Field != "Computer Science" {
 		t.Errorf("expected Field 'Computer Science', got '%s'", edu.Field)
 	}
-	if edu.StartDate != "2014-09-01" {
+	if edu.StartDate == nil || edu.StartDate.String() != "2014-09-01" {
 		t.Errorf("expected StartDate '2014-09-01', got '%s'", edu.StartDate)
 	}
 
@@ -974,7 +979,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	if cert.Issuer != "CNCF" {
 		t.Errorf("expected Cert Issuer 'CNCF', got '%s'", cert.Issuer)
 	}
-	if cert.Date != "2022-05-01" {
+	if cert.Date == nil || cert.Date.String() != "2022-05-01" {
 		t.Errorf("expected Cert Date '2022-05-01', got '%s'", cert.Date)
 	}
 }

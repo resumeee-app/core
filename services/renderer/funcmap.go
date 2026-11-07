@@ -11,6 +11,8 @@ import (
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
+
+	"resumeee/internal/domain"
 )
 
 var dateParseLayouts = []string{
@@ -28,6 +30,58 @@ var dateParseLayouts = []string{
 
 var fourDigitsRegex = regexp.MustCompile(`\b(19\d\d|20\d\d)\b`)
 
+// extractDateString converts supported date types into a normalized string and signals presence.
+func extractDateString(val any) (string, bool) {
+	if val == nil {
+		return "", false
+	}
+	switch v := val.(type) {
+	case domain.Date:
+		if v.IsZero() {
+			return "", false
+		}
+		return v.String(), true
+	case *domain.Date:
+		if v == nil || v.IsZero() {
+			return "", false
+		}
+		return v.String(), true
+	case time.Time:
+		if v.IsZero() {
+			return "", false
+		}
+		return v.Format("2006-01-02"), true
+	case *time.Time:
+		if v == nil || v.IsZero() {
+			return "", false
+		}
+		return v.Format("2006-01-02"), true
+	case fmt.Stringer:
+		str := strings.TrimSpace(v.String())
+		if str == "" {
+			return "", false
+		}
+		return str, true
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return "", false
+		}
+		return trimmed, true
+	case *string:
+		if v == nil || strings.TrimSpace(*v) == "" {
+			return "", false
+		}
+		return strings.TrimSpace(*v), true
+	default:
+		s := strings.TrimSpace(fmt.Sprint(val))
+		if s == "" || s == "<nil>" {
+			return "", false
+		}
+		return s, true
+	}
+}
+
 // parseDate attempts to parse a date string using common ISO and human-readable formats.
 func parseDate(s string) (time.Time, error) {
 	for _, layout := range dateParseLayouts {
@@ -38,64 +92,46 @@ func parseDate(s string) (time.Time, error) {
 	return time.Time{}, errors.New("cannot parse date")
 }
 
-// formatAutoDate formats a date string as YYYY or Jan 2006 depending on input precision.
-func formatAutoDate(s string) string {
-	trimmed := strings.TrimSpace(s)
-	if trimmed == "" {
+// formatAutoDate formats a date input as YYYY or Jan 2006 depending on input precision.
+//
+// Invariant: Full dates (YYYY-MM-DD) are formatted as Month and Year (e.g., "Jan 2006"),
+// preserving the requirement that resume rendering outputs month and year without days.
+func formatAutoDate(val any) string {
+	s, ok := extractDateString(val)
+	if !ok || s == "" {
 		return ""
 	}
-	t, err := parseDate(trimmed)
+	t, err := parseDate(s)
 	if err != nil {
-		return trimmed
+		return s
 	}
-	if len(trimmed) == 4 {
+	if len(s) == 4 {
 		return t.Format("2006")
 	}
 	return t.Format("Jan 2006")
 }
 
-// formatDate formats a given date string using a standard Go time layout.
-func formatDate(layout, dateStr string) string {
-	if strings.TrimSpace(dateStr) == "" {
+// formatDate formats a given date input using a standard Go time layout.
+func formatDate(layout string, dateVal any) string {
+	s, ok := extractDateString(dateVal)
+	if !ok || s == "" {
 		return ""
 	}
-	t, err := parseDate(strings.TrimSpace(dateStr))
+	t, err := parseDate(s)
 	if err != nil {
-		return dateStr
+		return s
 	}
 	return t.Format(layout)
 }
 
 // formatDateRange formats a start and end date interval with an optional present label.
-func formatDateRange(start string, end any, presentLabel string) string {
+// It accepts any supported date types (domain.Date, *domain.Date, time.Time, *time.Time, string).
+func formatDateRange(start any, end any, presentLabel string) string {
 	if strings.TrimSpace(presentLabel) == "" {
 		presentLabel = "Present"
 	}
-	var endStr string
-	isEndEmpty := false
-	switch v := end.(type) {
-	case nil:
-		isEndEmpty = true
-	case *string:
-		if v == nil || strings.TrimSpace(*v) == "" {
-			isEndEmpty = true
-		} else {
-			endStr = *v
-		}
-	case string:
-		if strings.TrimSpace(v) == "" {
-			isEndEmpty = true
-		} else {
-			endStr = v
-		}
-	default:
-		s := fmt.Sprint(end)
-		if strings.TrimSpace(s) == "" || s == "<nil>" {
-			isEndEmpty = true
-		} else {
-			endStr = s
-		}
-	}
+	endStr, hasEnd := extractDateString(end)
+	isEndEmpty := !hasEnd || endStr == ""
 
 	startFormatted := formatAutoDate(start)
 
@@ -115,19 +151,19 @@ func formatDateRange(start string, end any, presentLabel string) string {
 	return endFormatted
 }
 
-// year extracts a 4-digit calendar year from a date string.
-func year(dateStr string) string {
-	trimmed := strings.TrimSpace(dateStr)
-	if trimmed == "" {
+// year extracts a 4-digit calendar year from a date string or Date instance.
+func year(dateVal any) string {
+	s, ok := extractDateString(dateVal)
+	if !ok || s == "" {
 		return ""
 	}
-	if t, err := parseDate(trimmed); err == nil {
+	if t, err := parseDate(s); err == nil {
 		return fmt.Sprintf("%04d", t.Year())
 	}
-	if match := fourDigitsRegex.FindString(trimmed); match != "" {
+	if match := fourDigitsRegex.FindString(s); match != "" {
 		return match
 	}
-	return dateStr
+	return s
 }
 
 func titleCase(s string) string {

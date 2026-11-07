@@ -60,7 +60,10 @@ func TestProfileJSONRoundTrip(t *testing.T) {
 func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	hours := 40
-	endDate := "2024-01-01"
+	endDate := domain.NewDate(2024, 1, 1)
+	startDateProj := domain.NewDate(2026, 1, 1)
+	startDateEdu := domain.NewDate(2016, 9, 1)
+	certDate := domain.NewDate(2023, 5, 15)
 
 	skill := domain.Skill{
 		ID:              "skill-1",
@@ -92,7 +95,7 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 		Company:        "Acme Corp",
 		RoleTitle:      "Lead Backend Engineer",
 		EmploymentType: domain.EmploymentTypeFullTime,
-		StartDate:      "2020-01-01",
+		StartDate:      domain.NewDate(2020, 1, 1),
 		EndDate:        &endDate,
 		IsCurrent:      false,
 		Location: domain.Location{
@@ -121,7 +124,7 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 		Name:      "Resumeee",
 		Role:      "Author",
 		URL:       "https://github.com/rrivera/resumeee",
-		StartDate: "2026-01-01",
+		StartDate: &startDateProj,
 		Summary:   "Self-hosted resume tailoring engine",
 		Facts: []domain.Fact{
 			{
@@ -143,7 +146,7 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 		Institution: "MIT",
 		Degree:      "Bachelor of Science",
 		Field:       "Computer Science",
-		StartDate:   "2016-09-01",
+		StartDate:   &startDateEdu,
 		EndDate:     &endDate,
 		Score:       "3.9",
 		Location: domain.Location{
@@ -168,7 +171,7 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 		UserID:    "user-1",
 		Name:      "AWS Solutions Architect Professional",
 		Issuer:    "Amazon Web Services",
-		Date:      "2023-05-15",
+		Date:      &certDate,
 		URL:       "https://aws.amazon.com/verify",
 		Summary:   "Cloud architecture certification",
 		CreatedAt: now,
@@ -312,7 +315,7 @@ func TestTailoredContentAndProvenance(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Acme Corp",
 				RoleTitle:      "Lead Engineer",
-				StartDate:      "2020-01-01",
+				StartDate:      domain.NewDate(2020, 1, 1),
 				CompanyLocation: domain.Location{
 					City:        "Austin",
 					CountryCode: "US",

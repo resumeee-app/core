@@ -96,7 +96,7 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req domain.Generat
 				SourceEntityID: expID,
 				Company:        "Test Corp",
 				RoleTitle:      "Lead Engineer",
-				StartDate:      "2020-01-01",
+				StartDate:      domain.NewDate(2020, 1, 1),
 				Bullets:        bullets,
 			},
 		}
@@ -568,7 +568,7 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 					SourceEntityID: "non-existent-exp-id",
 					Company:        "Fake Corp",
 					RoleTitle:      "Phantom Engineer",
-					StartDate:      "2020-01-01",
+					StartDate:      domain.NewDate(2020, 1, 1),
 					Bullets: []domain.TailoredBullet{
 						{
 							Text:          "Did impossible things",

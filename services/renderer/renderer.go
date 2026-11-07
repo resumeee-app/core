@@ -159,7 +159,10 @@ func NewRenderContext(tmpl *domain.TemplateSet, profile *domain.Profile, content
 
 // SyntheticRenderContext returns a fully populated mock context used for pre-persistence dry-run validation.
 func SyntheticRenderContext() *RenderContext {
-	endDate := "2023-01-01"
+	endDate := domain.NewDate(2023, 1, 1)
+	projStart := domain.NewDate(2021, 6, 1)
+	eduStart := domain.NewDate(2014, 9, 1)
+	certDate := domain.NewDate(2022, 5, 1)
 	hours := 40
 	return &RenderContext{
 		FullName: "Jane Doe",
@@ -192,7 +195,7 @@ func SyntheticRenderContext() *RenderContext {
 				SourceEntityID:    "exp-1",
 				Company:           "Acme Corp",
 				RoleTitle:         "Senior Software Engineer",
-				StartDate:         "2020-01-01",
+				StartDate:         domain.NewDate(2020, 1, 1),
 				EndDate:           &endDate,
 				Location:          domain.Location{City: "San Francisco", Region: "CA"},
 				CompanyLocation:   domain.Location{City: "San Francisco", Region: "CA"},
@@ -212,7 +215,7 @@ func SyntheticRenderContext() *RenderContext {
 				Name:           "High-Throughput Queue",
 				Role:           "Lead Architect",
 				URL:            "https://github.com/example/queue",
-				StartDate:      "2021-06-01",
+				StartDate:      &projStart,
 				EndDate:        &endDate,
 				Summary:        "A distributed message queue in Go.",
 				Bullets: []domain.TailoredBullet{
@@ -226,7 +229,7 @@ func SyntheticRenderContext() *RenderContext {
 				Institution:    "University of Technology",
 				Degree:         "B.S.",
 				Field:          "Computer Science",
-				StartDate:      "2014-09-01",
+				StartDate:      &eduStart,
 				EndDate:        &endDate,
 				Score:          "3.9 GPA",
 				Bullets: []domain.TailoredBullet{
@@ -239,7 +242,7 @@ func SyntheticRenderContext() *RenderContext {
 				SourceEntityID: "cert-1",
 				Name:           "Certified Kubernetes Administrator",
 				Issuer:         "CNCF",
-				Date:           "2022-05-01",
+				Date:           &certDate,
 				URL:            "https://cncf.io/cert/cka",
 			},
 		},

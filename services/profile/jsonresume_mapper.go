@@ -154,13 +154,17 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 		expID := domain.GenerateID("exp")
 		expShortID := domain.GenerateShortID("exp")
 		company := w.GetCompany()
-		var endDate *string
+		var endDate *domain.Date
 		isCurrent := true
-		if w.EndDate != "" {
-			ed := w.EndDate
-			endDate = &ed
-			isCurrent = false
+		cleanEnd := strings.TrimSpace(w.EndDate)
+		if cleanEnd != "" && !strings.EqualFold(cleanEnd, "present") {
+			if ed, err := domain.ParseDate(cleanEnd); err == nil && !ed.IsZero() {
+				endDate = &ed
+				isCurrent = false
+			}
 		}
+
+		parsedStart, _ := domain.ParseDate(w.StartDate)
 
 		expMeta := make(map[string]any)
 		if w.URL != "" {
@@ -201,7 +205,7 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 			Company:        company,
 			RoleTitle:      w.Position,
 			EmploymentType: domain.EmploymentTypeFullTime,
-			StartDate:      w.StartDate,
+			StartDate:      parsedStart,
 			EndDate:        endDate,
 			IsCurrent:      isCurrent,
 			Location: domain.Location{
@@ -221,10 +225,18 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	for i, p := range resume.Projects {
 		projID := domain.GenerateID("proj")
 		projShortID := domain.GenerateShortID("proj")
-		var endDate *string
-		if p.EndDate != "" {
-			ed := p.EndDate
-			endDate = &ed
+		var startDate *domain.Date
+		if p.StartDate != "" {
+			if sd, err := domain.ParseDate(p.StartDate); err == nil && !sd.IsZero() {
+				startDate = &sd
+			}
+		}
+		var endDate *domain.Date
+		cleanEnd := strings.TrimSpace(p.EndDate)
+		if cleanEnd != "" && !strings.EqualFold(cleanEnd, "present") {
+			if ed, err := domain.ParseDate(cleanEnd); err == nil && !ed.IsZero() {
+				endDate = &ed
+			}
 		}
 		role := ""
 		if len(p.Roles) > 0 {
@@ -275,7 +287,7 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 			Name:      p.Name,
 			Role:      role,
 			URL:       p.URL,
-			StartDate: p.StartDate,
+			StartDate: startDate,
 			EndDate:   endDate,
 			Summary:   p.Description,
 			Facts:     projFacts,
@@ -291,10 +303,18 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	for i, e := range resume.Education {
 		eduID := domain.GenerateID("edu")
 		eduShortID := domain.GenerateShortID("edu")
-		var endDate *string
-		if e.EndDate != "" {
-			ed := e.EndDate
-			endDate = &ed
+		var startDate *domain.Date
+		if e.StartDate != "" {
+			if sd, err := domain.ParseDate(e.StartDate); err == nil && !sd.IsZero() {
+				startDate = &sd
+			}
+		}
+		var endDate *domain.Date
+		cleanEnd := strings.TrimSpace(e.EndDate)
+		if cleanEnd != "" && !strings.EqualFold(cleanEnd, "present") {
+			if ed, err := domain.ParseDate(cleanEnd); err == nil && !ed.IsZero() {
+				endDate = &ed
+			}
 		}
 		eduMeta := make(map[string]any)
 		if e.URL != "" {
@@ -311,7 +331,7 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 			Institution: e.Institution,
 			Degree:      e.StudyType,
 			Field:       e.Area,
-			StartDate:   e.StartDate,
+			StartDate:   startDate,
 			EndDate:     endDate,
 			Score:       e.Score,
 			Metadata:    eduMeta,
@@ -325,13 +345,19 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	for i, c := range resume.Certificates {
 		certID := domain.GenerateID("cert")
 		certShortID := domain.GenerateShortID("cert")
+		var certDate *domain.Date
+		if c.Date != "" {
+			if cd, err := domain.ParseDate(c.Date); err == nil && !cd.IsZero() {
+				certDate = &cd
+			}
+		}
 		certifications[i] = domain.Certification{
 			ID:        certID,
 			ShortID:   certShortID,
 			UserID:    userID,
 			Name:      c.Name,
 			Issuer:    c.Issuer,
-			Date:      c.Date,
+			Date:      certDate,
 			URL:       c.URL,
 			CreatedAt: time.Now().UTC(),
 			UpdatedAt: time.Now().UTC(),
@@ -411,8 +437,8 @@ func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
 	workList := make([]JSONResumeWork, len(snapshot.Experiences))
 	for i, exp := range snapshot.Experiences {
 		endDate := ""
-		if exp.EndDate != nil {
-			endDate = *exp.EndDate
+		if exp.EndDate != nil && !exp.EndDate.IsZero() && !exp.IsCurrent {
+			endDate = exp.EndDate.String()
 		}
 
 		var highlights []string
@@ -440,7 +466,7 @@ func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
 			Company:    exp.Company,
 			Position:   exp.RoleTitle,
 			URL:        urlStr,
-			StartDate:  exp.StartDate,
+			StartDate:  exp.StartDate.String(),
 			EndDate:    endDate,
 			Summary:    exp.DutiesSummary,
 			Highlights: highlights,
@@ -451,9 +477,13 @@ func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
 	// 3. Projects
 	projList := make([]JSONResumeProject, len(snapshot.Projects))
 	for i, proj := range snapshot.Projects {
+		startDate := ""
+		if proj.StartDate != nil && !proj.StartDate.IsZero() {
+			startDate = proj.StartDate.String()
+		}
 		endDate := ""
-		if proj.EndDate != nil {
-			endDate = *proj.EndDate
+		if proj.EndDate != nil && !proj.EndDate.IsZero() {
+			endDate = proj.EndDate.String()
 		}
 
 		var highlights []string
@@ -489,7 +519,7 @@ func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
 			Description: proj.Summary,
 			Highlights:  highlights,
 			Keywords:    keywords,
-			StartDate:   proj.StartDate,
+			StartDate:   startDate,
 			EndDate:     endDate,
 			URL:         proj.URL,
 			Roles:       roles,
@@ -501,9 +531,13 @@ func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
 	// 4. Education
 	eduList := make([]JSONResumeEducation, len(snapshot.Education))
 	for i, edu := range snapshot.Education {
+		startDate := ""
+		if edu.StartDate != nil && !edu.StartDate.IsZero() {
+			startDate = edu.StartDate.String()
+		}
 		endDate := ""
-		if edu.EndDate != nil {
-			endDate = *edu.EndDate
+		if edu.EndDate != nil && !edu.EndDate.IsZero() {
+			endDate = edu.EndDate.String()
 		}
 		urlStr := ""
 		var courses []string
@@ -519,7 +553,7 @@ func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
 			URL:         urlStr,
 			Area:        edu.Field,
 			StudyType:   edu.Degree,
-			StartDate:   edu.StartDate,
+			StartDate:   startDate,
 			EndDate:     endDate,
 			Score:       edu.Score,
 			Courses:     courses,
@@ -529,9 +563,13 @@ func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
 	// 5. Certifications
 	certList := make([]JSONResumeCertificate, len(snapshot.Certifications))
 	for i, cert := range snapshot.Certifications {
+		dateStr := ""
+		if cert.Date != nil && !cert.Date.IsZero() {
+			dateStr = cert.Date.String()
+		}
 		certList[i] = JSONResumeCertificate{
 			Name:   cert.Name,
-			Date:   cert.Date,
+			Date:   dateStr,
 			Issuer: cert.Issuer,
 			URL:    cert.URL,
 		}
@@ -664,8 +702,8 @@ func FromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*J
 	workList := make([]JSONResumeWork, len(tailored.Experiences))
 	for i, exp := range tailored.Experiences {
 		endDate := ""
-		if exp.EndDate != nil {
-			endDate = *exp.EndDate
+		if exp.EndDate != nil && !exp.EndDate.IsZero() {
+			endDate = exp.EndDate.String()
 		}
 		var highlights []string
 		for _, b := range exp.Bullets {
@@ -681,7 +719,7 @@ func FromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*J
 			Name:       exp.Company,
 			Company:    exp.Company,
 			Position:   exp.RoleTitle,
-			StartDate:  exp.StartDate,
+			StartDate:  exp.StartDate.String(),
 			EndDate:    endDate,
 			Summary:    exp.DutiesSummary,
 			Highlights: highlights,
@@ -692,9 +730,13 @@ func FromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*J
 	// 2. Projects from TailoredProjects
 	projList := make([]JSONResumeProject, len(tailored.Projects))
 	for i, proj := range tailored.Projects {
+		startDate := ""
+		if proj.StartDate != nil && !proj.StartDate.IsZero() {
+			startDate = proj.StartDate.String()
+		}
 		endDate := ""
-		if proj.EndDate != nil {
-			endDate = *proj.EndDate
+		if proj.EndDate != nil && !proj.EndDate.IsZero() {
+			endDate = proj.EndDate.String()
 		}
 		var highlights []string
 		for _, b := range proj.Bullets {
@@ -709,7 +751,7 @@ func FromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*J
 			Name:        proj.Name,
 			Description: proj.Summary,
 			Highlights:  highlights,
-			StartDate:   proj.StartDate,
+			StartDate:   startDate,
 			EndDate:     endDate,
 			URL:         proj.URL,
 			Roles:       roles,
@@ -719,15 +761,19 @@ func FromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*J
 	// 3. Education from TailoredEducation
 	eduList := make([]JSONResumeEducation, len(tailored.Education))
 	for i, edu := range tailored.Education {
+		startDate := ""
+		if edu.StartDate != nil && !edu.StartDate.IsZero() {
+			startDate = edu.StartDate.String()
+		}
 		endDate := ""
-		if edu.EndDate != nil {
-			endDate = *edu.EndDate
+		if edu.EndDate != nil && !edu.EndDate.IsZero() {
+			endDate = edu.EndDate.String()
 		}
 		eduList[i] = JSONResumeEducation{
 			Institution: edu.Institution,
 			StudyType:   edu.Degree,
 			Area:        edu.Field,
-			StartDate:   edu.StartDate,
+			StartDate:   startDate,
 			EndDate:     endDate,
 			Score:       edu.Score,
 		}
@@ -736,10 +782,14 @@ func FromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*J
 	// 4. Certifications from TailoredCert
 	certList := make([]JSONResumeCertificate, len(tailored.Certifications))
 	for i, cert := range tailored.Certifications {
+		dateStr := ""
+		if cert.Date != nil && !cert.Date.IsZero() {
+			dateStr = cert.Date.String()
+		}
 		certList[i] = JSONResumeCertificate{
 			Name:   cert.Name,
 			Issuer: cert.Issuer,
-			Date:   cert.Date,
+			Date:   dateStr,
 			URL:    cert.URL,
 		}
 	}

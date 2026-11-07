@@ -83,7 +83,10 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 	})
 
 	t.Run("full career graph projection with 100% fidelity", func(t *testing.T) {
-		endDate := "2023-12-31"
+		endDate := domain.NewDate(2023, 12, 31)
+		projStart := domain.NewDate(2024, 1, 1)
+		eduStart := domain.NewDate(2016, 9, 1)
+		certDate := domain.NewDate(2022, 6, 1)
 		hours := 40
 		snap := &domain.MasterProfileSnapshot{
 			Profile: domain.Profile{
@@ -100,7 +103,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					ID:                "exp-1",
 					Company:           "Acme Corp",
 					RoleTitle:         "Principal Engineer",
-					StartDate:         "2021-01-01",
+					StartDate:         domain.NewDate(2021, 1, 1),
 					EndDate:           &endDate,
 					Location:          domain.Location{City: "San Francisco", Region: "CA"},
 					CompanyLocation:   domain.Location{City: "San Francisco", Region: "CA"},
@@ -133,7 +136,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					Name:      "Resumeee Engine",
 					Role:      "Creator",
 					URL:       "https://github.com/example/resumeee",
-					StartDate: "2024-01-01",
+					StartDate: &projStart,
 					Summary:   "Open-source resume management system.",
 					Facts: []domain.Fact{
 						{
@@ -152,7 +155,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					Institution: "State University",
 					Degree:      "B.S.",
 					Field:       "Computer Science",
-					StartDate:   "2016-09-01",
+					StartDate:   &eduStart,
 					EndDate:     &endDate,
 					Score:       "3.9 GPA",
 					Facts: []domain.Fact{
@@ -168,7 +171,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					ID:     "cert-1",
 					Name:   "Certified Kubernetes Administrator",
 					Issuer: "Cloud Native Computing Foundation",
-					Date:   "2022-06-01",
+					Date:   &certDate,
 					URL:    "https://cncf.io/cert/cka",
 				},
 			},
@@ -216,7 +219,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 		if exp.SourceEntityID != "exp-1" || exp.Company != "Acme Corp" || exp.RoleTitle != "Principal Engineer" {
 			t.Errorf("unexpected experience header: %+v", exp)
 		}
-		if exp.StartDate != "2021-01-01" || exp.EndDate == nil || *exp.EndDate != endDate {
+		if !exp.StartDate.EqualDate(domain.NewDate(2021, 1, 1)) || exp.EndDate == nil || !exp.EndDate.EqualDate(endDate) {
 			t.Errorf("unexpected experience dates: %+v", exp)
 		}
 		if exp.HoursPerWeek == nil || *exp.HoursPerWeek != hours || exp.SupervisorName != "Jane Doe" {
@@ -285,7 +288,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					ID:        "exp-orphan-facts",
 					Company:   "Beta Inc",
 					RoleTitle: "Engineer",
-					StartDate: "2020-01-01",
+					StartDate: domain.NewDate(2020, 1, 1),
 					Facts:     nil, // Empty on entity
 				},
 			},
@@ -327,7 +330,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					ID:        "exp-1",
 					Company:   "Acme",
 					RoleTitle: "Dev",
-					StartDate: "2020-01-01",
+					StartDate: domain.NewDate(2020, 1, 1),
 					Skills: []domain.Skill{
 						{ID: "sk-exp", Name: "gRPC", Category: "Backend"},
 					},

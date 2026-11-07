@@ -672,7 +672,10 @@ func TestJSONResume_ExportFromTailored(t *testing.T) {
 		},
 	}
 
-	endDate := "2024-01-01"
+	endDate := domain.NewDate(2024, 1, 1)
+	startDateExp := domain.NewDate(2021, 1, 1)
+	startDateEdu := domain.NewDate(2017, 9, 1)
+	certDate := domain.NewDate(2023, 8, 1)
 	tailoredContent := &domain.TailoredContent{
 		Summary: "Tailored summary targeting Cloud Infrastructure Architect role.",
 		SkillGroups: []domain.TailoredSkillGroup{
@@ -690,7 +693,7 @@ func TestJSONResume_ExportFromTailored(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Acme Cloud",
 				RoleTitle:      "Staff Infrastructure Engineer",
-				StartDate:      "2021-01-01",
+				StartDate:      startDateExp,
 				EndDate:        &endDate,
 				DutiesSummary:  "Architected distributed control planes.",
 				Location:       domain.Location{City: "Austin, TX"},
@@ -716,7 +719,7 @@ func TestJSONResume_ExportFromTailored(t *testing.T) {
 				Institution:    "MIT",
 				Degree:         "B.S.",
 				Field:          "Computer Science",
-				StartDate:      "2017-09-01",
+				StartDate:      &startDateEdu,
 				EndDate:        &endDate,
 			},
 		},
@@ -725,7 +728,7 @@ func TestJSONResume_ExportFromTailored(t *testing.T) {
 				SourceEntityID: "cert-1",
 				Name:           "AWS Certified Solutions Architect - Professional",
 				Issuer:         "AWS",
-				Date:           "2023-08-01",
+				Date:           &certDate,
 			},
 		},
 	}
@@ -826,7 +829,7 @@ func TestProfileService_ExportJSONResume_WithVersionID(t *testing.T) {
 					SourceEntityID: "exp-1",
 					Company:        "Pied Piper Tailored",
 					RoleTitle:      "Chief Compression Officer",
-					StartDate:      "2014-01-01",
+					StartDate:      domain.NewDate(2014, 1, 1),
 					Bullets: []domain.TailoredBullet{
 						{Text: "Tailored bullet for HPC workloads."},
 					},
@@ -945,5 +948,117 @@ func TestJSONResume_Import_GeneratesShortIDs(t *testing.T) {
 		if !strings.HasPrefix(cert.ShortID, "cert-") {
 			t.Errorf("expected cert short_id to start with 'cert-', got %q", cert.ShortID)
 		}
+	}
+}
+
+func TestJSONResume_EndDatePresentHandling(t *testing.T) {
+	// 1. Verify Import: JSON Resume with "Present" end date is parsed as ongoing (nil EndDate, isCurrent = true)
+	rawImport := []byte(`{
+		"basics": { "name": "Current Worker" },
+		"work": [
+			{
+				"name": "Ongoing Corp",
+				"position": "Senior Dev",
+				"startDate": "2022-01-15",
+				"endDate": "Present"
+			}
+		],
+		"projects": [
+			{
+				"name": "Ongoing Project",
+				"startDate": "2023-05-01",
+				"endDate": "present"
+			}
+		],
+		"education": [
+			{
+				"institution": "Ongoing University",
+				"startDate": "2021-09-01",
+				"endDate": ""
+			}
+		]
+	}`)
+
+	var parsed profile.JSONResume
+	if err := json.Unmarshal(rawImport, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	snap, err := profile.ToSnapshot(&parsed, "user-1", nil, 1)
+	if err != nil {
+		t.Fatalf("ToSnapshot failed: %v", err)
+	}
+
+	if len(snap.Experiences) != 1 {
+		t.Fatalf("expected 1 experience, got %d", len(snap.Experiences))
+	}
+	exp := snap.Experiences[0]
+	if !exp.IsCurrent {
+		t.Errorf("expected exp.IsCurrent to be true when endDate was 'Present'")
+	}
+	if exp.EndDate != nil {
+		t.Errorf("expected exp.EndDate to be nil, got %v", exp.EndDate)
+	}
+	if exp.StartDate.String() != "2022-01-15" {
+		t.Errorf("expected StartDate '2022-01-15', got %q", exp.StartDate.String())
+	}
+
+	if len(snap.Projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(snap.Projects))
+	}
+	if snap.Projects[0].EndDate != nil {
+		t.Errorf("expected project EndDate to be nil, got %v", snap.Projects[0].EndDate)
+	}
+
+	if len(snap.Education) != 1 {
+		t.Fatalf("expected 1 education, got %d", len(snap.Education))
+	}
+	if snap.Education[0].EndDate != nil {
+		t.Errorf("expected education EndDate to be nil, got %v", snap.Education[0].EndDate)
+	}
+
+	// 2. Verify Export: Exporting snapshot with ongoing records must NEVER produce "Present" in endDate
+	exported, err := profile.FromSnapshot(snap)
+	if err != nil {
+		t.Fatalf("FromSnapshot failed: %v", err)
+	}
+
+	if exported.Work[0].EndDate != "" {
+		t.Errorf("expected empty EndDate in exported work, got %q", exported.Work[0].EndDate)
+	}
+	if exported.Projects[0].EndDate != "" {
+		t.Errorf("expected empty EndDate in exported projects, got %q", exported.Projects[0].EndDate)
+	}
+	if exported.Education[0].EndDate != "" {
+		t.Errorf("expected empty EndDate in exported education, got %q", exported.Education[0].EndDate)
+	}
+
+	// Also verify JSON serialization does not contain "Present"
+	data, err := json.Marshal(exported)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	if strings.Contains(string(data), `"Present"`) || strings.Contains(string(data), `"present"`) {
+		t.Errorf("exported JSON Resume must not contain 'Present' in output: %s", string(data))
+	}
+
+	// 3. Verify Export from TailoredContent as well
+	tailored := &domain.TailoredContent{
+		Experiences: []domain.TailoredExperience{
+			{
+				SourceEntityID: "exp-1",
+				Company:        "Ongoing Corp",
+				RoleTitle:      "Senior Dev",
+				StartDate:      domain.NewDate(2022, 1, 15),
+				EndDate:        nil, // ongoing
+			},
+		},
+	}
+	exportedTailored, err := profile.FromTailored(&snap.Profile, tailored)
+	if err != nil {
+		t.Fatalf("FromTailored failed: %v", err)
+	}
+	if exportedTailored.Work[0].EndDate != "" {
+		t.Errorf("expected empty EndDate in tailored exported work, got %q", exportedTailored.Work[0].EndDate)
 	}
 }

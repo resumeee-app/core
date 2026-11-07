@@ -32,7 +32,7 @@ var sampleResponse = domain.GenerationResponse{
 				SourceEntityID: "exp-uuid-1",
 				Company:        "Acme Corp",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      "2021-03-01",
+				StartDate:      domain.NewDate(2021, 3, 1),
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:           "Reduced p99 replication latency by 45% via raft batch pipelining.",
@@ -60,7 +60,7 @@ var sampleResponse = domain.GenerationResponse{
 				Institution:    "Carnegie Mellon University",
 				Degree:         "B.S.",
 				Field:          "Computer Science",
-				StartDate:      "2013-09-01",
+				StartDate:      domain.DatePtr(domain.NewDate(2013, 9, 1)),
 			},
 		},
 		Certifications: []domain.TailoredCert{
@@ -68,7 +68,7 @@ var sampleResponse = domain.GenerationResponse{
 				SourceEntityID: "cert-uuid-1",
 				Name:           "Certified Kubernetes Administrator",
 				Issuer:         "CNCF",
-				Date:           "2022-06-15",
+				Date:           domain.DatePtr(domain.NewDate(2022, 6, 15)),
 			},
 		},
 	},

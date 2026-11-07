@@ -17,7 +17,10 @@ type emptyStringer struct{}
 func (emptyStringer) String() string { return "" }
 
 func mockFullProfileAndContent() (*domain.Profile, *domain.TailoredContent) {
-	endDate := "2023-12-31"
+	endDate := domain.NewDate(2023, 12, 31)
+	projStart := domain.NewDate(1843, 1, 1)
+	eduStart := domain.NewDate(1830, 1, 1)
+	certDate := domain.NewDate(1845, 1, 1)
 	hours := 40
 	profile := &domain.Profile{
 		ID:       "prof-test",
@@ -50,7 +53,7 @@ func mockFullProfileAndContent() (*domain.Profile, *domain.TailoredContent) {
 				SourceEntityID:    "exp-1",
 				Company:           "Babbage Engine Works",
 				RoleTitle:         "Lead Algorithmic Engineer",
-				StartDate:         "1842-01-01",
+				StartDate:         domain.NewDate(1842, 1, 1),
 				EndDate:           &endDate,
 				Location:          domain.Location{City: "London", Region: "UK"},
 				CompanyLocation:   domain.Location{City: "London", Region: "UK"},
@@ -71,7 +74,7 @@ func mockFullProfileAndContent() (*domain.Profile, *domain.TailoredContent) {
 				Name:           "Bernoulli Engine Script",
 				Role:           "Author",
 				URL:            "https://babbage.org/bernoulli",
-				StartDate:      "1843-01-01",
+				StartDate:      &projStart,
 				EndDate:        &endDate,
 				Summary:        "Diagram and plan for the computation of Bernoulli numbers.",
 				Bullets: []domain.TailoredBullet{
@@ -85,7 +88,7 @@ func mockFullProfileAndContent() (*domain.Profile, *domain.TailoredContent) {
 				Institution:    "Private Tutelage",
 				Degree:         "Studies in Advanced Mathematics",
 				Field:          "Mathematics & Science",
-				StartDate:      "1830-01-01",
+				StartDate:      &eduStart,
 				EndDate:        &endDate,
 				Score:          "Distinction",
 				Bullets: []domain.TailoredBullet{
@@ -98,7 +101,7 @@ func mockFullProfileAndContent() (*domain.Profile, *domain.TailoredContent) {
 				SourceEntityID: "cert-1",
 				Name:           "Fellow of the Analytical Sciences",
 				Issuer:         "Royal Society Affiliate",
-				Date:           "1845",
+				Date:           &certDate,
 				URL:            "https://example.org/fellowship",
 			},
 		},
@@ -329,32 +332,46 @@ func TestRenderer_SyntaxErrorDetection(t *testing.T) {
 func TestRenderer_FuncMapHelpers(t *testing.T) {
 	// Date & Time
 	endDate := "2023-05-01"
-	rangeWithEnd := renderer.SafeFuncMap["formatDateRange"].(func(string, any, string) string)("2021-01-01", &endDate, "Present")
+	rangeWithEnd := renderer.SafeFuncMap["formatDateRange"].(func(any, any, string) string)("2021-01-01", &endDate, "Present")
 	if rangeWithEnd != "Jan 2021 – May 2023" {
 		t.Errorf("formatDateRange expected 'Jan 2021 – May 2023', got '%s'", rangeWithEnd)
 	}
 
-	rangeOngoing := renderer.SafeFuncMap["formatDateRange"].(func(string, any, string) string)("2021-01", nil, "Present")
+	rangeOngoing := renderer.SafeFuncMap["formatDateRange"].(func(any, any, string) string)("2021-01", nil, "Present")
 	if rangeOngoing != "Jan 2021 – Present" {
 		t.Errorf("formatDateRange expected 'Jan 2021 – Present', got '%s'", rangeOngoing)
 	}
 
-	rangeYears := renderer.SafeFuncMap["formatDateRange"].(func(string, any, string) string)("2018", "2020", "")
+	rangeYears := renderer.SafeFuncMap["formatDateRange"].(func(any, any, string) string)("2018", "2020", "")
 	if rangeYears != "2018 – 2020" {
 		t.Errorf("formatDateRange expected '2018 – 2020', got '%s'", rangeYears)
 	}
 
-	formatDate := renderer.SafeFuncMap["formatDate"].(func(string, string) string)
+	// Verify domain.Date inputs also produce Month-Year format (no day displayed)
+	domainStart := domain.NewDate(2021, 1, 15)
+	domainEnd := domain.NewDate(2023, 5, 20)
+	rangeDomain := renderer.SafeFuncMap["formatDateRange"].(func(any, any, string) string)(domainStart, &domainEnd, "Present")
+	if rangeDomain != "Jan 2021 – May 2023" {
+		t.Errorf("formatDateRange with domain.Date expected 'Jan 2021 – May 2023', got '%s'", rangeDomain)
+	}
+
+	formatDate := renderer.SafeFuncMap["formatDate"].(func(string, any) string)
 	if formatted := formatDate("Jan 2006", "2026-02-14"); formatted != "Feb 2026" {
 		t.Errorf("formatDate expected 'Feb 2026', got '%s'", formatted)
+	}
+	if formatted := formatDate("Jan 2006", domainStart); formatted != "Jan 2021" {
+		t.Errorf("formatDate with domain.Date expected 'Jan 2021', got '%s'", formatted)
 	}
 	if raw := formatDate("Jan 2006", "invalid-date"); raw != "invalid-date" {
 		t.Errorf("formatDate expected 'invalid-date' fallback, got '%s'", raw)
 	}
 
-	year := renderer.SafeFuncMap["year"].(func(string) string)
+	year := renderer.SafeFuncMap["year"].(func(any) string)
 	if y := year("2024-08-19"); y != "2024" {
 		t.Errorf("year expected '2024', got '%s'", y)
+	}
+	if y := year(domainStart); y != "2021" {
+		t.Errorf("year with domain.Date expected '2021', got '%s'", y)
 	}
 	if y := year("2021"); y != "2021" {
 		t.Errorf("year expected '2021', got '%s'", y)
@@ -461,12 +478,12 @@ func TestRenderer_FuncMapHelpers(t *testing.T) {
 }
 
 func TestRenderer_FuncMapHelpers_EdgeCases(t *testing.T) {
-	formatDate := renderer.SafeFuncMap["formatDate"].(func(string, string) string)
+	formatDate := renderer.SafeFuncMap["formatDate"].(func(string, any) string)
 	if formatDate("2006", "   ") != "" {
 		t.Errorf("formatDate on blank string should return empty string")
 	}
 
-	formatDateRange := renderer.SafeFuncMap["formatDateRange"].(func(string, any, string) string)
+	formatDateRange := renderer.SafeFuncMap["formatDateRange"].(func(any, any, string) string)
 	if formatDateRange("", nil, "Present") != "" {
 		t.Errorf("formatDateRange on empty start and nil end should return empty string")
 	}
@@ -490,7 +507,7 @@ func TestRenderer_FuncMapHelpers_EdgeCases(t *testing.T) {
 		t.Errorf("formatDateRange year only failed: %s", r)
 	}
 
-	year := renderer.SafeFuncMap["year"].(func(string) string)
+	year := renderer.SafeFuncMap["year"].(func(any) string)
 	if year("   ") != "" {
 		t.Errorf("year on empty string should return empty string")
 	}

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -174,6 +175,17 @@ type PDFParseJobRepository interface {
 type TokenInfo struct {
 	UID   string `json:"uid"`
 	Email string `json:"email"`
+	Admin bool   `json:"admin,omitempty"`
+	Role  string `json:"role,omitempty"`
+}
+
+// IsAdmin returns true if the TokenInfo carries administrative privileges via the Admin boolean flag
+// or an administrative UserRole.
+func (t *TokenInfo) IsAdmin() bool {
+	if t == nil {
+		return false
+	}
+	return t.Admin || strings.EqualFold(t.Role, string(UserRoleAdmin))
 }
 
 // TokenVerifier validates bearer identity tokens from an external authentication provider.

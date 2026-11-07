@@ -11,21 +11,14 @@ import (
 
 	"resumeee/internal/domain"
 	"resumeee/internal/profile"
-	"resumeee/internal/repository/sqlite"
+	"resumeee/internal/repository/memory"
 )
 
 func setupTestService(t *testing.T) (profile.Service, domain.ProfileRepository, domain.BranchRepository) {
 	t.Helper()
-	dsn := fmt.Sprintf("file:test_%d?mode=memory&cache=shared", time.Now().UnixNano())
-	db, err := sqlite.New(dsn)
-	if err != nil {
-		t.Fatalf("failed to create test sqlite database: %v", err)
-	}
-
-	profileRepo := sqlite.NewProfileRepository(db)
-	branchRepo := sqlite.NewBranchRepository(db)
-	svc := profile.NewService(profileRepo, branchRepo)
-	return svc, profileRepo, branchRepo
+	store := memory.New()
+	svc := profile.NewService(store, store)
+	return svc, store, store
 }
 
 func sampleOfficialJSONResume() string {

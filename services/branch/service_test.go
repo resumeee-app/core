@@ -13,7 +13,7 @@ import (
 	"resumeee/internal/branch"
 	"resumeee/internal/domain"
 	"resumeee/internal/renderer"
-	"resumeee/internal/repository/sqlite"
+	"resumeee/internal/repository/memory"
 	"resumeee/internal/validator"
 	"resumeee/internal/worker"
 )
@@ -57,21 +57,17 @@ type testBranchEnv struct {
 func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 	t.Helper()
 
-	db, err := sqlite.New(":memory:")
-	if err != nil {
-		t.Fatalf("failed to init sqlite: %v", err)
-	}
-
 	ctx := context.Background()
 	defaultUser := "default"
-	if err := sqlite.SeedDefaultData(ctx, db, defaultUser); err != nil {
+	store, err := memory.NewSeeded(ctx, defaultUser)
+	if err != nil {
 		t.Fatalf("failed to seed: %v", err)
 	}
 
-	profileRepo := sqlite.NewProfileRepository(db)
-	presetRepo := sqlite.NewPresetRepository(db)
-	templateRepo := sqlite.NewTemplateRepository(db)
-	branchRepo := sqlite.NewBranchRepository(db)
+	profileRepo := store
+	presetRepo := store
+	templateRepo := store
+	branchRepo := store
 	val := validator.New()
 	rend := renderer.NewTemplateRenderer()
 	enqueuer := newStubEnqueuer(enqueuerCap)
@@ -159,7 +155,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 	}
 
 	return &testBranchEnv{
-		db:           db,
+		db:           store,
 		svc:          svc,
 		branchRepo:   branchRepo,
 		profileRepo:  profileRepo,
@@ -586,14 +582,14 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 			oldActiveVer = *b.ActiveVersionID
 		}
 
-		b.TemplateSetID = sqlite.TemplateDetailedImmigrationCVID
+		b.TemplateSetID = renderer.TemplateDetailedImmigrationCVID
 		updated, err := env.svc.UpdateBranch(ctx, b)
 		if err != nil {
 			t.Fatalf("failed to update default branch template: %v", err)
 		}
 
-		if updated.TemplateSetID != sqlite.TemplateDetailedImmigrationCVID {
-			t.Errorf("expected template %s, got %s", sqlite.TemplateDetailedImmigrationCVID, updated.TemplateSetID)
+		if updated.TemplateSetID != renderer.TemplateDetailedImmigrationCVID {
+			t.Errorf("expected template %s, got %s", renderer.TemplateDetailedImmigrationCVID, updated.TemplateSetID)
 		}
 		if updated.ActiveVersionID == nil || *updated.ActiveVersionID == oldActiveVer {
 			t.Errorf("expected new active version rendered after template update")
@@ -603,7 +599,7 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get new active version: %v", err)
 		}
-		if newVer.TemplateSetIDUsed != sqlite.TemplateDetailedImmigrationCVID {
+		if newVer.TemplateSetIDUsed != renderer.TemplateDetailedImmigrationCVID {
 			t.Errorf("expected version to use new template, got %s", newVer.TemplateSetIDUsed)
 		}
 	})

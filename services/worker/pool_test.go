@@ -14,7 +14,7 @@ import (
 	"resumeee/internal/domain"
 	"resumeee/internal/profile"
 	"resumeee/internal/renderer"
-	"resumeee/internal/repository/sqlite"
+	"resumeee/internal/repository/memory"
 	"resumeee/internal/validator"
 	"resumeee/internal/worker"
 )
@@ -137,21 +137,17 @@ type testWorkerEnv struct {
 func setupTestWorkerEnv(t *testing.T) *testWorkerEnv {
 	t.Helper()
 
-	db, err := sqlite.New(":memory:")
-	if err != nil {
-		t.Fatalf("failed to initialize sqlite: %v", err)
-	}
-
 	ctx := context.Background()
 	defaultUser := "default"
-	if err := sqlite.SeedDefaultData(ctx, db, defaultUser); err != nil {
-		t.Fatalf("failed to seed default data: %v", err)
+	store, err := memory.NewSeeded(ctx, defaultUser)
+	if err != nil {
+		t.Fatalf("failed to seed store: %v", err)
 	}
 
-	profileRepo := sqlite.NewProfileRepository(db)
-	presetRepo := sqlite.NewPresetRepository(db)
-	templateRepo := sqlite.NewTemplateRepository(db)
-	branchRepo := sqlite.NewBranchRepository(db)
+	profileRepo := store
+	presetRepo := store
+	templateRepo := store
+	branchRepo := store
 	val := validator.New()
 	rend := renderer.NewTemplateRenderer()
 	llmService := &mockLLM{}
@@ -167,7 +163,7 @@ func setupTestWorkerEnv(t *testing.T) *testWorkerEnv {
 	}
 
 	return &testWorkerEnv{
-		db:           db,
+		db:           store,
 		profileRepo:  profileRepo,
 		presetRepo:   presetRepo,
 		templateRepo: templateRepo,
@@ -834,11 +830,7 @@ func (m *mockResumeExtractor) ExtractResume(ctx context.Context, text, provider,
 }
 
 func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
-	db, err := sqlite.New("file::memory:?cache=shared")
-	if err != nil {
-		t.Fatalf("sqlite init: %v", err)
-	}
-	pdfRepo := sqlite.NewPDFParseJobRepository(db)
+	pdfRepo := memory.New()
 	mockExt := &mockResumeExtractor{
 		delay: 10 * time.Millisecond,
 		result: &profile.JSONResume{
@@ -918,11 +910,7 @@ func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
 }
 
 func TestWorkerPool_PDFParseJob_Failure(t *testing.T) {
-	db, err := sqlite.New("file::memory:?cache=shared")
-	if err != nil {
-		t.Fatalf("sqlite init: %v", err)
-	}
-	pdfRepo := sqlite.NewPDFParseJobRepository(db)
+	pdfRepo := memory.New()
 	mockExt := &mockResumeExtractor{
 		fail:       true,
 		failErrMsg: "upstream model capacity reached",

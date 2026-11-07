@@ -269,6 +269,15 @@ func (f Fact) EffectiveShortID() string {
 	return ShortenID(f.ID)
 }
 
+// Built-in Preset and Tailoring Strategy IDs.
+const (
+	// Preset1PageTechResumeID defines the identifier for the built-in 1-Page Tech Resume preset.
+	Preset1PageTechResumeID = "builtin-1-page-tech-resume"
+
+	// PresetImmigrationFullHistoryCVID defines the identifier for the built-in Immigration Full History CV preset.
+	PresetImmigrationFullHistoryCVID = "builtin-immigration-full-history-cv"
+)
+
 // TailoringStrategy defines reusable prompt engineering directives, reasoning depth,
 // and density rules for LLM resume tailoring.
 //

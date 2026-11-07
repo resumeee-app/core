@@ -24,6 +24,12 @@ const defaultSchemaURL = "https://raw.githubusercontent.com/jsonresume/resume-sc
 // Returns:
 //   - Pointer to MasterProfileSnapshot with generated IDs and short IDs, or domain.ErrValidation.
 func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64) (*domain.MasterProfileSnapshot, error) {
+	return ToSnapshotWithGlobalSkills(resume, userID, existingProfile, revision, nil)
+}
+
+// ToSnapshotWithGlobalSkills converts a validated JSON Resume AST into a full MasterProfileSnapshot,
+// resolving candidate skills against the global skills catalog before creating custom tenant skills.
+func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64, globalSkills []domain.Skill) (*domain.MasterProfileSnapshot, error) {
 	if resume == nil {
 		return nil, domain.ErrValidation
 	}
@@ -131,13 +137,36 @@ func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profi
 	}
 
 	// 2. Map Skills and build matching index
+	globalSkillsByName := make(map[string]domain.Skill)
+	for _, gs := range globalSkills {
+		globalSkillsByName[strings.ToLower(strings.TrimSpace(gs.Name))] = gs
+		if gs.Slug != "" {
+			globalSkillsByName[strings.ToLower(gs.Slug)] = gs
+		}
+	}
+
 	skills := make([]domain.Skill, len(resume.Skills))
 	for i, s := range resume.Skills {
+		cleanName := strings.TrimSpace(s.Name)
+		lookupKey := strings.ToLower(cleanName)
+		slug := domain.Slugify(cleanName)
+
+		canonicalName := s.Name
+		if matchedGlobal, found := globalSkillsByName[lookupKey]; found {
+			canonicalName = matchedGlobal.Name
+			slug = matchedGlobal.Slug
+		} else if matchedGlobal, found := globalSkillsByName[slug]; found {
+			canonicalName = matchedGlobal.Name
+			slug = matchedGlobal.Slug
+		}
+
 		skills[i] = domain.Skill{
 			ID:          domain.GenerateID("skill"),
 			ShortID:     domain.GenerateShortID("skill"),
 			UserID:      userID,
-			Name:        s.Name,
+			Name:        canonicalName,
+			Slug:        slug,
+			IsGlobal:    false,
 			Proficiency: s.Level,
 			Keywords:    s.Keywords,
 			CreatedAt:   time.Now().UTC(),

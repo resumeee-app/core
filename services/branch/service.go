@@ -41,6 +41,7 @@ type Config struct {
 	ProfileRepo  domain.ProfileRepository
 	PresetRepo   domain.PresetRepository
 	TemplateRepo domain.TemplateRepository
+	QuotaRepo    domain.QuotaRepository
 	JobEnqueuer  worker.JobEnqueuer
 	Validator    validator.ProvenanceValidator
 	Renderer     domain.TemplateRenderer
@@ -53,6 +54,7 @@ type service struct {
 	profileRepo  domain.ProfileRepository
 	presetRepo   domain.PresetRepository
 	templateRepo domain.TemplateRepository
+	quotaRepo    domain.QuotaRepository
 	jobEnqueuer  worker.JobEnqueuer
 	validator    validator.ProvenanceValidator
 	renderer     domain.TemplateRenderer
@@ -67,12 +69,39 @@ func NewService(cfg Config) Service {
 		profileRepo:  cfg.ProfileRepo,
 		presetRepo:   cfg.PresetRepo,
 		templateRepo: cfg.TemplateRepo,
+		quotaRepo:    cfg.QuotaRepo,
 		jobEnqueuer:  cfg.JobEnqueuer,
 		validator:    cfg.Validator,
 		renderer:     cfg.Renderer,
 		llmService:   cfg.LLMService,
 		logger:       cfg.Logger,
 	}
+}
+
+func (s *service) validateBranchReferences(ctx context.Context, branch *domain.Branch) error {
+	if s.templateRepo != nil && branch.TemplateSetID != "" {
+		tmpl, err := s.templateRepo.GetTemplate(ctx, branch.UserID, branch.TemplateSetID)
+		if err != nil {
+			return fmt.Errorf("%w: referenced template set %s: %v", domain.ErrValidation, branch.TemplateSetID, err)
+		}
+		if tmpl != nil && tmpl.UserID != branch.UserID && !tmpl.IsBuiltIn {
+			return fmt.Errorf("%w: template set %s belongs to another tenant", domain.ErrForbidden, branch.TemplateSetID)
+		}
+	}
+	presetID := branch.PresetID
+	if presetID == nil && branch.TailoringStrategyID != nil {
+		presetID = branch.TailoringStrategyID
+	}
+	if s.presetRepo != nil && presetID != nil && *presetID != "" {
+		preset, err := s.presetRepo.GetPreset(ctx, branch.UserID, *presetID)
+		if err != nil {
+			return fmt.Errorf("%w: referenced preset %s: %v", domain.ErrValidation, *presetID, err)
+		}
+		if preset != nil && preset.UserID != branch.UserID && !preset.IsBuiltIn() {
+			return fmt.Errorf("%w: preset %s belongs to another tenant", domain.ErrForbidden, *presetID)
+		}
+	}
+	return nil
 }
 
 // ListBranches returns all branches for the user, optionally filtering for stale branches whose synced revision is behind master.
@@ -108,6 +137,10 @@ func (s *service) GetBranch(ctx context.Context, userID, id string) (*domain.Bra
 
 // CreateBranch initializes and saves a new resume branch with master revision synchronization.
 func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error) {
+	if err := s.validateBranchReferences(ctx, branch); err != nil {
+		return nil, err
+	}
+
 	if branch.ID == "" {
 		branch.ID = "branch-" + uuid.New().String()
 	}
@@ -128,6 +161,10 @@ func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*dom
 
 // UpdateBranch modifies branch configuration while preserving default branch immutability invariants.
 func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error) {
+	if err := s.validateBranchReferences(ctx, branch); err != nil {
+		return nil, err
+	}
+
 	existing, err := s.branchRepo.GetBranch(ctx, branch.UserID, branch.ID)
 	if err != nil {
 		return nil, err
@@ -252,8 +289,18 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 		}
 	}
 
+	var reservationID string
+	if s.quotaRepo != nil {
+		rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationResumeTailoring, 2000, 50, 1000000)
+		if qErr != nil {
+			return nil, qErr
+		}
+		reservationID = rec.ID
+	}
+
 	ver := &domain.BranchVersion{
 		ID:                 "ver-" + uuid.New().String(),
+		UserID:             userID,
 		BranchID:           branch.ID,
 		Status:             domain.VersionStatusPending,
 		MasterRevisionUsed: masterRevision,
@@ -265,16 +312,23 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 	}
 
 	if err := s.branchRepo.CreateVersion(ctx, ver); err != nil {
+		if reservationID != "" && s.quotaRepo != nil {
+			_ = s.quotaRepo.ReleaseQuota(ctx, reservationID, err.Error())
+		}
 		return nil, err
 	}
 
 	if s.jobEnqueuer != nil {
 		job := worker.GenerationJob{
-			UserID:    userID,
-			BranchID:  branch.ID,
-			VersionID: ver.ID,
+			UserID:        userID,
+			BranchID:      branch.ID,
+			VersionID:     ver.ID,
+			ReservationID: reservationID,
 		}
 		if err := s.jobEnqueuer.Enqueue(job); err != nil {
+			if reservationID != "" && s.quotaRepo != nil {
+				_ = s.quotaRepo.ReleaseQuota(ctx, reservationID, "generation queue full or error")
+			}
 			if errors.Is(err, domain.ErrQueueFull) {
 				_ = s.branchRepo.UpdateVersionStatus(ctx, ver.ID, domain.VersionStatusFailed, "generation queue full")
 				return nil, domain.ErrQueueFull
@@ -344,6 +398,7 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 
 		ver := &domain.BranchVersion{
 			ID:                 "ver-" + uuid.New().String(),
+			UserID:             userID,
 			BranchID:           b.ID,
 			Status:             domain.VersionStatusPending,
 			MasterRevisionUsed: masterRevision,
@@ -358,13 +413,26 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 			return enqueuedIDs, err
 		}
 
+		var reservationID string
+		if s.quotaRepo != nil {
+			rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationResumeTailoring, 2000, 50, 1000000)
+			if qErr != nil {
+				return enqueuedIDs, qErr
+			}
+			reservationID = rec.ID
+		}
+
 		if s.jobEnqueuer != nil {
 			job := worker.GenerationJob{
-				UserID:    userID,
-				BranchID:  b.ID,
-				VersionID: ver.ID,
+				UserID:        userID,
+				BranchID:      b.ID,
+				VersionID:     ver.ID,
+				ReservationID: reservationID,
 			}
 			if err := s.jobEnqueuer.Enqueue(job); err != nil {
+				if s.quotaRepo != nil && reservationID != "" {
+					_ = s.quotaRepo.ReleaseQuota(ctx, reservationID, "failed to enqueue generation job")
+				}
 				if errors.Is(err, domain.ErrQueueFull) {
 					_ = s.branchRepo.UpdateVersionStatus(ctx, ver.ID, domain.VersionStatusFailed, "generation queue full")
 					return enqueuedIDs, domain.ErrQueueFull
@@ -435,6 +503,7 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	// 3. Construct immutable sequential version vN+1
 	newVer := &domain.BranchVersion{
 		ID:                 "ver-" + uuid.New().String(),
+		UserID:             branch.UserID,
 		BranchID:           branch.ID,
 		Status:             domain.VersionStatusCompleted,
 		MasterRevisionUsed: snapshot.MasterRevision,
@@ -506,6 +575,7 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 	now := time.Now().UTC()
 	ver := &domain.BranchVersion{
 		ID:                 "ver-" + uuid.New().String(),
+		UserID:             userID,
 		BranchID:           branch.ID,
 		Status:             domain.VersionStatusCompleted,
 		MasterRevisionUsed: snapshot.MasterRevision,
@@ -538,14 +608,41 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 
 // AnalyzeGaps performs fast decoupled gap analysis for a branch against the master profile snapshot.
 func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*domain.GapReport, error) {
+	var (
+		rec    *domain.LLMUsageRecord
+		retErr error
+		usage  domain.TokenUsage
+	)
+	if s.llmService != nil && s.quotaRepo != nil {
+		r, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationGapAnalysis, 1000, 50, 1000000)
+		if qErr != nil {
+			return nil, qErr
+		}
+		rec = r
+		defer func() {
+			if rec != nil {
+				if retErr != nil {
+					_ = s.quotaRepo.ReleaseQuota(ctx, rec.ID, retErr.Error())
+				} else {
+					if usage.TotalTokens == 0 {
+						usage.TotalTokens = 500
+					}
+					_ = s.quotaRepo.CommitUsage(ctx, rec.ID, usage)
+				}
+			}
+		}()
+	}
+
 	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
 	if err != nil {
-		return nil, err
+		retErr = err
+		return nil, retErr
 	}
 
 	snapshot, err := s.profileRepo.GetSnapshot(ctx, userID)
 	if err != nil {
-		return nil, err
+		retErr = err
+		return nil, retErr
 	}
 
 	// Fetch active version once if present
@@ -570,15 +667,18 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 		}); ok {
 			r, err := analyzer.GenerateGapAnalysis(ctx, req)
 			if err != nil {
-				return nil, fmt.Errorf("gap analysis generation failed: %w", err)
+				retErr = fmt.Errorf("gap analysis generation failed: %w", err)
+				return nil, retErr
 			}
 			report = r
 		} else {
 			resp, err := s.llmService.GenerateTailoredResume(ctx, req)
 			if err != nil {
-				return nil, fmt.Errorf("gap analysis fallback generation failed: %w", err)
+				retErr = fmt.Errorf("gap analysis fallback generation failed: %w", err)
+				return nil, retErr
 			}
 			report = &resp.GapReport
+			usage = resp.Usage
 		}
 	} else {
 		// Fallback to active version gap report if present

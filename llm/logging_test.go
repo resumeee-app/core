@@ -674,7 +674,8 @@ func TestLLMPromptDebugging_Integration(t *testing.T) {
 					t.Fatal("expected non-nil generation response")
 				}
 
-				entries, err := os.ReadDir(tmpDir)
+				targetDir := filepath.Join(tmpDir, "default")
+				entries, err := os.ReadDir(targetDir)
 				if err != nil {
 					t.Fatalf("failed to read debug dir: %v", err)
 				}
@@ -695,8 +696,8 @@ func TestLLMPromptDebugging_Integration(t *testing.T) {
 					t.Errorf("expected tailor files, got prompt=%q, output=%q", promptTailor, outputTailor)
 				}
 
-				promptData, _ := os.ReadFile(filepath.Join(tmpDir, promptTailor))
-				outputData, _ := os.ReadFile(filepath.Join(tmpDir, outputTailor))
+				promptData, _ := os.ReadFile(filepath.Join(targetDir, promptTailor))
+				outputData, _ := os.ReadFile(filepath.Join(targetDir, outputTailor))
 
 				if !strings.Contains(string(promptData), "# LLM Prompt: tailor") {
 					t.Errorf("prompt missing tailor header: %s", string(promptData))
@@ -714,7 +715,7 @@ func TestLLMPromptDebugging_Integration(t *testing.T) {
 					t.Fatal("expected non-empty text response")
 				}
 
-				entriesAll, err := os.ReadDir(tmpDir)
+				entriesAll, err := os.ReadDir(targetDir)
 				if err != nil {
 					t.Fatalf("failed to read debug dir: %v", err)
 				}
@@ -731,7 +732,7 @@ func TestLLMPromptDebugging_Integration(t *testing.T) {
 					}
 				}
 				if !foundExtractPrompt || !foundExtractOutput {
-					t.Errorf("expected extract prompt and output files in %s", tmpDir)
+					t.Errorf("expected extract prompt and output files in %s", targetDir)
 				}
 			})
 		}
@@ -797,7 +798,7 @@ func TestLLMPromptDebugging_Integration(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		entries, err := os.ReadDir(tmpDir)
+		entries, err := os.ReadDir(filepath.Join(tmpDir, "default"))
 		if err != nil {
 			t.Fatalf("failed to read debug dir: %v", err)
 		}

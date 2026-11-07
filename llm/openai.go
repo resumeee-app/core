@@ -147,6 +147,11 @@ func (p *OpenAIProvider) GenerateTailoredResume(ctx context.Context, req domain.
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
 	}
 
 	var openAIResp openAIResponse
@@ -167,6 +172,14 @@ func (p *OpenAIProvider) GenerateTailoredResume(ctx context.Context, req domain.
 	if err := json.Unmarshal([]byte(cleanJSON), &parsed); err != nil {
 		retErr = fmt.Errorf("%w: failed to unmarshal generation response: %v", ErrInvalidResponse, err)
 		return nil, retErr
+	}
+
+	if parsed.Usage.TotalTokens == 0 && (openAIResp.Usage.TotalTokens > 0 || openAIResp.Usage.PromptTokens > 0 || openAIResp.Usage.CompletionTokens > 0) {
+		parsed.Usage = domain.TokenUsage{
+			PromptTokens:     openAIResp.Usage.PromptTokens,
+			CompletionTokens: openAIResp.Usage.CompletionTokens,
+			TotalTokens:      openAIResp.Usage.TotalTokens,
+		}
 	}
 
 	return &parsed, nil
@@ -247,6 +260,11 @@ func (p *OpenAIProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
 	}
 
 	var openAIResp openAIResponse

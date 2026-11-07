@@ -131,12 +131,22 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 		if errors.Is(err, context.DeadlineExceeded) {
 			errMsg = "Resume tailoring timed out after 10 minutes."
 		}
+		if p.quotaRepo != nil && job.ReservationID != "" {
+			_ = p.quotaRepo.ReleaseQuota(ctx, job.ReservationID, errMsg)
+		}
 		p.failJob(ctx, job.VersionID, errMsg)
 		return
 	}
 	if resp == nil {
+		if p.quotaRepo != nil && job.ReservationID != "" {
+			_ = p.quotaRepo.ReleaseQuota(ctx, job.ReservationID, "llm returned empty generation response")
+		}
 		p.failJob(ctx, job.VersionID, "llm returned empty generation response")
 		return
+	}
+
+	if p.quotaRepo != nil && job.ReservationID != "" {
+		_ = p.quotaRepo.CommitUsage(ctx, job.ReservationID, resp.Usage)
 	}
 
 	// 4. Provenance Validation ("No Lies" invariant)

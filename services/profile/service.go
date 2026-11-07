@@ -68,7 +68,12 @@ func (s *profileService) ImportJSONResume(ctx context.Context, userID string, pa
 		revision = existingProfile.MasterRevision + 1
 	}
 
-	snapshot, err := ToSnapshot(&resume, userID, existingProfile, revision)
+	var globalSkills []domain.Skill
+	if gs, err := s.profileRepo.ListGlobalSkills(ctx); err == nil {
+		globalSkills = gs
+	}
+
+	snapshot, err := ToSnapshotWithGlobalSkills(&resume, userID, existingProfile, revision, globalSkills)
 	if err != nil {
 		return nil, err
 	}

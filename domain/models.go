@@ -65,10 +65,30 @@ type SocialLink struct {
 	URL      string `json:"url"`
 }
 
+// UserRole represents tenant authorization privileges.
+type UserRole string
+
+const (
+	UserRoleUser  UserRole = "user"
+	UserRoleAdmin UserRole = "admin"
+)
+
+// User represents an authenticated tenant account backed by Firebase Auth.
+type User struct {
+	ID        string    `json:"id" gorm:"primaryKey;type:text"` // Firebase UID
+	Email     string    `json:"email" gorm:"index"`
+	FullName  string    `json:"full_name"`
+	Role      UserRole  `json:"role" gorm:"default:'user'"`
+	Tier      string    `json:"tier" gorm:"default:'free'"`
+	IsActive  bool      `json:"is_active" gorm:"default:true"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // Profile represents the user's Master Profile root and Tier-1 global LLM configuration.
 type Profile struct {
 	ID                 string         `json:"id" gorm:"primaryKey;type:text"`
-	UserID             string         `json:"user_id" gorm:"index;not null;default:'default'"`
+	UserID             string         `json:"user_id" gorm:"index;not null"`
 	FullName           string         `json:"full_name" gorm:"not null"`
 	Headline           string         `json:"headline"`
 	Email              string         `json:"email"`
@@ -98,6 +118,8 @@ type Skill struct {
 	ShortID         string         `json:"short_id,omitempty" gorm:"index"`
 	UserID          string         `json:"user_id" gorm:"index;not null"`
 	Name            string         `json:"name" gorm:"not null;index"`
+	Slug            string         `json:"slug,omitempty" gorm:"index"`
+	IsGlobal        bool           `json:"is_global" gorm:"index;default:false"`
 	Category        string         `json:"category"`    // e.g., "Languages", "Distributed Systems", "Cloud"
 	Proficiency     string         `json:"proficiency"` // e.g., "Expert", "Proficient", "Familiar"
 	YearsExperience float64        `json:"years_experience"`
@@ -468,6 +490,7 @@ const (
 // ResumeVersion (BranchVersion) is an immutable snapshot tracking its generation lifecycle and outputs.
 type ResumeVersion struct {
 	ID                 string           `json:"id" gorm:"primaryKey;type:text"`
+	UserID             string           `json:"user_id" gorm:"index;not null"`
 	ResumeID           string           `json:"resume_id" gorm:"uniqueIndex:idx_resume_version,priority:1;column:resume_id;not null"`
 	BranchID           string           `json:"branch_id,omitempty" gorm:"column:branch_id;index"` // Compatibility alias
 	VersionNumber      int              `json:"version_number" gorm:"uniqueIndex:idx_resume_version,priority:2;column:version_number;not null"`
@@ -586,4 +609,97 @@ type PromptPreviewOptions struct {
 	PinnedEntityIDs    []string `json:"pinned_entity_ids,omitempty"`
 	ExcludedEntityIDs  []string `json:"excluded_entity_ids,omitempty"`
 }
+
+// LLMOperationType identifies the category of LLM generation task for quota enforcement.
+type LLMOperationType string
+
+const (
+	OperationResumeTailoring LLMOperationType = "resume_tailoring"
+	OperationGapAnalysis     LLMOperationType = "gap_analysis"
+	OperationPDFParse        LLMOperationType = "pdf_parse"
+)
+
+// ReservationStatus tracks the lifecycle of an atomic LLM quota reservation.
+type ReservationStatus string
+
+const (
+	ReservationStatusPending   ReservationStatus = "pending"
+	ReservationStatusCommitted ReservationStatus = "committed"
+	ReservationStatusReleased  ReservationStatus = "released"
+)
+
+// TenantQuota tracks aggregate daily requests and monthly token ceilings for a tenant.
+type TenantQuota struct {
+	UserID             string    `json:"user_id" gorm:"primaryKey;type:text"`
+	DailyRequestsUsed  int       `json:"daily_requests_used" gorm:"not null;default:0"`
+	DailyRequestLimit  int       `json:"daily_request_limit" gorm:"not null;default:50"`
+	DailyWindowStart   time.Time `json:"daily_window_start" gorm:"not null"`
+	MonthlyTokensUsed  int       `json:"monthly_tokens_used" gorm:"not null;default:0"`
+	MonthlyTokenLimit  int       `json:"monthly_token_limit" gorm:"not null;default:1000000"`
+	MonthlyWindowStart time.Time `json:"monthly_window_start" gorm:"not null"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// TableName overrides the GORM table name to tenant_quotas.
+func (TenantQuota) TableName() string {
+	return "tenant_quotas"
+}
+
+// ResetWindowsIfExpired checks daily and monthly window expirations and resets counters if expired.
+// Returns true if either window was reset.
+func (q *TenantQuota) ResetWindowsIfExpired(now time.Time) bool {
+	var reset bool
+	if now.Sub(q.DailyWindowStart) >= 24*time.Hour {
+		q.DailyRequestsUsed = 0
+		q.DailyWindowStart = now
+		reset = true
+	}
+	if now.Sub(q.MonthlyWindowStart) >= 30*24*time.Hour {
+		q.MonthlyTokensUsed = 0
+		q.MonthlyWindowStart = now
+		reset = true
+	}
+	return reset
+}
+
+// AdjustMonthlyTokens applies a token delta (e.g. actual usage - estimate) and clamps to non-negative.
+func (q *TenantQuota) AdjustMonthlyTokens(delta int) {
+	q.MonthlyTokensUsed += delta
+	if q.MonthlyTokensUsed < 0 {
+		q.MonthlyTokensUsed = 0
+	}
+}
+
+// ReleaseReservation decrements daily requests and refunds estimated tokens, clamping to non-negative.
+func (q *TenantQuota) ReleaseReservation(estimatedTokens int) {
+	q.DailyRequestsUsed--
+	if q.DailyRequestsUsed < 0 {
+		q.DailyRequestsUsed = 0
+	}
+	q.MonthlyTokensUsed -= estimatedTokens
+	if q.MonthlyTokensUsed < 0 {
+		q.MonthlyTokensUsed = 0
+	}
+}
+
+// LLMUsageRecord records an individual LLM operation reservation, token metrics, and terminal status.
+type LLMUsageRecord struct {
+	ID               string            `json:"id" gorm:"primaryKey;type:text"`
+	UserID           string            `json:"user_id" gorm:"index;not null"`
+	Operation        LLMOperationType  `json:"operation" gorm:"not null"`
+	EstimatedTokens  int               `json:"estimated_tokens" gorm:"not null"`
+	PromptTokens     int               `json:"prompt_tokens" gorm:"not null;default:0"`
+	CompletionTokens int               `json:"completion_tokens" gorm:"not null;default:0"`
+	TotalTokens      int               `json:"total_tokens" gorm:"not null;default:0"`
+	Status           ReservationStatus `json:"status" gorm:"index;not null;default:'pending'"`
+	ErrorMessage     string            `json:"error_message,omitempty"`
+	CreatedAt        time.Time         `json:"created_at" gorm:"index"`
+	CommittedAt      *time.Time        `json:"committed_at,omitempty"`
+}
+
+// TableName overrides the GORM table name to llm_usage_records.
+func (LLMUsageRecord) TableName() string {
+	return "llm_usage_records"
+}
+
 

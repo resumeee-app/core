@@ -160,6 +160,10 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 
 	type anthropicResponse struct {
 		Content []contentBlock `json:"content"`
+		Usage   struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 
 	var anthropicResp anthropicResponse
@@ -185,6 +189,14 @@ func (p *AnthropicProvider) GenerateTailoredResume(ctx context.Context, req doma
 	if err := json.Unmarshal(targetInput, &parsed); err != nil {
 		retErr = fmt.Errorf("%w: failed to unmarshal generation response from tool input: %v", ErrInvalidResponse, err)
 		return nil, retErr
+	}
+
+	if parsed.Usage.TotalTokens == 0 && (anthropicResp.Usage.InputTokens > 0 || anthropicResp.Usage.OutputTokens > 0) {
+		parsed.Usage = domain.TokenUsage{
+			PromptTokens:     anthropicResp.Usage.InputTokens,
+			CompletionTokens: anthropicResp.Usage.OutputTokens,
+			TotalTokens:      anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens,
+		}
 	}
 
 	return &parsed, nil
@@ -270,6 +282,10 @@ func (p *AnthropicProvider) CompleteText(ctx context.Context, systemPrompt, user
 
 	type anthropicResponse struct {
 		Content []contentBlock `json:"content"`
+		Usage   struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 
 	var anthropicResp anthropicResponse

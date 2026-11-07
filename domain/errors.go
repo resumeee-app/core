@@ -30,5 +30,14 @@ var (
 
 	// ErrForbidden is returned when a user attempts to access an unauthorized or foreign resource.
 	ErrForbidden = errors.New("access forbidden")
+
+	// ErrQuotaExceeded is returned when a tenant's LLM operation quota (daily requests or monthly tokens) is saturated.
+	ErrQuotaExceeded = errors.New("llm operation quota exceeded")
+
+	// ErrGlobalSkillImmutable is returned when attempting to modify or delete a system-seeded global skill.
+	ErrGlobalSkillImmutable = errors.New("global skill cannot be modified or deleted")
+
+	// ErrUnauthorized is returned when an API request lacks valid authentication credentials.
+	ErrUnauthorized = errors.New("unauthorized")
 )
 

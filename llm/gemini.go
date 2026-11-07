@@ -144,6 +144,11 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 				} `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
+		UsageMetadata struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+			TotalTokenCount      int `json:"totalTokenCount"`
+		} `json:"usageMetadata"`
 	}
 
 	var geminiResp geminiResponse
@@ -164,6 +169,14 @@ func (p *GeminiProvider) GenerateTailoredResume(ctx context.Context, req domain.
 	if err := json.Unmarshal([]byte(cleanJSON), &parsed); err != nil {
 		retErr = fmt.Errorf("%w: failed to unmarshal generation response: %v", ErrInvalidResponse, err)
 		return nil, retErr
+	}
+
+	if parsed.Usage.TotalTokens == 0 && (geminiResp.UsageMetadata.TotalTokenCount > 0 || geminiResp.UsageMetadata.PromptTokenCount > 0 || geminiResp.UsageMetadata.CandidatesTokenCount > 0) {
+		parsed.Usage = domain.TokenUsage{
+			PromptTokens:     geminiResp.UsageMetadata.PromptTokenCount,
+			CompletionTokens: geminiResp.UsageMetadata.CandidatesTokenCount,
+			TotalTokens:      geminiResp.UsageMetadata.TotalTokenCount,
+		}
 	}
 
 	return &parsed, nil
@@ -254,6 +267,11 @@ func (p *GeminiProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 				} `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
+		UsageMetadata struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+			TotalTokenCount      int `json:"totalTokenCount"`
+		} `json:"usageMetadata"`
 	}
 
 	var geminiResp geminiResponse

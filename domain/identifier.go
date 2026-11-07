@@ -106,3 +106,53 @@ func ShortenID(id string) string {
 	}
 	return trimmed
 }
+
+// unaccent maps common accented latin runes to their ASCII base character.
+func unaccent(r rune) rune {
+	switch r {
+	case 'à', 'á', 'â', 'ã', 'ä', 'å', 'À', 'Á', 'Â', 'Ã', 'Ä', 'Å':
+		return 'a'
+	case 'è', 'é', 'ê', 'ë', 'È', 'É', 'Ê', 'Ë':
+		return 'e'
+	case 'ì', 'í', 'î', 'ï', 'Ì', 'Í', 'Î', 'Ï':
+		return 'i'
+	case 'ò', 'ó', 'ô', 'õ', 'ö', 'Ò', 'Ó', 'Ô', 'Õ', 'Ö', 'ø', 'Ø':
+		return 'o'
+	case 'ù', 'ú', 'û', 'ü', 'Ù', 'Ú', 'Û', 'Ü':
+		return 'u'
+	case 'ñ', 'Ñ':
+		return 'n'
+	case 'ç', 'Ç':
+		return 'c'
+	case 'ý', 'ÿ', 'Ý':
+		return 'y'
+	default:
+		return r
+	}
+}
+
+// Slugify converts an arbitrary string into a URL-safe, lowercase alphanumeric hyphenated slug.
+func Slugify(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastHyphen := false
+	for _, r := range s {
+		r = unaccent(r)
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastHyphen = false
+		} else if r >= 'A' && r <= 'Z' {
+			b.WriteRune(r + ('a' - 'A'))
+			lastHyphen = false
+		} else if r == '-' || r == '_' || r == ' ' || r == '.' || r == '/' {
+			if !lastHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				lastHyphen = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}

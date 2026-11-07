@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"resumeee/internal/domain"
 )
 
 // llmTrace coordinates in-flight debugging and timing metadata between request dispatch and response receipt.
@@ -37,7 +39,12 @@ func logLLMRequest(ctx context.Context, logger *slog.Logger, debugger PromptDebu
 	}
 
 	if debugger != nil {
+		var tenantID string
+		if uid, err := domain.UserIDFromContext(ctx); err == nil {
+			tenantID = uid
+		}
 		session, err := debugger.StartSession(PromptDebugMeta{
+			TenantID:     tenantID,
 			Provider:     provider,
 			Model:        model,
 			Operation:    operation,

@@ -1,6 +1,9 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // ProfileRepository defines persistence operations for Tier-1 career data and atomic revision increments.
 type ProfileRepository interface {
@@ -12,6 +15,7 @@ type ProfileRepository interface {
 
 	// Skills
 	ListSkills(ctx context.Context, userID string) ([]Skill, error)
+	ListGlobalSkills(ctx context.Context) ([]Skill, error)
 	GetSkill(ctx context.Context, userID, id string) (*Skill, error)
 	CreateSkill(ctx context.Context, skill *Skill) error
 	UpdateSkill(ctx context.Context, skill *Skill) error
@@ -100,10 +104,18 @@ type GenerationRequest struct {
 	PriorVersion       *TailoredContent // For iterative refinements
 }
 
+// TokenUsage captures token consumption metrics returned by upstream LLM providers.
+type TokenUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 // GenerationResponse wraps structured tailored content and gap analysis returned by an LLM.
 type GenerationResponse struct {
 	TailoredContent TailoredContent `json:"tailored_content"`
 	GapReport       GapReport       `json:"gap_report"`
+	Usage           TokenUsage      `json:"usage"`
 }
 
 // LLMProvider abstracts interactions with generative AI model providers.
@@ -153,4 +165,36 @@ type PDFParseJobRepository interface {
 
 	// FailInterruptedJobs marks all pending or processing jobs as failed following a server restart.
 	FailInterruptedJobs(ctx context.Context, reason string) error
+
+	// CleanupCompletedJobs purges completed or failed PDF parse jobs older than the retention threshold.
+	CleanupCompletedJobs(ctx context.Context, userID string, olderThan time.Duration) error
 }
+
+// TokenInfo contains identity attributes verified by a TokenVerifier.
+type TokenInfo struct {
+	UID   string `json:"uid"`
+	Email string `json:"email"`
+}
+
+// TokenVerifier validates bearer identity tokens from an external authentication provider.
+type TokenVerifier interface {
+	VerifyIDToken(ctx context.Context, idToken string) (*TokenInfo, error)
+}
+
+// QuotaRepository provides atomic accounting and persistence for tenant LLM quotas and usage records.
+type QuotaRepository interface {
+	GetQuota(ctx context.Context, userID string) (*TenantQuota, error)
+	ReserveQuota(ctx context.Context, userID string, op LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*LLMUsageRecord, error)
+	CommitUsage(ctx context.Context, reservationID string, usage TokenUsage) error
+	ReleaseQuota(ctx context.Context, reservationID string, errMsg string) error
+	ListUsageRecords(ctx context.Context, userID string, limit int) ([]LLMUsageRecord, error)
+}
+
+// QuotaService orchestrates multi-tenant LLM rate limiting, quota reservation, and usage accounting.
+type QuotaService interface {
+	Reserve(ctx context.Context, userID string, op LLMOperationType) (*LLMUsageRecord, error)
+	Commit(ctx context.Context, reservationID string, usage TokenUsage) error
+	Release(ctx context.Context, reservationID string, errMsg string) error
+	GetStatus(ctx context.Context, userID string) (*TenantQuota, error)
+}
+

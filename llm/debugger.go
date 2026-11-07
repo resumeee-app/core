@@ -12,6 +12,7 @@ import (
 
 // PromptDebugMeta contains metadata and prompt content for an outbound LLM request.
 type PromptDebugMeta struct {
+	TenantID     string
 	Provider     string
 	Model        string
 	Operation    string
@@ -97,6 +98,27 @@ func NewFilePromptDebugger(dir string, logger *slog.Logger, opts ...FilePromptDe
 	return d
 }
 
+// SanitizeTenantID normalizes tenant identifiers to prevent directory traversal and remove invalid path characters.
+func SanitizeTenantID(tenantID string) string {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return "default"
+	}
+	var b strings.Builder
+	for _, r := range tenantID {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	cleaned := strings.Trim(b.String(), "_-")
+	if cleaned == "" {
+		return "default"
+	}
+	return cleaned
+}
+
 // SanitizeOperation normalizes operation names to prevent path traversal and map canonical LLM operations.
 func SanitizeOperation(op string) string {
 	op = strings.TrimSpace(op)
@@ -125,9 +147,19 @@ func SanitizeOperation(op string) string {
 
 // StartSession creates the prompt markdown file atomically and returns a session to record the response.
 func (d *FilePromptDebugger) StartSession(meta PromptDebugMeta) (PromptDebugSession, error) {
-	if err := os.MkdirAll(d.dir, 0750); err != nil {
-		d.logger.Warn("failed to create llm debug directory", "dir", d.dir, "err", err)
-		return nil, fmt.Errorf("creating debug directory %s: %w", d.dir, err)
+	tenant := SanitizeTenantID(meta.TenantID)
+	cleanBaseDir := filepath.Clean(d.dir)
+	tenantDir := filepath.Join(cleanBaseDir, tenant)
+	cleanTenantDir := filepath.Clean(tenantDir)
+
+	rel, err := filepath.Rel(cleanBaseDir, cleanTenantDir)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		cleanTenantDir = filepath.Join(cleanBaseDir, "default")
+	}
+
+	if err := os.MkdirAll(cleanTenantDir, 0700); err != nil {
+		d.logger.Warn("failed to create llm debug directory", "dir", cleanTenantDir, "err", err)
+		return nil, fmt.Errorf("creating debug directory %s: %w", cleanTenantDir, err)
 	}
 
 	sanitizedOp := SanitizeOperation(meta.Operation)
@@ -137,7 +169,6 @@ func (d *FilePromptDebugger) StartSession(meta PromptDebugMeta) (PromptDebugSess
 	}
 	ts := now.Format("20060102150405")
 	content := formatPromptMarkdown(meta, sanitizedOp, now)
-	cleanDir := filepath.Clean(d.dir)
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -158,13 +189,13 @@ func (d *FilePromptDebugger) StartSession(meta PromptDebugMeta) (PromptDebugSess
 			filenameBase = fmt.Sprintf("%s_%s_%d", sanitizedOp, ts, d.seq)
 		}
 
-		pPath := filepath.Join(d.dir, filenameBase+".md")
-		oPath := filepath.Join(d.dir, filenameBase+"_output.md")
+		pPath := filepath.Join(cleanTenantDir, filenameBase+".md")
+		oPath := filepath.Join(cleanTenantDir, filenameBase+"_output.md")
 
 		// Defense in depth: path traversal verification
 		cleanPrompt := filepath.Clean(pPath)
-		rel, err := filepath.Rel(cleanDir, cleanPrompt)
-		if err != nil || strings.HasPrefix(rel, "..") {
+		pRel, pErr := filepath.Rel(cleanTenantDir, cleanPrompt)
+		if pErr != nil || strings.HasPrefix(pRel, "..") {
 			return nil, fmt.Errorf("path traversal detected: %s", pPath)
 		}
 
@@ -184,7 +215,7 @@ func (d *FilePromptDebugger) StartSession(meta PromptDebugMeta) (PromptDebugSess
 	}
 
 	if f == nil {
-		return nil, fmt.Errorf("failed to allocate unique prompt debug file in %s after retry attempts", d.dir)
+		return nil, fmt.Errorf("failed to allocate unique prompt debug file in %s after retry attempts", cleanTenantDir)
 	}
 
 	if _, err := f.Write([]byte(content)); err != nil {
@@ -241,6 +272,9 @@ func (s *fileDebugSession) WriteResponse(meta ResponseDebugMeta) error {
 func formatPromptMarkdown(meta PromptDebugMeta, sanitizedOp string, ts time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# LLM Prompt: %s\n\n", sanitizedOp)
+	if meta.TenantID != "" {
+		fmt.Fprintf(&b, "- **Tenant**: %s\n", meta.TenantID)
+	}
 	fmt.Fprintf(&b, "- **Provider**: %s\n", meta.Provider)
 	fmt.Fprintf(&b, "- **Model**: %s\n", meta.Model)
 	fmt.Fprintf(&b, "- **Operation**: %s\n", sanitizedOp)

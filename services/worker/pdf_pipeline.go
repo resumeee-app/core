@@ -64,8 +64,15 @@ func (p *Pool) processPDFJob(ctx context.Context, task PDFParseJobTask) {
 		} else if errors.Is(err, domain.ErrValidation) {
 			userErrMsg = "Document validation failed during extraction: " + err.Error()
 		}
+		if p.quotaRepo != nil && task.ReservationID != "" {
+			_ = p.quotaRepo.ReleaseQuota(ctx, task.ReservationID, userErrMsg)
+		}
 		p.failPDFJob(ctx, task.JobID, userErrMsg)
 		return
+	}
+
+	if p.quotaRepo != nil && task.ReservationID != "" {
+		_ = p.quotaRepo.CommitUsage(ctx, task.ReservationID, domain.TokenUsage{TotalTokens: 1000})
 	}
 
 	// 3. Mark job completed with candidate JSONResume result

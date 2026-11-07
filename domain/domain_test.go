@@ -1,8 +1,10 @@
 package domain_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -474,4 +476,260 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 		t.Errorf("expected TargetResume to directly own TemplateSetID, got: %s", targetResume.TemplateSetID)
 	}
 }
+
+func TestMultiTenancyDomainModels(t *testing.T) {
+	// 1. User entity
+	user := domain.User{
+		ID:       "firebase-uid-123",
+		Email:    "dev@example.com",
+		FullName: "Alex Dev",
+		Role:     domain.UserRoleUser,
+		Tier:     "free",
+		IsActive: true,
+	}
+	if user.ID != "firebase-uid-123" || user.Role != domain.UserRoleUser {
+		t.Errorf("unexpected user values: %+v", user)
+	}
+
+	// 2. Skill with IsGlobal and Slug
+	skill := domain.Skill{
+		ID:       "skill-go",
+		UserID:   "system",
+		Name:     "Go",
+		Slug:     "go",
+		IsGlobal: true,
+	}
+	if !skill.IsGlobal || skill.Slug != "go" {
+		t.Errorf("unexpected skill values: %+v", skill)
+	}
+
+	// 3. ResumeVersion with UserID
+	version := domain.ResumeVersion{
+		ID:            "ver-1",
+		UserID:        "user-abc",
+		ResumeID:      "resume-1",
+		VersionNumber: 1,
+		Status:        domain.VersionStatusPending,
+	}
+	if version.UserID != "user-abc" {
+		t.Errorf("expected version UserID 'user-abc', got %q", version.UserID)
+	}
+
+	// 4. TokenUsage & GenerationResponse
+	usage := domain.TokenUsage{
+		PromptTokens:     150,
+		CompletionTokens: 300,
+		TotalTokens:      450,
+	}
+	genResp := domain.GenerationResponse{
+		Usage: usage,
+	}
+	if genResp.Usage.TotalTokens != 450 {
+		t.Errorf("expected genResp total tokens 450, got %d", genResp.Usage.TotalTokens)
+	}
+
+	// 5. Quota & Usage entities
+	quota := domain.TenantQuota{
+		UserID:            "user-abc",
+		DailyRequestsUsed: 5,
+		DailyRequestLimit: 50,
+		MonthlyTokensUsed: 10000,
+		MonthlyTokenLimit: 1000000,
+	}
+	if quota.DailyRequestsUsed != 5 || quota.MonthlyTokensUsed != 10000 {
+		t.Errorf("unexpected quota: %+v", quota)
+	}
+
+	rec := domain.LLMUsageRecord{
+		ID:              "res-1",
+		UserID:          "user-abc",
+		Operation:       domain.OperationResumeTailoring,
+		EstimatedTokens: 2000,
+		Status:          domain.ReservationStatusPending,
+	}
+	if rec.Operation != domain.OperationResumeTailoring || rec.Status != domain.ReservationStatusPending {
+		t.Errorf("unexpected usage record: %+v", rec)
+	}
+
+	// 6. Domain errors sentinel wrapping
+	wrappedQuota := fmt.Errorf("quota exceeded error: %w", domain.ErrQuotaExceeded)
+	if !errors.Is(wrappedQuota, domain.ErrQuotaExceeded) {
+		t.Errorf("expected wrapped error to match ErrQuotaExceeded")
+	}
+	wrappedGlobal := fmt.Errorf("global skill error: %w", domain.ErrGlobalSkillImmutable)
+	if !errors.Is(wrappedGlobal, domain.ErrGlobalSkillImmutable) {
+		t.Errorf("expected wrapped error to match ErrGlobalSkillImmutable")
+	}
+	wrappedUnauth := fmt.Errorf("unauthorized error: %w", domain.ErrUnauthorized)
+	if !errors.Is(wrappedUnauth, domain.ErrUnauthorized) {
+		t.Errorf("expected wrapped error to match ErrUnauthorized")
+	}
+}
+
+func TestDomain_Slugify(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"empty string", "", ""},
+		{"simple lower", "golang", "golang"},
+		{"mixed case", "GoLang", "golang"},
+		{"spaces", "Ruby on Rails", "ruby-on-rails"},
+		{"consecutive spaces and hyphens", "C++   --- Developer", "c-developer"},
+		{"special characters and punctuation", "Node.js & React Native!", "node-js-react-native"},
+		{"unicode accents", "Crème Brûlée & Café", "creme-brulee-cafe"},
+		{"leading and trailing hyphens/spaces", "  ---Kubernetes---  ", "kubernetes"},
+		{"numbers and letters", "OAuth 2.0 & HTML5", "oauth-2-0-html5"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := domain.Slugify(tc.input)
+			if got != tc.expected {
+				t.Errorf("Slugify(%q) = %q, expected %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestDomain_ContextUserID(t *testing.T) {
+	t.Run("nil context returns ErrUnauthorized", func(t *testing.T) {
+		//nolint:staticcheck // intentionally testing nil context boundary handling
+		uid, err := domain.UserIDFromContext(nil)
+		if !errors.Is(err, domain.ErrUnauthorized) || uid != "" {
+			t.Errorf("expected ErrUnauthorized and empty string on nil context, got uid=%q, err=%v", uid, err)
+		}
+	})
+
+	t.Run("context without user id returns ErrUnauthorized", func(t *testing.T) {
+		ctx := context.Background()
+		uid, err := domain.UserIDFromContext(ctx)
+		if !errors.Is(err, domain.ErrUnauthorized) || uid != "" {
+			t.Errorf("expected ErrUnauthorized and empty string on missing context key, got uid=%q, err=%v", uid, err)
+		}
+	})
+
+	t.Run("context with empty user id returns ErrUnauthorized", func(t *testing.T) {
+		ctx := domain.WithUserID(context.Background(), "")
+		uid, err := domain.UserIDFromContext(ctx)
+		if !errors.Is(err, domain.ErrUnauthorized) || uid != "" {
+			t.Errorf("expected ErrUnauthorized and empty string on empty user id in context, got uid=%q, err=%v", uid, err)
+		}
+	})
+
+	t.Run("context with valid user id returns uid", func(t *testing.T) {
+		expected := "tenant-user-12345"
+		ctx := domain.WithUserID(context.Background(), expected)
+		uid, err := domain.UserIDFromContext(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if uid != expected {
+			t.Errorf("expected user id %q, got %q", expected, uid)
+		}
+	})
+}
+
+func TestDomain_TenantQuota_Methods(t *testing.T) {
+	now := time.Now().UTC()
+
+	t.Run("ResetWindowsIfExpired resets daily when expired", func(t *testing.T) {
+		q := domain.TenantQuota{
+			UserID:             "u1",
+			DailyRequestsUsed:  20,
+			DailyWindowStart:   now.Add(-25 * time.Hour),
+			MonthlyTokensUsed:  5000,
+			MonthlyWindowStart: now.Add(-10 * 24 * time.Hour),
+		}
+
+		reset := q.ResetWindowsIfExpired(now)
+		if !reset {
+			t.Errorf("expected reset to be true")
+		}
+		if q.DailyRequestsUsed != 0 {
+			t.Errorf("expected DailyRequestsUsed to be reset to 0, got %d", q.DailyRequestsUsed)
+		}
+		if q.MonthlyTokensUsed != 5000 {
+			t.Errorf("expected MonthlyTokensUsed to remain 5000, got %d", q.MonthlyTokensUsed)
+		}
+	})
+
+	t.Run("ResetWindowsIfExpired resets monthly when expired", func(t *testing.T) {
+		q := domain.TenantQuota{
+			UserID:             "u1",
+			DailyRequestsUsed:  10,
+			DailyWindowStart:   now.Add(-2 * time.Hour),
+			MonthlyTokensUsed:  50000,
+			MonthlyWindowStart: now.Add(-31 * 24 * time.Hour),
+		}
+
+		reset := q.ResetWindowsIfExpired(now)
+		if !reset {
+			t.Errorf("expected reset to be true")
+		}
+		if q.DailyRequestsUsed != 10 {
+			t.Errorf("expected DailyRequestsUsed to remain 10, got %d", q.DailyRequestsUsed)
+		}
+		if q.MonthlyTokensUsed != 0 {
+			t.Errorf("expected MonthlyTokensUsed to be reset to 0, got %d", q.MonthlyTokensUsed)
+		}
+	})
+
+	t.Run("ResetWindowsIfExpired does nothing when unexpired", func(t *testing.T) {
+		q := domain.TenantQuota{
+			UserID:             "u1",
+			DailyRequestsUsed:  15,
+			DailyWindowStart:   now.Add(-5 * time.Hour),
+			MonthlyTokensUsed:  25000,
+			MonthlyWindowStart: now.Add(-5 * 24 * time.Hour),
+		}
+
+		reset := q.ResetWindowsIfExpired(now)
+		if reset {
+			t.Errorf("expected reset to be false")
+		}
+		if q.DailyRequestsUsed != 15 || q.MonthlyTokensUsed != 25000 {
+			t.Errorf("unexpected quota mutation: %+v", q)
+		}
+	})
+
+	t.Run("AdjustMonthlyTokens clamps to zero on negative overshoot", func(t *testing.T) {
+		q := domain.TenantQuota{
+			MonthlyTokensUsed: 100,
+		}
+		q.AdjustMonthlyTokens(50)
+		if q.MonthlyTokensUsed != 150 {
+			t.Errorf("expected 150 tokens, got %d", q.MonthlyTokensUsed)
+		}
+		q.AdjustMonthlyTokens(-200)
+		if q.MonthlyTokensUsed != 0 {
+			t.Errorf("expected tokens clamped to 0, got %d", q.MonthlyTokensUsed)
+		}
+	})
+
+	t.Run("ReleaseReservation decrements requests and refunds tokens with clamping", func(t *testing.T) {
+		q := domain.TenantQuota{
+			DailyRequestsUsed: 2,
+			MonthlyTokensUsed: 1000,
+		}
+		q.ReleaseReservation(400)
+		if q.DailyRequestsUsed != 1 {
+			t.Errorf("expected 1 daily request, got %d", q.DailyRequestsUsed)
+		}
+		if q.MonthlyTokensUsed != 600 {
+			t.Errorf("expected 600 tokens, got %d", q.MonthlyTokensUsed)
+		}
+
+		// Releasing more than available clamps to 0
+		q.ReleaseReservation(1000)
+		if q.DailyRequestsUsed != 0 {
+			t.Errorf("expected 0 daily requests, got %d", q.DailyRequestsUsed)
+		}
+		if q.MonthlyTokensUsed != 0 {
+			t.Errorf("expected 0 monthly tokens, got %d", q.MonthlyTokensUsed)
+		}
+	})
+}
+
 

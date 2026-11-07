@@ -49,6 +49,12 @@ func registerSkills(validSkills map[string]domain.Skill, skills []domain.Skill) 
 		if short := s.EffectiveShortID(); short != "" {
 			validSkills[short] = s
 		}
+		if s.Slug != "" {
+			validSkills[s.Slug] = s
+		}
+		if s.Name != "" {
+			validSkills[strings.ToLower(s.Name)] = s
+		}
 	}
 }
 

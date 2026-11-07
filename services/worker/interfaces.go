@@ -10,9 +10,10 @@ import (
 
 // GenerationJob encapsulates the parameters of an asynchronous resume generation task.
 type GenerationJob struct {
-	UserID    string `json:"user_id"`
-	BranchID  string `json:"branch_id"`
-	VersionID string `json:"version_id"`
+	UserID        string `json:"user_id"`
+	BranchID      string `json:"branch_id"`
+	VersionID     string `json:"version_id"`
+	ReservationID string `json:"reservation_id,omitempty"`
 }
 
 // JobEnqueuer defines the contract for enqueuing generation jobs into the worker pool.
@@ -22,11 +23,12 @@ type JobEnqueuer interface {
 
 // PDFParseJobTask encapsulates the parameters of an asynchronous PDF resume parsing task.
 type PDFParseJobTask struct {
-	JobID    string `json:"job_id"`
-	UserID   string `json:"user_id"`
-	RawText  string `json:"raw_text"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	JobID         string `json:"job_id"`
+	UserID        string `json:"user_id"`
+	RawText       string `json:"raw_text"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	ReservationID string `json:"reservation_id,omitempty"`
 }
 
 // PDFJobEnqueuer defines the contract for enqueuing PDF parse tasks into the worker pool.

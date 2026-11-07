@@ -15,6 +15,30 @@ import (
 	"resumeee/internal/llm"
 )
 
+func TestSanitizeTenantID(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"tenant-123", "tenant-123"},
+		{"tenant_user_456", "tenant_user_456"},
+		{"../../etc/passwd", "etc_passwd"},
+		{"..\\..\\windows", "windows"},
+		{"", "default"},
+		{"   ", "default"},
+		{"!@#$%^&*()", "default"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			actual := llm.SanitizeTenantID(tc.input)
+			if actual != tc.expected {
+				t.Errorf("SanitizeTenantID(%q) = %q, expected %q", tc.input, actual, tc.expected)
+			}
+		})
+	}
+}
+
 func TestSanitizeOperation(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -57,6 +81,7 @@ func TestFilePromptDebugger_WritePromptAndResponse(t *testing.T) {
 	}))
 
 	meta := llm.PromptDebugMeta{
+		TenantID:     "tenant-alice",
 		Provider:     "openai",
 		Model:        "gpt-4o",
 		Operation:    "GenerateTailoredResume",
@@ -73,7 +98,7 @@ func TestFilePromptDebugger_WritePromptAndResponse(t *testing.T) {
 		t.Fatal("expected non-nil session")
 	}
 
-	expectedPromptFile := filepath.Join(tmpDir, "tailor_20261104153045.md")
+	expectedPromptFile := filepath.Join(tmpDir, "tenant-alice", "tailor_20261104153045.md")
 	promptBytes, err := os.ReadFile(expectedPromptFile)
 	if err != nil {
 		t.Fatalf("expected prompt file %s to exist: %v", expectedPromptFile, err)
@@ -82,6 +107,9 @@ func TestFilePromptDebugger_WritePromptAndResponse(t *testing.T) {
 	promptContent := string(promptBytes)
 	if !strings.Contains(promptContent, "# LLM Prompt: tailor") {
 		t.Errorf("prompt file missing header: %s", promptContent)
+	}
+	if !strings.Contains(promptContent, "**Tenant**: tenant-alice") {
+		t.Errorf("prompt file missing tenant: %s", promptContent)
 	}
 	if !strings.Contains(promptContent, "**Provider**: openai") {
 		t.Errorf("prompt file missing provider: %s", promptContent)
@@ -110,7 +138,7 @@ func TestFilePromptDebugger_WritePromptAndResponse(t *testing.T) {
 		t.Fatalf("WriteResponse failed: %v", err)
 	}
 
-	expectedOutputFile := filepath.Join(tmpDir, "tailor_20261104153045_output.md")
+	expectedOutputFile := filepath.Join(tmpDir, "tenant-alice", "tailor_20261104153045_output.md")
 	outputBytes, err := os.ReadFile(expectedOutputFile)
 	if err != nil {
 		t.Fatalf("expected output file %s to exist: %v", expectedOutputFile, err)
@@ -148,7 +176,7 @@ func TestFilePromptDebugger_ErrorResponse(t *testing.T) {
 		t.Fatalf("StartSession failed: %v", err)
 	}
 
-	expectedPromptFile := filepath.Join(tmpDir, "extract_20261104160000.md")
+	expectedPromptFile := filepath.Join(tmpDir, "default", "extract_20261104160000.md")
 	if _, err := os.Stat(expectedPromptFile); err != nil {
 		t.Fatalf("expected prompt file %s: %v", expectedPromptFile, err)
 	}
@@ -165,7 +193,7 @@ func TestFilePromptDebugger_ErrorResponse(t *testing.T) {
 		t.Fatalf("WriteResponse failed: %v", err)
 	}
 
-	expectedOutputFile := filepath.Join(tmpDir, "extract_20261104160000_output.md")
+	expectedOutputFile := filepath.Join(tmpDir, "default", "extract_20261104160000_output.md")
 	outputBytes, err := os.ReadFile(expectedOutputFile)
 	if err != nil {
 		t.Fatalf("expected output file %s: %v", expectedOutputFile, err)
@@ -209,10 +237,10 @@ func TestFilePromptDebugger_CollisionHandling(t *testing.T) {
 	_ = sess1.WriteResponse(llm.ResponseDebugMeta{RawResponse: "resp1", Timestamp: fixedTime})
 	_ = sess2.WriteResponse(llm.ResponseDebugMeta{RawResponse: "resp2", Timestamp: fixedTime})
 
-	file1 := filepath.Join(tmpDir, "tailor_20261104170000.md")
-	file1Out := filepath.Join(tmpDir, "tailor_20261104170000_output.md")
-	file2 := filepath.Join(tmpDir, "tailor_20261104170000_1.md")
-	file2Out := filepath.Join(tmpDir, "tailor_20261104170000_1_output.md")
+	file1 := filepath.Join(tmpDir, "default", "tailor_20261104170000.md")
+	file1Out := filepath.Join(tmpDir, "default", "tailor_20261104170000_output.md")
+	file2 := filepath.Join(tmpDir, "default", "tailor_20261104170000_1.md")
+	file2Out := filepath.Join(tmpDir, "default", "tailor_20261104170000_1_output.md")
 
 	if _, err := os.Stat(file1); err != nil {
 		t.Errorf("expected file1 %s to exist: %v", file1, err)
@@ -243,12 +271,12 @@ func TestFilePromptDebugger_CreatesDirectoryAutomatically(t *testing.T) {
 		t.Fatal("expected session")
 	}
 
-	info, err := os.Stat(nestedDir)
+	info, err := os.Stat(filepath.Join(nestedDir, "default"))
 	if err != nil {
-		t.Fatalf("expected directory %s to be created: %v", nestedDir, err)
+		t.Fatalf("expected directory %s to be created: %v", filepath.Join(nestedDir, "default"), err)
 	}
 	if !info.IsDir() {
-		t.Fatalf("expected %s to be directory", nestedDir)
+		t.Fatalf("expected %s to be directory", filepath.Join(nestedDir, "default"))
 	}
 }
 
@@ -305,7 +333,7 @@ func TestFilePromptDebugger_ConcurrentCollisionHandling(t *testing.T) {
 		}
 	}
 
-	entries, err := os.ReadDir(tmpDir)
+	entries, err := os.ReadDir(filepath.Join(tmpDir, "default"))
 	if err != nil {
 		t.Fatalf("failed to read dir: %v", err)
 	}
@@ -331,6 +359,74 @@ func TestFilePromptDebugger_ConcurrentCollisionHandling(t *testing.T) {
 	}
 	if outputCount != concurrency {
 		t.Errorf("expected %d output files, got %d", concurrency, outputCount)
+	}
+}
+
+func TestFilePromptDebugger_TenantIsolationAndTraversal(t *testing.T) {
+	tmpDir := t.TempDir()
+	fixedTime := time.Date(2026, 11, 4, 19, 0, 0, 0, time.UTC)
+	debugger := llm.NewFilePromptDebugger(tmpDir, nil, llm.WithDebuggerClock(func() time.Time {
+		return fixedTime
+	}))
+
+	// Tenant A
+	sessA, err := debugger.StartSession(llm.PromptDebugMeta{
+		TenantID:  "tenant-a",
+		Operation: "tailor",
+		Timestamp: fixedTime,
+	})
+	if err != nil {
+		t.Fatalf("tenant A session failed: %v", err)
+	}
+	_ = sessA.WriteResponse(llm.ResponseDebugMeta{RawResponse: "respA", Timestamp: fixedTime})
+
+	// Tenant B
+	sessB, err := debugger.StartSession(llm.PromptDebugMeta{
+		TenantID:  "tenant-b",
+		Operation: "tailor",
+		Timestamp: fixedTime,
+	})
+	if err != nil {
+		t.Fatalf("tenant B session failed: %v", err)
+	}
+	_ = sessB.WriteResponse(llm.ResponseDebugMeta{RawResponse: "respB", Timestamp: fixedTime})
+
+	// Traversal attempt
+	sessC, err := debugger.StartSession(llm.PromptDebugMeta{
+		TenantID:  "../../etc",
+		Operation: "tailor",
+		Timestamp: fixedTime,
+	})
+	if err != nil {
+		t.Fatalf("traversal session failed: %v", err)
+	}
+	_ = sessC.WriteResponse(llm.ResponseDebugMeta{RawResponse: "respC", Timestamp: fixedTime})
+
+	// Verify Tenant A dir
+	dirA := filepath.Join(tmpDir, "tenant-a")
+	if _, err := os.Stat(dirA); err != nil {
+		t.Errorf("expected tenant-a dir to exist: %v", err)
+	}
+
+	// Verify Tenant B dir
+	dirB := filepath.Join(tmpDir, "tenant-b")
+	if _, err := os.Stat(dirB); err != nil {
+		t.Errorf("expected tenant-b dir to exist: %v", err)
+	}
+
+	// Verify Traversal is sanitized into subfolder inside tmpDir
+	dirC := filepath.Join(tmpDir, "etc")
+	if _, err := os.Stat(dirC); err != nil {
+		t.Errorf("expected sanitized etc dir to exist inside tmpDir: %v", err)
+	}
+
+	// Ensure no files escaped outside tmpDir
+	parentDir := filepath.Dir(tmpDir)
+	entries, _ := os.ReadDir(parentDir)
+	for _, e := range entries {
+		if e.Name() == "etc" {
+			t.Errorf("file escaped to parent directory: %s", e.Name())
+		}
 	}
 }
 

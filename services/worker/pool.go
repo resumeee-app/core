@@ -23,6 +23,7 @@ type PoolConfig struct {
 	PresetRepo      domain.PresetRepository
 	TemplateRepo    domain.TemplateRepository
 	PDFJobRepo      domain.PDFParseJobRepository
+	QuotaRepo       domain.QuotaRepository
 	ResumeExtractor ResumeExtractor
 	LLMTimeout      time.Duration
 	LLMService      LLMService
@@ -51,6 +52,7 @@ type Pool struct {
 	presetRepo      domain.PresetRepository
 	templateRepo    domain.TemplateRepository
 	pdfJobRepo      domain.PDFParseJobRepository
+	quotaRepo       domain.QuotaRepository
 	resumeExtractor ResumeExtractor
 	llmTimeout      time.Duration
 	llmService      LLMService
@@ -80,6 +82,7 @@ func NewPool(cfg PoolConfig) *Pool {
 		presetRepo:      cfg.PresetRepo,
 		templateRepo:    cfg.TemplateRepo,
 		pdfJobRepo:      cfg.PDFJobRepo,
+		quotaRepo:       cfg.QuotaRepo,
 		resumeExtractor: cfg.ResumeExtractor,
 		llmTimeout:      cfg.LLMTimeout,
 		llmService:      cfg.LLMService,

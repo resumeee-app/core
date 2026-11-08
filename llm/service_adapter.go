@@ -26,18 +26,18 @@ func NewServiceAdapter(registry *Registry) *ServiceAdapter {
 }
 
 // GenerateTailoredResume resolves the target LLM provider based on request presets and model configuration,
-// executing resume tailoring against the candidate's master profile.
+// executing resume tailoring against the candidate's main profile.
 //
 // Parameters:
 //   - ctx: Request context with cancellation and timeout propagation.
-//   - req: GenerationRequest containing master profile, branch context, and target requirements.
+//   - req: GenerationRequest containing main profile, branch context, and target requirements.
 //
 // Returns:
 //   - GenerationResponse containing tailored content, citations, and gap report, or an error.
 func (a *ServiceAdapter) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
 	var profile *domain.Profile
-	if req.MasterProfile != nil {
-		profile = &req.MasterProfile.Profile
+	if req.MainProfile != nil {
+		profile = &req.MainProfile.Profile
 	}
 	provider, model, err := a.registry.Resolve(req, req.Preset, profile)
 	if err != nil {
@@ -58,14 +58,14 @@ func (a *ServiceAdapter) GenerateTailoredResume(ctx context.Context, req domain.
 //
 // Parameters:
 //   - ctx: Request context with cancellation and timeout propagation.
-//   - req: GenerationRequest containing master profile and job requirements.
+//   - req: GenerationRequest containing main profile and job requirements.
 //
 // Returns:
 //   - Populated and normalized *domain.GapReport, or an error.
 func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error) {
 	var profile *domain.Profile
-	if req.MasterProfile != nil {
-		profile = &req.MasterProfile.Profile
+	if req.MainProfile != nil {
+		profile = &req.MainProfile.Profile
 	}
 	provider, model, err := a.registry.Resolve(req, req.Preset, profile)
 	if err != nil {

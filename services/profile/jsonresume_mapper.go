@@ -11,7 +11,7 @@ import (
 
 const defaultSchemaURL = "https://raw.githubusercontent.com/jsonresume/resume-schema/v1.0.0/schema.json"
 
-// ToSnapshot converts a parsed JSONResume document into a domain MasterProfileSnapshot,
+// ToSnapshot converts a parsed JSONResume document into a domain MainProfileSnapshot,
 // generating relational entities with compact short IDs, child facts with skill associations,
 // and preserving unmapped sections.
 //
@@ -19,17 +19,17 @@ const defaultSchemaURL = "https://raw.githubusercontent.com/jsonresume/resume-sc
 //   - resume: The parsed JSONResume document structure.
 //   - userID: Tenant identifier scoping the profile snapshot (defaults to "default").
 //   - existingProfile: Baseline profile to inherit configuration and metadata from (optional).
-//   - revision: Master revision sequence number.
+//   - revision: Main revision sequence number.
 //
 // Returns:
-//   - Pointer to MasterProfileSnapshot with generated IDs and short IDs, or domain.ErrValidation.
-func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64) (*domain.MasterProfileSnapshot, error) {
+//   - Pointer to MainProfileSnapshot with generated IDs and short IDs, or domain.ErrValidation.
+func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64) (*domain.MainProfileSnapshot, error) {
 	return ToSnapshotWithGlobalSkills(resume, userID, existingProfile, revision, nil)
 }
 
-// ToSnapshotWithGlobalSkills converts a validated JSON Resume AST into a full MasterProfileSnapshot,
+// ToSnapshotWithGlobalSkills converts a validated JSON Resume AST into a full MainProfileSnapshot,
 // resolving candidate skills against the global skills catalog before creating custom tenant skills.
-func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64, globalSkills []domain.Skill) (*domain.MasterProfileSnapshot, error) {
+func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64, globalSkills []domain.Skill) (*domain.MainProfileSnapshot, error) {
 	if resume == nil {
 		return nil, domain.ErrValidation
 	}
@@ -130,7 +130,7 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 		GlobalWritingRules: rules,
 		DefaultProvider:    provider,
 		DefaultModel:       model,
-		MasterRevision:     revision,
+		MainRevision:       revision,
 		Metadata:           metadata,
 		CreatedAt:          time.Now().UTC(),
 		UpdatedAt:          time.Now().UTC(),
@@ -393,9 +393,9 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 		}
 	}
 
-	return &domain.MasterProfileSnapshot{
+	return &domain.MainProfileSnapshot{
 		Profile:        prof,
-		MasterRevision: revision,
+		MainRevision:   revision,
 		Skills:         skills,
 		Experiences:    experiences,
 		Projects:       projects,
@@ -406,9 +406,9 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 	}, nil
 }
 
-// FromSnapshot converts a MasterProfileSnapshot back into a valid JSONResume document,
+// FromSnapshot converts a MainProfileSnapshot back into a valid JSONResume document,
 // restoring unmapped sections and child highlights.
-func FromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
+func FromSnapshot(snapshot *domain.MainProfileSnapshot) (*JSONResume, error) {
 	if snapshot == nil {
 		return nil, domain.ErrValidation
 	}

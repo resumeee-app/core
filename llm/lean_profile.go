@@ -80,11 +80,11 @@ type LeanCertification struct {
 	Summary string       `json:"summary,omitempty"`
 }
 
-// LeanMasterProfile represents the projected, minimal master profile structure for LLM prompts.
+// LeanMainProfile represents the projected, minimal main profile structure for LLM prompts.
 // It excludes internal database fields (user_id, created_at, updated_at, is_global, metadata,
-// master_revision, exported_at, default_provider, default_model) while retaining effective short IDs
+// main_revision, exported_at, default_provider, default_model) while retaining effective short IDs
 // for provenance validation and grounding.
-type LeanMasterProfile struct {
+type LeanMainProfile struct {
 	Profile        LeanProfile         `json:"profile"`
 	Skills         []LeanSkill         `json:"skills,omitempty"`
 	Experiences    []LeanExperience    `json:"experiences,omitempty"`
@@ -145,24 +145,24 @@ func projectLeanFacts(facts []domain.Fact, ownerShortID string) []LeanFact {
 	return res
 }
 
-// ProjectLeanMasterProfile clones and transforms a MasterProfileSnapshot so that all entities
+// ProjectLeanMainProfile clones and transforms a MainProfileSnapshot so that all entities
 // and facts are projected into a minimal, lean data transfer object. All internal multi-tenancy
 // (user_id), database audit timestamps (created_at, updated_at), database flags (is_global, slug),
-// snapshot tracking (master_revision, exported_at), and arbitrary metadata maps are stripped,
+// snapshot tracking (main_revision, exported_at), and arbitrary metadata maps are stripped,
 // while compact short identifiers are retained under "id" for provenance citations.
 //
 // Parameters:
-//   - snap: Authoritative MasterProfileSnapshot to project.
+//   - snap: Authoritative MainProfileSnapshot to project.
 //   - idMap: Map associating canonical UUIDs with compact short IDs.
 //
 // Returns:
-//   - A new LeanMasterProfile instance, or nil if snap is nil.
-func ProjectLeanMasterProfile(snap *domain.MasterProfileSnapshot, idMap map[string]string) *LeanMasterProfile {
+//   - A new LeanMainProfile instance, or nil if snap is nil.
+func ProjectLeanMainProfile(snap *domain.MainProfileSnapshot, idMap map[string]string) *LeanMainProfile {
 	if snap == nil {
 		return nil
 	}
 
-	lean := &LeanMasterProfile{
+	lean := &LeanMainProfile{
 		Profile: LeanProfile{
 			Headline: snap.Profile.Headline,
 			Summary:  snap.Profile.Summary,

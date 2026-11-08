@@ -35,7 +35,7 @@ func TestProfileJSONRoundTrip(t *testing.T) {
 		GlobalWritingRules: "Active verbs only.",
 		DefaultProvider:    "gemini",
 		DefaultModel:       "gemini-3.8-flash",
-		MasterRevision:     1,
+		MainRevision:       1,
 		Metadata:           map[string]any{"source": "test"},
 		CreatedAt:          now,
 		UpdatedAt:          now,
@@ -256,26 +256,26 @@ func TestPresetsAndBranches(t *testing.T) {
 		BranchInstructions:       "Emphasize financial ledger experience.",
 		PresetID:                 &presetID,
 		TemplateSetID:            tmpl.ID,
-		PinnedEntityIDs:          []string{"exp-1"},
-		ExcludedEntityIDs:        []string{"proj-old"},
-		LastSyncedMasterRevision: 1,
-		CreatedAt:                now,
-		UpdatedAt:                now,
+		PinnedEntityIDs:        []string{"exp-1"},
+		ExcludedEntityIDs:      []string{"proj-old"},
+		LastSyncedMainRevision: 1,
+		CreatedAt:              now,
+		UpdatedAt:              now,
 	}
 
 	if branch.IsStaleRevision(2) != true {
-		t.Errorf("expected branch to be stale when master revision is higher")
+		t.Errorf("expected branch to be stale when main revision is higher")
 	}
 	if branch.IsStaleRevision(1) != false {
-		t.Errorf("expected branch not to be stale when master revision matches")
+		t.Errorf("expected branch not to be stale when main revision matches")
 	}
 
 	version := domain.BranchVersion{
-		ID:                 "ver-1",
-		BranchID:           branch.ID,
-		VersionNumber:      1,
-		Status:             domain.VersionStatusCompleted,
-		MasterRevisionUsed: 1,
+		ID:               "ver-1",
+		BranchID:         branch.ID,
+		VersionNumber:    1,
+		Status:           domain.VersionStatusCompleted,
+		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  tmpl.ID,
 		ProviderUsed:       "gemini",
 		ModelUsed:          "gemini-2.5-pro",
@@ -379,22 +379,22 @@ func TestTailoredContentAndProvenance(t *testing.T) {
 	}
 }
 
-func TestMasterProfileSnapshot(t *testing.T) {
-	profile := domain.Profile{ID: "prof-1", UserID: "user-1", FullName: "Jane Doe", MasterRevision: 3}
-	snapshot := domain.MasterProfileSnapshot{
-		Profile:        profile,
-		MasterRevision: 3,
-		Skills:         []domain.Skill{{ID: "s-1", Name: "Go"}},
-		Experiences:    []domain.WorkExperience{{ID: "e-1", Company: "Acme"}},
-		Projects:       []domain.Project{{ID: "p-1", Name: "Resumeee"}},
-		Education:      []domain.Education{{ID: "ed-1", Institution: "MIT"}},
+func TestMainProfileSnapshot(t *testing.T) {
+	profile := domain.Profile{ID: "prof-1", UserID: "user-1", FullName: "Jane Doe", MainRevision: 3}
+	snapshot := domain.MainProfileSnapshot{
+		Profile:      profile,
+		MainRevision: 3,
+		Skills:       []domain.Skill{{ID: "s-1", Name: "Go"}},
+		Experiences:  []domain.WorkExperience{{ID: "e-1", Company: "Acme"}},
+		Projects:     []domain.Project{{ID: "p-1", Name: "Resumeee"}},
+		Education:    []domain.Education{{ID: "ed-1", Institution: "MIT"}},
 		Certifications: []domain.Certification{{ID: "c-1", Name: "AWS"}},
-		Facts:          []domain.Fact{{ID: "f-1", Statement: "Did something great"}},
-		ExportedAt:     time.Now(),
+		Facts:        []domain.Fact{{ID: "f-1", Statement: "Did something great"}},
+		ExportedAt:   time.Now(),
 	}
 
-	if snapshot.MasterRevision != 3 {
-		t.Errorf("expected snapshot revision 3, got %d", snapshot.MasterRevision)
+	if snapshot.MainRevision != 3 {
+		t.Errorf("expected snapshot revision 3, got %d", snapshot.MainRevision)
 	}
 	if len(snapshot.Skills) != 1 || len(snapshot.Facts) != 1 {
 		t.Errorf("expected populated snapshot slices, got %+v", snapshot)

@@ -22,7 +22,7 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 	req := domain.GenerationRequest{
 		GlobalRules:        "Tier 1: Always highlight " + realName + "'s distributed systems background. Reach at " + realEmail + ".",
 		PresetInstructions: "Tier 2: Emphasize " + realName + "'s metrics.",
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{
 				FullName: realName,
 				Headline: "Principal Cloud Architect (" + realName + ")",
@@ -122,9 +122,9 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 		t.Errorf("UserPrompt should not contain stripped social profile URL placeholder")
 	}
 
-	// Verify original request MasterProfile was NOT mutated
-	if req.MasterProfile.Profile.FullName != realName {
-		t.Errorf("BuildPrompt mutated caller's MasterProfile FullName")
+	// Verify original request MainProfile was NOT mutated
+	if req.MainProfile.Profile.FullName != realName {
+		t.Errorf("BuildPrompt mutated caller's MainProfile FullName")
 	}
 }
 
@@ -134,7 +134,7 @@ func TestBuildGapAnalysisPrompt_ContactPrivacyMasking(t *testing.T) {
 	realPhone := "+1 (555) 999-8888"
 
 	req := domain.GenerationRequest{
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{
 				FullName: realName,
 				Email:    realEmail,

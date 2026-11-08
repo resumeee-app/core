@@ -4,9 +4,9 @@ import (
 	"strings"
 )
 
-// CareerGraphSnapshot is a semantic domain alias for MasterProfileSnapshot,
+// CareerGraphSnapshot is a semantic domain alias for MainProfileSnapshot,
 // highlighting its graph-level aggregations and skill associations.
-type CareerGraphSnapshot = MasterProfileSnapshot
+type CareerGraphSnapshot = MainProfileSnapshot
 
 // SkillUsage documents bidirectional skill references across the career graph snapshot,
 // detailing which experiences, projects, or facts associate with the skill directly or effectively.
@@ -72,7 +72,7 @@ func (f Fact) EffectiveSkills() []Skill {
 
 // forEachSkill visits every skill in the snapshot across root skills, experiences,
 // projects, education facts, and standalone facts in a deterministic order.
-func (s *MasterProfileSnapshot) forEachSkill(fn func(Skill)) {
+func (s *MainProfileSnapshot) forEachSkill(fn func(Skill)) {
 	if s == nil {
 		return
 	}
@@ -116,7 +116,7 @@ func (s *MasterProfileSnapshot) forEachSkill(fn func(Skill)) {
 // AllSkills aggregates, canonicalizes, and deduplicates every skill present across the entire snapshot:
 // root skills, work experiences (direct & fact skills), projects (direct & fact skills), education fact skills,
 // and standalone facts.
-func (s *MasterProfileSnapshot) AllSkills() []Skill {
+func (s *MainProfileSnapshot) AllSkills() []Skill {
 	if s == nil {
 		return []Skill{}
 	}
@@ -131,7 +131,7 @@ func (s *MasterProfileSnapshot) AllSkills() []Skill {
 
 // ConsolidateSkills returns a shallow clone of the snapshot whose Skills field is guaranteed
 // to contain the complete, deduplicated set of all skills present anywhere in the career graph.
-func (s *MasterProfileSnapshot) ConsolidateSkills() *MasterProfileSnapshot {
+func (s *MainProfileSnapshot) ConsolidateSkills() *MainProfileSnapshot {
 	if s == nil {
 		return nil
 	}
@@ -142,7 +142,7 @@ func (s *MasterProfileSnapshot) ConsolidateSkills() *MasterProfileSnapshot {
 
 // SkillByID searches all skills in the snapshot (root, experiences, projects, and facts)
 // for a skill matching the given ID or ShortID.
-func (s *MasterProfileSnapshot) SkillByID(id string) (Skill, bool) {
+func (s *MainProfileSnapshot) SkillByID(id string) (Skill, bool) {
 	if s == nil || strings.TrimSpace(id) == "" {
 		return Skill{}, false
 	}
@@ -157,7 +157,7 @@ func (s *MasterProfileSnapshot) SkillByID(id string) (Skill, bool) {
 
 // SkillsByCategory groups all consolidated skills in the snapshot by their Category.
 // Uncategorized skills are grouped under "General Skills".
-func (s *MasterProfileSnapshot) SkillsByCategory() map[string][]Skill {
+func (s *MainProfileSnapshot) SkillsByCategory() map[string][]Skill {
 	grouped := make(map[string][]Skill)
 	if s == nil {
 		return grouped
@@ -174,7 +174,7 @@ func (s *MasterProfileSnapshot) SkillsByCategory() map[string][]Skill {
 
 // SkillUsages computes bidirectional associations between each unique skill in the snapshot
 // and the entities (experiences, projects, facts) that reference it.
-func (s *MasterProfileSnapshot) SkillUsages() map[string]SkillUsage {
+func (s *MainProfileSnapshot) SkillUsages() map[string]SkillUsage {
 	usages := make(map[string]SkillUsage)
 	if s == nil {
 		return usages

@@ -13,10 +13,10 @@ type ValidationResult struct {
 	Warnings         []string
 }
 
-// ProvenanceValidator audits and sanitizes TailoredContent against MasterProfileSnapshot and Branch rules.
+// ProvenanceValidator audits and sanitizes TailoredContent against MainProfileSnapshot and Branch rules.
 type ProvenanceValidator interface {
-	Validate(content *domain.TailoredContent, snapshot *domain.MasterProfileSnapshot, branch *domain.Branch) (*ValidationResult, error)
-	ValidateStrict(content *domain.TailoredContent, snapshot *domain.MasterProfileSnapshot, branch *domain.Branch) error
+	Validate(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) (*ValidationResult, error)
+	ValidateStrict(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) error
 }
 
 // Validator implements the ProvenanceValidator interface.
@@ -28,12 +28,12 @@ func New() *Validator {
 }
 
 // Validate is a package-level convenience function delegating to Validator.
-func Validate(content *domain.TailoredContent, snapshot *domain.MasterProfileSnapshot, branch *domain.Branch) (*ValidationResult, error) {
+func Validate(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) (*ValidationResult, error) {
 	return New().Validate(content, snapshot, branch)
 }
 
 // ValidateStrict is a package-level convenience function delegating to Validator.
-func ValidateStrict(content *domain.TailoredContent, snapshot *domain.MasterProfileSnapshot, branch *domain.Branch) error {
+func ValidateStrict(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) error {
 	return New().ValidateStrict(content, snapshot, branch)
 }
 
@@ -72,24 +72,24 @@ func registerFacts(factRegistry map[string]factMetadata, facts []domain.Fact, ow
 	}
 }
 
-// Validate audits and sanitizes TailoredContent against MasterProfileSnapshot and Branch rules.
+// Validate audits and sanitizes TailoredContent against MainProfileSnapshot and Branch rules.
 // It verifies fact and skill citations using dual-key resolution (matching both canonical UUIDs and short IDs),
 // strips ungrounded or cross-entity spoofed claims, filters excluded entities, and checks for pinned omissions.
 //
 // Parameters:
 //   - content: The candidate TailoredContent produced by the LLM.
-//   - snapshot: The authoritative MasterProfileSnapshot against which citations are verified.
+//   - snapshot: The authoritative MainProfileSnapshot against which citations are verified.
 //   - branch: Branch configuration containing PinnedEntityIDs and ExcludedEntityIDs (optional).
 //
 // Returns:
 //   - ValidationResult containing SanitizedContent, list of Warnings, and IsValid boolean flag.
 //   - Error if content or snapshot is nil.
-func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.MasterProfileSnapshot, branch *domain.Branch) (*ValidationResult, error) {
+func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) (*ValidationResult, error) {
 	if content == nil {
 		return nil, fmt.Errorf("%w: content cannot be nil", domain.ErrValidation)
 	}
 	if snapshot == nil {
-		return nil, fmt.Errorf("%w: master profile snapshot cannot be nil", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: main profile snapshot cannot be nil", domain.ErrValidation)
 	}
 
 	allSkills := snapshot.AllSkills()
@@ -455,7 +455,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 }
 
 // ValidateStrict runs Validate and returns domain.ErrProvenance if any warnings are emitted.
-func (v *Validator) ValidateStrict(content *domain.TailoredContent, snapshot *domain.MasterProfileSnapshot, branch *domain.Branch) error {
+func (v *Validator) ValidateStrict(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) error {
 	res, err := v.Validate(content, snapshot, branch)
 	if err != nil {
 		return err
@@ -525,7 +525,7 @@ func sanitizeSkillGroup(group domain.TailoredSkillGroup, validSkills map[string]
 }
 
 // sanitizeBullets evaluates candidate accomplishment bullets for an experience, project, or education item.
-// It verifies that each bullet cites at least one fact, verifies that cited facts exist in the master profile,
+// It verifies that each bullet cites at least one fact, verifies that cited facts exist in the main profile,
 // validates that the fact belongs to the parent entity under dual-key resolution (matching either canonical ID or short ID),
 // and strips ungrounded skill citations.
 //
@@ -556,7 +556,7 @@ func sanitizeBullets(entityType, entityID string, bullets []domain.TailoredBulle
 		for _, factID := range bullet.SourceFactIDs {
 			meta, ok := factRegistry[factID]
 			if !ok {
-				*warnings = append(*warnings, fmt.Sprintf("[FABRICATED_FACT] pruned bullet in %s '%s': fact '%s' not found in master profile", entityType, entityID, factID))
+				*warnings = append(*warnings, fmt.Sprintf("[FABRICATED_FACT] pruned bullet in %s '%s': fact '%s' not found in main profile", entityType, entityID, factID))
 				grounded = false
 				break
 			}

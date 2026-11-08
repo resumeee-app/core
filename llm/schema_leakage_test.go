@@ -40,7 +40,7 @@ func TestSchemas_ZeroInternalFieldLeakage(t *testing.T) {
 		"is_global",
 		"slug",
 		"metadata",
-		"master_revision",
+		"main_revision",
 		"exported_at",
 		"default_provider",
 		"default_model",
@@ -57,7 +57,7 @@ func TestSchemas_ZeroInternalFieldLeakage(t *testing.T) {
 		{name: "GapReportSchema", getter: llm.GapReportSchema},
 		{name: "ResumeExtractResponseSchema", getter: llm.ResumeExtractResponseSchema},
 		{name: "GeminiResponseSchema", getter: llm.GeminiResponseSchema},
-		{name: "LeanMasterProfileSchema", getter: llm.LeanMasterProfileSchema},
+		{name: "LeanMainProfileSchema", getter: llm.LeanMainProfileSchema},
 	}
 
 	for _, sc := range schemas {
@@ -110,29 +110,29 @@ func TestGenerationResponseSchema_StripsNonTailoringFields(t *testing.T) {
 	}
 }
 
-func TestLeanMasterProfileSchema_StripsNonTailoringFields(t *testing.T) {
-	schema := llm.LeanMasterProfileSchema()
+func TestLeanMainProfileSchema_StripsNonTailoringFields(t *testing.T) {
+	schema := llm.LeanMainProfileSchema()
 	props, ok := schema["properties"].(map[string]any)
 	if !ok {
-		t.Fatal("LeanMasterProfileSchema missing properties")
+		t.Fatal("LeanMainProfileSchema missing properties")
 	}
 
 	// Profile properties: full_name, email, phone, location, profiles must be stripped
 	profileProps, ok := props["profile"].(map[string]any)["properties"].(map[string]any)
 	if !ok {
-		t.Fatal("LeanMasterProfileSchema missing profile.properties")
+		t.Fatal("LeanMainProfileSchema missing profile.properties")
 	}
 	forbiddenProfileFields := []string{"full_name", "email", "phone", "location", "profiles"}
 	for _, f := range forbiddenProfileFields {
 		if _, exists := profileProps[f]; exists {
-			t.Errorf("LeanMasterProfileSchema.profile leaked non-tailoring field %q", f)
+			t.Errorf("LeanMainProfileSchema.profile leaked non-tailoring field %q", f)
 		}
 	}
 
 	// Experience properties: location, company_location, company_contact, hours_per_week, supervisor_name, supervisor_contact must be stripped
 	expProps, ok := props["experiences"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
 	if !ok {
-		t.Fatal("LeanMasterProfileSchema missing experiences.items.properties")
+		t.Fatal("LeanMainProfileSchema missing experiences.items.properties")
 	}
 	forbiddenExpFields := []string{
 		"location",
@@ -144,17 +144,17 @@ func TestLeanMasterProfileSchema_StripsNonTailoringFields(t *testing.T) {
 	}
 	for _, f := range forbiddenExpFields {
 		if _, exists := expProps[f]; exists {
-			t.Errorf("LeanMasterProfileSchema.experiences leaked non-tailoring field %q", f)
+			t.Errorf("LeanMainProfileSchema.experiences leaked non-tailoring field %q", f)
 		}
 	}
 
 	// Education properties: location must be stripped
 	eduProps, ok := props["education"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
 	if !ok {
-		t.Fatal("LeanMasterProfileSchema missing education.items.properties")
+		t.Fatal("LeanMainProfileSchema missing education.items.properties")
 	}
 	if _, exists := eduProps["location"]; exists {
-		t.Errorf("LeanMasterProfileSchema.education leaked non-tailoring field 'location'")
+		t.Errorf("LeanMainProfileSchema.education leaked non-tailoring field 'location'")
 	}
 }
 

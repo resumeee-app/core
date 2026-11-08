@@ -9,14 +9,14 @@ import (
 
 func TestCareerGraphSnapshotAlias(t *testing.T) {
 	cgs := domain.CareerGraphSnapshot{
-		MasterRevision: 42,
+		MainRevision: 42,
 		Skills: []domain.Skill{
 			{ID: "sk-alias", Name: "Go"},
 		},
 	}
 	mps := cgs
-	if mps.MasterRevision != 42 {
-		t.Fatalf("expected MasterRevision 42, got %d", mps.MasterRevision)
+	if mps.MainRevision != 42 {
+		t.Fatalf("expected MainRevision 42, got %d", mps.MainRevision)
 	}
 	if len(mps.Skills) != 1 || mps.Skills[0].Name != "Go" {
 		t.Fatalf("expected 1 skill Go, got %+v", mps.Skills)
@@ -150,7 +150,7 @@ func TestFact_EffectiveSkills(t *testing.T) {
 	}
 }
 
-func TestMasterProfileSnapshot_AllSkills_And_Consolidation(t *testing.T) {
+func TestMainProfileSnapshot_AllSkills_And_Consolidation(t *testing.T) {
 	skillTop1 := domain.Skill{ID: "sk-top-1", ShortID: "sk-1", Name: "Go", Category: "Languages"}
 	skillTop2 := domain.Skill{ID: "sk-top-2", ShortID: "sk-2", Name: "Rust", Category: "Languages"}
 	skillExpDirect := domain.Skill{ID: "sk-exp-dir", ShortID: "sk-3", Name: "PostgreSQL", Category: "Databases"}
@@ -160,7 +160,7 @@ func TestMasterProfileSnapshot_AllSkills_And_Consolidation(t *testing.T) {
 	skillEduFact := domain.Skill{ID: "sk-edu-fact", ShortID: "sk-7", Name: "Distributed Systems", Category: "Theory"}
 	skillStandaloneFact := domain.Skill{ID: "sk-stand-fact", ShortID: "sk-8", Name: "Linux", Category: "OS"}
 
-	snap := &domain.MasterProfileSnapshot{
+	snap := &domain.MainProfileSnapshot{
 		Skills: []domain.Skill{skillTop1, skillTop2},
 		Experiences: []domain.WorkExperience{
 			{
@@ -238,11 +238,11 @@ func TestMasterProfileSnapshot_AllSkills_And_Consolidation(t *testing.T) {
 	}
 }
 
-func TestMasterProfileSnapshot_SkillUsages(t *testing.T) {
+func TestMainProfileSnapshot_SkillUsages(t *testing.T) {
 	skillGo := domain.Skill{ID: "skill-go", Name: "Go"}
 	skillDB := domain.Skill{ID: "skill-db", Name: "PostgreSQL"}
 
-	snap := &domain.MasterProfileSnapshot{
+	snap := &domain.MainProfileSnapshot{
 		Skills: []domain.Skill{skillGo, skillDB},
 		Experiences: []domain.WorkExperience{
 			{
@@ -328,8 +328,8 @@ func TestSkillUtilities(t *testing.T) {
 	}
 }
 
-func TestMasterProfileSnapshot_NilReceiverSafety(t *testing.T) {
-	var nilSnap *domain.MasterProfileSnapshot
+func TestMainProfileSnapshot_NilReceiverSafety(t *testing.T) {
+	var nilSnap *domain.MainProfileSnapshot
 
 	all := nilSnap.AllSkills()
 	if all == nil || len(all) != 0 {
@@ -356,11 +356,11 @@ func TestMasterProfileSnapshot_NilReceiverSafety(t *testing.T) {
 	}
 }
 
-func TestMasterProfileSnapshot_EducationFacts_And_GeneralCategoryFallback(t *testing.T) {
+func TestMainProfileSnapshot_EducationFacts_And_GeneralCategoryFallback(t *testing.T) {
 	skillUncat := domain.Skill{ID: "sk-uncat", Name: "Leadership", Category: ""}
 	skillEdu := domain.Skill{ID: "sk-edu", Name: "Linear Algebra", Category: "Math"}
 
-	snap := &domain.MasterProfileSnapshot{
+	snap := &domain.MainProfileSnapshot{
 		Skills: []domain.Skill{skillUncat},
 		Education: []domain.Education{
 			{

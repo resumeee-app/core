@@ -49,7 +49,7 @@ type LLMService interface {
 
 // ProvenanceValidator audits tailored content against career snapshots and exclusion lists.
 type ProvenanceValidator interface {
-	Validate(content *domain.TailoredContent, snapshot *domain.MasterProfileSnapshot, branch *domain.Branch) (*validator.ValidationResult, error)
+	Validate(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) (*validator.ValidationResult, error)
 }
 
 // TemplateRenderer executes multi-format Go templates.

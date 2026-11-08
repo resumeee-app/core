@@ -104,7 +104,7 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 
 	req := domain.GenerationRequest{
 		Model:              model,
-		MasterProfile:      snapshot,
+		MainProfile:        snapshot,
 		GlobalRules:        prof.GlobalWritingRules,
 		PresetInstructions: presetInstructions,
 		Preset:             preset,
@@ -191,7 +191,7 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 	}
 
 	ver.Status = status
-	ver.MasterRevisionUsed = snapshot.MasterRevision
+	ver.MainRevisionUsed = snapshot.MainRevision
 	ver.TemplateSetIDUsed = branch.TemplateSetID
 	if ver.ProviderUsed == "" {
 		ver.ProviderUsed = provider

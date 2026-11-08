@@ -27,10 +27,10 @@ func sampleCandidateProfile() domain.Profile {
 	}
 }
 
-func sampleCandidateSnapshot() *domain.MasterProfileSnapshot {
+func sampleCandidateSnapshot() *domain.MainProfileSnapshot {
 	prof := sampleCandidateProfile()
 	endDate := domain.DatePtr(domain.NewDate(2023, 12, 31))
-	return &domain.MasterProfileSnapshot{
+	return &domain.MainProfileSnapshot{
 		Profile: prof,
 		Experiences: []domain.WorkExperience{
 			{
@@ -200,7 +200,7 @@ func TestSession_ObfuscateRequest(t *testing.T) {
 	req := domain.GenerationRequest{
 		GlobalRules:        "Always highlight Alice Walker's leadership at alice.walker@example.org.",
 		PresetInstructions: "Format concise bullets for Alice Walker.",
-		MasterProfile:      snap,
+		MainProfile:        snap,
 		BranchContext: domain.Branch{
 			TargetRequirements: "Looking for an engineer like Alice Walker (contact: alice.walker@example.org).",
 			BranchInstructions: "Emphasize Alice Walker's cloud background.",
@@ -411,7 +411,7 @@ func TestSession_ShortUsernames_DoNotCorruptTechnicalTerms(t *testing.T) {
 	}
 
 	session := privacy.NewSession(prof)
-	snap := &domain.MasterProfileSnapshot{Profile: *prof}
+	snap := &domain.MainProfileSnapshot{Profile: *prof}
 	obf := session.ObfuscateSnapshot(snap)
 
 	// 1. Structured usernames are masked to synthetic placeholders

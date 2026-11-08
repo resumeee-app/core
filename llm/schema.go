@@ -61,7 +61,7 @@ func GenerationResponseSchema() map[string]any {
 		"properties": map[string]any{
 			"tailored_content": map[string]any{
 				"type":        "object",
-				"description": "Curated and customized resume content matching the target role, grounded strictly in the candidate's master profile",
+				"description": "Curated and customized resume content matching the target role, grounded strictly in the candidate's main profile",
 				"properties": map[string]any{
 					"summary": map[string]any{
 						"type":        "string",
@@ -100,7 +100,7 @@ func GenerationResponseSchema() map[string]any {
 							"properties": map[string]any{
 								"source_entity_id": map[string]any{
 									"type":        "string",
-									"description": "Short identifier of the Master WorkExperience (e.g. exp-1)",
+									"description": "Short identifier of the Main WorkExperience (e.g. exp-1)",
 								},
 								"company": map[string]any{
 									"type":        "string",
@@ -160,7 +160,7 @@ func GenerationResponseSchema() map[string]any {
 							"properties": map[string]any{
 								"source_entity_id": map[string]any{
 									"type":        "string",
-									"description": "Short identifier of the Master Project (e.g. proj-1)",
+									"description": "Short identifier of the Main Project (e.g. proj-1)",
 								},
 								"name": map[string]any{
 									"type":        "string",
@@ -216,7 +216,7 @@ func GenerationResponseSchema() map[string]any {
 							"properties": map[string]any{
 								"source_entity_id": map[string]any{
 									"type":        "string",
-									"description": "Short identifier of the Master Education (e.g. edu-1)",
+									"description": "Short identifier of the Main Education (e.g. edu-1)",
 								},
 								"institution": map[string]any{
 									"type":        "string",
@@ -255,7 +255,7 @@ func GenerationResponseSchema() map[string]any {
 							"properties": map[string]any{
 								"source_entity_id": map[string]any{
 									"type":        "string",
-									"description": "Short identifier of the Master Certification (e.g. cert-1)",
+									"description": "Short identifier of the Main Certification (e.g. cert-1)",
 								},
 								"name": map[string]any{
 									"type":        "string",
@@ -308,7 +308,7 @@ func gapReportSchema() map[string]any {
 					"properties": map[string]any{
 						"requirement": map[string]any{
 							"type":        "string",
-							"description": "Target requirement or qualification missing from master profile",
+							"description": "Target requirement or qualification missing from main profile",
 						},
 						"missing_area": map[string]any{
 							"type":        "string",
@@ -912,13 +912,13 @@ func leanFactItemSchema() map[string]any {
 	}
 }
 
-// LeanMasterProfileSchema returns the canonical JSON Schema for LeanMasterProfile,
+// LeanMainProfileSchema returns the canonical JSON Schema for LeanMainProfile,
 // defining only LLM-relevant public career profile attributes and short identifiers for provenance,
 // with zero leakage of internal database or multi-tenancy attributes.
-func LeanMasterProfileSchema() map[string]any {
+func LeanMainProfileSchema() map[string]any {
 	return map[string]any{
 		"type":        "object",
-		"description": "Minimal, lean master profile structure for LLM grounding with short IDs",
+		"description": "Minimal, lean main profile structure for LLM grounding with short IDs",
 		"properties": map[string]any{
 			"profile": map[string]any{
 				"type":        "object",
@@ -1036,9 +1036,9 @@ func LeanMasterProfileSchema() map[string]any {
 	}
 }
 
-// LeanMasterProfileSchemaJSON returns the indented JSON representation of LeanMasterProfileSchema().
-func LeanMasterProfileSchemaJSON() (string, error) {
-	b, err := json.MarshalIndent(LeanMasterProfileSchema(), "", "  ")
+// LeanMainProfileSchemaJSON returns the indented JSON representation of LeanMainProfileSchema().
+func LeanMainProfileSchemaJSON() (string, error) {
+	b, err := json.MarshalIndent(LeanMainProfileSchema(), "", "  ")
 	if err != nil {
 		return "", err
 	}

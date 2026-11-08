@@ -268,8 +268,8 @@ func NewSession(profile *domain.Profile) *Session {
 	}
 }
 
-// NewSessionFromSnapshot constructs a Session from a MasterProfileSnapshot.
-func NewSessionFromSnapshot(snapshot *domain.MasterProfileSnapshot) *Session {
+// NewSessionFromSnapshot constructs a Session from a MainProfileSnapshot.
+func NewSessionFromSnapshot(snapshot *domain.MainProfileSnapshot) *Session {
 	if snapshot == nil {
 		return NewSession(nil)
 	}
@@ -278,7 +278,7 @@ func NewSessionFromSnapshot(snapshot *domain.MasterProfileSnapshot) *Session {
 
 // NewSessionFromRequest constructs a Session from a GenerationRequest.
 func NewSessionFromRequest(req domain.GenerationRequest) *Session {
-	return NewSessionFromSnapshot(req.MasterProfile)
+	return NewSessionFromSnapshot(req.MainProfile)
 }
 
 // ObfuscateString replaces occurrences of real contact details with placeholders.
@@ -305,7 +305,7 @@ func (s *Session) DeobfuscateString(input string) string {
 	return res
 }
 
-func cloneSnapshot(snap *domain.MasterProfileSnapshot) *domain.MasterProfileSnapshot {
+func cloneSnapshot(snap *domain.MainProfileSnapshot) *domain.MainProfileSnapshot {
 	if snap == nil {
 		return nil
 	}
@@ -395,7 +395,7 @@ func cloneSnapshot(snap *domain.MasterProfileSnapshot) *domain.MasterProfileSnap
 }
 
 // ObfuscateSnapshot returns an isolated deep clone of the snapshot with PII obfuscated.
-func (s *Session) ObfuscateSnapshot(snap *domain.MasterProfileSnapshot) *domain.MasterProfileSnapshot {
+func (s *Session) ObfuscateSnapshot(snap *domain.MainProfileSnapshot) *domain.MainProfileSnapshot {
 	if snap == nil {
 		return nil
 	}
@@ -601,7 +601,7 @@ func (s *Session) ObfuscatePriorVersion(prior *domain.TailoredContent) *domain.T
 // ObfuscateRequest returns a deep copy of req with contact details and text occurrences obfuscated.
 func (s *Session) ObfuscateRequest(req domain.GenerationRequest) domain.GenerationRequest {
 	res := req
-	res.MasterProfile = s.ObfuscateSnapshot(req.MasterProfile)
+	res.MainProfile = s.ObfuscateSnapshot(req.MainProfile)
 	res.PriorVersion = s.ObfuscatePriorVersion(req.PriorVersion)
 	res.GlobalRules = s.ObfuscateString(req.GlobalRules)
 	res.PresetInstructions = s.ObfuscateString(req.PresetInstructions)

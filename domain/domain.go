@@ -2,8 +2,8 @@
 // and business invariants for the Resumeee resume tailoring engine.
 //
 // Core domain entities include:
-//   - Profile: Candidate biographical details, contact info, and master revision counters
-//   - MasterProfileSnapshot: Comprehensive career graph containing experiences, skills, education,
+//   - Profile: Candidate biographical details, contact info, and main revision counters
+//   - MainProfileSnapshot: Comprehensive career graph containing experiences, skills, education,
 //     certifications, projects, and arbitrary career facts
 //   - Branch: Targeted resume branch configuration and target role metadata
 //   - Version: Snapshot of tailored resume content, prompt history, and generation metadata

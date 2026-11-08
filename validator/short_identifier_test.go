@@ -8,12 +8,12 @@ import (
 	"resumeee/internal/validator"
 )
 
-// snapshotWithShortIDs constructs a sample MasterProfileSnapshot populated with both canonical UUIDs
+// snapshotWithShortIDs constructs a sample MainProfileSnapshot populated with both canonical UUIDs
 // and compact short IDs across skills, experiences, projects, and facts for provenance testing.
-func snapshotWithShortIDs() *domain.MasterProfileSnapshot {
+func snapshotWithShortIDs() *domain.MainProfileSnapshot {
 	endDate := domain.NewDate(2023, 12, 31)
 	projStart := domain.NewDate(2021, 6, 1)
-	return &domain.MasterProfileSnapshot{
+	return &domain.MainProfileSnapshot{
 		Profile: domain.Profile{
 			ID:       "prof-uuid-12345678-abcd-1111-2222-333344445555",
 			FullName: "Grace Hopper",

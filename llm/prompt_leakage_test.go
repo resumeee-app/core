@@ -27,7 +27,7 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 	return domain.GenerationRequest{
 		GlobalRules:        "Tier 1 global writing rule.",
 		PresetInstructions: "Tier 2 preset instructions.",
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{
 				ID:                 profileID,
 				UserID:             tenantID,
@@ -41,7 +41,7 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 				GlobalWritingRules: "Do not use passive voice.",
 				DefaultProvider:    "gemini",
 				DefaultModel:       "gemini-3.8-flash",
-				MasterRevision:     42,
+				MainRevision:       42,
 				Metadata:           map[string]any{"internal_billing_tier": "enterprise", "system_tag": "vip"},
 				CreatedAt:          created,
 				UpdatedAt:          updated,
@@ -162,8 +162,8 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 					UpdatedAt: updated,
 				},
 			},
-			MasterRevision: 42,
-			ExportedAt:     now,
+			MainRevision:  42,
+			ExportedAt:    now,
 		},
 		BranchContext: domain.Branch{
 			TargetRole:         "Staff Systems Architect",
@@ -221,7 +221,7 @@ var forbiddenPromptTokens = []string{
 	`"internal_payroll_code"`,
 	`"student_id_hash"`,
 	`"badge_id"`,
-	`"master_revision"`,
+	`"main_revision"`,
 	`"exported_at"`,
 	`"default_provider"`,
 	`"default_model"`,
@@ -351,7 +351,7 @@ func TestBuildPrompt_PreventsInternalDataLeakage(t *testing.T) {
 				Institution:    "Stanford University",
 				Degree:         "M.S.",
 				Field:          "Computer Science",
-				StartDate:      &req.MasterProfile.Experiences[0].StartDate,
+				StartDate:      &req.MainProfile.Experiences[0].StartDate,
 			},
 		},
 		Certifications: []domain.TailoredCert{
@@ -363,7 +363,7 @@ func TestBuildPrompt_PreventsInternalDataLeakage(t *testing.T) {
 		},
 	}
 
-	valResult, valErr := validator.Validate(mockLLMResponse, req.MasterProfile, &req.BranchContext)
+	valResult, valErr := validator.Validate(mockLLMResponse, req.MainProfile, &req.BranchContext)
 	if valErr != nil {
 		t.Fatalf("provenance validator failed on short IDs: %v", valErr)
 	}
@@ -429,17 +429,17 @@ func TestNonTailoringFields_PreservedInRenderedOutput(t *testing.T) {
 				Institution:    "Stanford University",
 				Degree:         "M.S.",
 				Field:          "Computer Science",
-				StartDate:      req.MasterProfile.Education[0].StartDate,
+				StartDate:      req.MainProfile.Education[0].StartDate,
 			},
 		},
 	}
 
-	valResult, err := validator.Validate(mockLLMResponse, req.MasterProfile, &req.BranchContext)
+	valResult, err := validator.Validate(mockLLMResponse, req.MainProfile, &req.BranchContext)
 	if err != nil {
 		t.Fatalf("validator.Validate returned unexpected error: %v", err)
 	}
 
-	// Verify validator hydrated stripped fields from MasterProfileSnapshot
+	// Verify validator hydrated stripped fields from MainProfileSnapshot
 	exp := valResult.SanitizedContent.Experiences[0]
 	if exp.Location.City != "San Francisco" {
 		t.Errorf("expected experience Location.City %q, got %q", "San Francisco", exp.Location.City)
@@ -479,7 +479,7 @@ func TestNonTailoringFields_PreservedInRenderedOutput(t *testing.T) {
 {{end}}`,
 	}
 
-	rendered, err := renderer.Render(context.Background(), tmpl, &req.MasterProfile.Profile, valResult.SanitizedContent)
+	rendered, err := renderer.Render(context.Background(), tmpl, &req.MainProfile.Profile, valResult.SanitizedContent)
 	if err != nil {
 		t.Fatalf("renderer.Render failed: %v", err)
 	}

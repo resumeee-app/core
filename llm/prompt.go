@@ -49,7 +49,7 @@ type tailorPromptContext struct {
 	PinnedEntities     string
 	ExcludedEntities   string
 	PriorVersionJSON   string
-	MasterProfileJSON  string
+	MainProfileJSON    string
 }
 
 type gapAnalysisPromptContext struct {
@@ -57,7 +57,7 @@ type gapAnalysisPromptContext struct {
 	TargetCompany      string
 	TargetRequirements string
 	BranchInstructions string
-	MasterProfileJSON  string
+	MainProfileJSON    string
 }
 
 func recordShortID(idMap map[string]string, id, shortID string) {
@@ -84,10 +84,10 @@ func recordFacts(idMap map[string]string, facts []domain.Fact) {
 
 // BuildPrompt constructs a structured prompt payload enforcing the 3-tier rules hierarchy,
 // anti-hallucination grounding constraints ("No Lies" invariant), prior active version continuity (ADR-002),
-// and serialized Master Profile snapshot data projected with compact short identifiers and PII obfuscated.
+// and serialized Main Profile snapshot data projected with compact short identifiers and PII obfuscated.
 //
 // Parameters:
-//   - req: GenerationRequest containing JobDescription, WritingRules, TargetRole, MasterProfile,
+//   - req: GenerationRequest containing JobDescription, WritingRules, TargetRole, MainProfile,
 //     PriorActiveVersion, PinnedEntityIDs, and ExcludedEntityIDs.
 //
 // Returns:
@@ -98,7 +98,7 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 	obfReq := session.ObfuscateRequest(req)
 
 	// 1. Build idMap for projecting snapshot, pinned/excluded entities, and prior version
-	idMap := buildShortIDMap(obfReq.MasterProfile)
+	idMap := buildShortIDMap(obfReq.MainProfile)
 
 	// 2. Render System Prompt from template
 	var sysBuilder strings.Builder
@@ -118,7 +118,7 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 		priorJSONStr = string(priorJSON)
 	}
 
-	profileJSONStr, err := serializeProjectedMasterProfile(obfReq.MasterProfile, idMap)
+	profileJSONStr, err := serializeProjectedMainProfile(obfReq.MainProfile, idMap)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 		PinnedEntities:     pinned,
 		ExcludedEntities:   excluded,
 		PriorVersionJSON:   priorJSONStr,
-		MasterProfileJSON:  profileJSONStr,
+		MainProfileJSON:    profileJSONStr,
 	}
 
 	var userBuilder strings.Builder
@@ -183,7 +183,7 @@ func BuildGapAnalysisPrompt(req domain.GenerationRequest) (*PromptPayload, error
 	session := privacy.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
 
-	idMap := buildShortIDMap(obfReq.MasterProfile)
+	idMap := buildShortIDMap(obfReq.MainProfile)
 
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(1024)
@@ -191,7 +191,7 @@ func BuildGapAnalysisPrompt(req domain.GenerationRequest) (*PromptPayload, error
 		return nil, fmt.Errorf("failed to render gap analysis system prompt template: %w", err)
 	}
 
-	profileJSONStr, err := serializeProjectedMasterProfile(obfReq.MasterProfile, idMap)
+	profileJSONStr, err := serializeProjectedMainProfile(obfReq.MainProfile, idMap)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func BuildGapAnalysisPrompt(req domain.GenerationRequest) (*PromptPayload, error
 		TargetCompany:      strings.TrimSpace(obfReq.BranchContext.TargetCompany),
 		TargetRequirements: strings.TrimSpace(obfReq.BranchContext.TargetRequirements),
 		BranchInstructions: strings.TrimSpace(obfReq.BranchContext.BranchInstructions),
-		MasterProfileJSON:  profileJSONStr,
+		MainProfileJSON:    profileJSONStr,
 	}
 
 	var userBuilder strings.Builder
@@ -247,7 +247,7 @@ func BuildResumeExtractPrompt(rawText string) (*PromptPayload, error) {
 
 // buildShortIDMap builds a fast lookup dictionary mapping canonical UUIDs to compact short IDs
 // for all entities (skills, experiences, projects, education, certifications, facts) in a profile snapshot.
-func buildShortIDMap(snapshot *domain.MasterProfileSnapshot) map[string]string {
+func buildShortIDMap(snapshot *domain.MainProfileSnapshot) map[string]string {
 	idMap := make(map[string]string)
 	if snapshot == nil {
 		return idMap
@@ -272,16 +272,16 @@ func buildShortIDMap(snapshot *domain.MasterProfileSnapshot) map[string]string {
 	return idMap
 }
 
-// serializeProjectedMasterProfile projects the profile snapshot using short IDs into a lean master profile structure
+// serializeProjectedMainProfile projects the profile snapshot using short IDs into a lean main profile structure
 // and serializes it to formatted JSON, preventing leakage of internal database and multi-tenancy attributes.
-func serializeProjectedMasterProfile(snapshot *domain.MasterProfileSnapshot, idMap map[string]string) (string, error) {
+func serializeProjectedMainProfile(snapshot *domain.MainProfileSnapshot, idMap map[string]string) (string, error) {
 	if snapshot == nil {
 		return "", nil
 	}
-	leanProfile := ProjectLeanMasterProfile(snapshot, idMap)
+	leanProfile := ProjectLeanMainProfile(snapshot, idMap)
 	profileJSON, err := json.MarshalIndent(leanProfile, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("failed to serialize master profile snapshot: %w", err)
+		return "", fmt.Errorf("failed to serialize main profile snapshot: %w", err)
 	}
 	return string(profileJSON), nil
 }

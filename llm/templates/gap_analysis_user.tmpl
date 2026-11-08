@@ -7,9 +7,9 @@ Target Requirements:
 {{.BranchInstructions}}
 {{end}}</target_context>
 
-<master_profile_data>
-{{if .MasterProfileJSON}}{{.MasterProfileJSON}}
+<main_profile_data>
+{{if .MainProfileJSON}}{{.MainProfileJSON}}
 {{else}}{}
-{{end}}</master_profile_data>
+{{end}}</main_profile_data>
 
 Produce a valid JSON object with top-level key "gap_report" matching the required schema (containing "overall_match_summary", "missing_requirements", and "strategic_recommendations"). Adhere strictly to the No Lies grounding rules. Output valid JSON only.

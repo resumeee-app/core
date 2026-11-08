@@ -10,9 +10,9 @@ import (
 type ProfileRepository interface {
 	GetProfile(ctx context.Context, userID string) (*Profile, error)
 	UpsertProfile(ctx context.Context, profile *Profile) error
-	IncrementMasterRevision(ctx context.Context, userID string) (int64, error)
-	GetSnapshot(ctx context.Context, userID string) (*MasterProfileSnapshot, error)
-	ReplaceCareerGraph(ctx context.Context, userID string, snapshot *MasterProfileSnapshot) error
+	IncrementMainRevision(ctx context.Context, userID string) (int64, error)
+	GetSnapshot(ctx context.Context, userID string) (*MainProfileSnapshot, error)
+	ReplaceCareerGraph(ctx context.Context, userID string, snapshot *MainProfileSnapshot) error
 
 	// Skills
 	ListSkills(ctx context.Context, userID string) ([]Skill, error)
@@ -97,7 +97,7 @@ type BranchRepository interface {
 // GenerationRequest contains full context required by an LLM provider to tailor a resume.
 type GenerationRequest struct {
 	Model              string
-	MasterProfile      *MasterProfileSnapshot
+	MainProfile        *MainProfileSnapshot
 	GlobalRules        string           // Tier 1
 	PresetInstructions string           // Tier 2
 	Preset             *Preset          // Tier 2 Preset metadata & overrides

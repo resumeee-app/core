@@ -572,8 +572,8 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first import failed: %v", err)
 	}
-	if snap1.MasterRevision != 1 {
-		t.Errorf("expected MasterRevision=1 after first import, got %d", snap1.MasterRevision)
+	if snap1.MainRevision != 1 {
+		t.Errorf("expected MainRevision=1 after first import, got %d", snap1.MainRevision)
 	}
 	if len(snap1.Experiences) != 1 || len(snap1.Facts) != 4 {
 		t.Errorf("expected 1 exp and 4 facts in snap1, got %d exps, %d facts", len(snap1.Experiences), len(snap1.Facts))
@@ -584,8 +584,8 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get profile from DB: %v", err)
 	}
-	if profInDB.MasterRevision != 1 {
-		t.Errorf("expected DB profile MasterRevision=1, got %d", profInDB.MasterRevision)
+	if profInDB.MainRevision != 1 {
+		t.Errorf("expected DB profile MainRevision=1, got %d", profInDB.MainRevision)
 	}
 
 	// 2. Add Tier-1 LLM writing rules to profile to verify preservation across subsequent imports
@@ -596,29 +596,29 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 		t.Fatalf("failed to upsert profile rules: %v", err)
 	}
 
-	// UpsertProfile bumped MasterRevision from 1 to 2
+	// UpsertProfile bumped MainRevision from 1 to 2
 	profAfterUpsert, err := profileRepo.GetProfile(ctx, userID)
 	if err != nil {
 		t.Fatalf("failed to get profile after upsert: %v", err)
 	}
-	if profAfterUpsert.MasterRevision != 2 {
-		t.Errorf("expected MasterRevision=2 after UpsertProfile, got %d", profAfterUpsert.MasterRevision)
+	if profAfterUpsert.MainRevision != 2 {
+		t.Errorf("expected MainRevision=2 after UpsertProfile, got %d", profAfterUpsert.MainRevision)
 	}
 
-	// 3. Create a branch synced with current MasterRevision (2)
+	// 3. Create a branch synced with current MainRevision (2)
 	branch := &domain.Branch{
-		ID:                       "br-test-stale",
-		UserID:                   userID,
-		Name:                     "Staff Systems Engineer",
-		TemplateSetID:            "tmpl-1",
-		LastSyncedMasterRevision: profAfterUpsert.MasterRevision,
+		ID:                     "br-test-stale",
+		UserID:                 userID,
+		Name:                   "Staff Systems Engineer",
+		TemplateSetID:          "tmpl-1",
+		LastSyncedMainRevision: profAfterUpsert.MainRevision,
 	}
 	if err := branchRepo.CreateBranch(ctx, branch); err != nil {
 		t.Fatalf("failed to create branch: %v", err)
 	}
 
 	// At this point, branch is not stale (2 == 2)
-	if branch.IsStaleRevision(profAfterUpsert.MasterRevision) {
+	if branch.IsStaleRevision(profAfterUpsert.MainRevision) {
 		t.Errorf("branch should not be stale when revision matches")
 	}
 
@@ -628,8 +628,8 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second import failed: %v", err)
 	}
-	if snap2.MasterRevision != 3 {
-		t.Errorf("expected MasterRevision=3 after second import, got %d", snap2.MasterRevision)
+	if snap2.MainRevision != 3 {
+		t.Errorf("expected MainRevision=3 after second import, got %d", snap2.MainRevision)
 	}
 	if snap2.Profile.Headline != "Chief Technology Officer" {
 		t.Errorf("expected updated headline 'Chief Technology Officer', got %q", snap2.Profile.Headline)
@@ -644,8 +644,8 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 	}
 
 	// 5. Branch staleness check: branch synced at revision 2 is now stale (2 < 3)!
-	if !branch.IsStaleRevision(snap2.MasterRevision) {
-		t.Errorf("expected branch to be marked stale when last_synced_master_revision (2) < current (3)")
+	if !branch.IsStaleRevision(snap2.MainRevision) {
+		t.Errorf("expected branch to be marked stale when last_synced_main_revision (2) < current (3)")
 	}
 
 	// 6. Third Import: Atomically bumps revision to 4
@@ -653,8 +653,8 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third import failed: %v", err)
 	}
-	if snap3.MasterRevision != 4 {
-		t.Errorf("expected MasterRevision=4 after third import, got %d", snap3.MasterRevision)
+	if snap3.MainRevision != 4 {
+		t.Errorf("expected MainRevision=4 after third import, got %d", snap3.MainRevision)
 	}
 }
 
@@ -785,31 +785,31 @@ func TestProfileService_ExportJSONResume_WithVersionID(t *testing.T) {
 	ctx := context.Background()
 	userID := fmt.Sprintf("user-export-%d", time.Now().UnixNano())
 
-	// 1. Ingest Master Profile
+	// 1. Ingest Main Profile
 	_, err := svc.ImportJSONResume(ctx, userID, []byte(sampleOfficialJSONResume()))
 	if err != nil {
 		t.Fatalf("failed to import JSON resume: %v", err)
 	}
 
-	// 2. Export Mode A: When version_id is nil, exports MasterProfileSnapshot
-	masterExport, err := svc.ExportJSONResume(ctx, userID, nil)
+	// 2. Export Mode A: When version_id is nil, exports MainProfileSnapshot
+	mainExport, err := svc.ExportJSONResume(ctx, userID, nil)
 	if err != nil {
 		t.Fatalf("export with nil version_id failed: %v", err)
 	}
-	if masterExport.Basics.Name != "Richard Hendriks" {
-		t.Errorf("expected master export name 'Richard Hendriks', got %q", masterExport.Basics.Name)
+	if mainExport.Basics.Name != "Richard Hendriks" {
+		t.Errorf("expected main export name 'Richard Hendriks', got %q", mainExport.Basics.Name)
 	}
-	if len(masterExport.Work) != 1 || masterExport.Work[0].GetCompany() != "Pied Piper" {
-		t.Errorf("unexpected master export work: %+v", masterExport.Work)
+	if len(mainExport.Work) != 1 || mainExport.Work[0].GetCompany() != "Pied Piper" {
+		t.Errorf("unexpected main export work: %+v", mainExport.Work)
 	}
 
 	// 3. Create a Branch and a BranchVersion with TailoredContent
 	branch := &domain.Branch{
-		ID:                       "br-tailored-exp",
-		UserID:                   userID,
-		Name:                     "Specialist Branch",
-		TemplateSetID:            "tmpl-1",
-		LastSyncedMasterRevision: 1,
+		ID:                     "br-tailored-exp",
+		UserID:                 userID,
+		Name:                   "Specialist Branch",
+		TemplateSetID:          "tmpl-1",
+		LastSyncedMainRevision: 1,
 	}
 	if err := branchRepo.CreateBranch(ctx, branch); err != nil {
 		t.Fatalf("failed to create branch: %v", err)
@@ -817,11 +817,11 @@ func TestProfileService_ExportJSONResume_WithVersionID(t *testing.T) {
 
 	tailoredSummary := "Custom tailored summary for high-performance computing."
 	version := &domain.BranchVersion{
-		ID:                 "ver-tailored-1",
-		BranchID:           branch.ID,
-		VersionNumber:      1,
-		Status:             domain.VersionStatusCompleted,
-		MasterRevisionUsed: 1,
+		ID:               "ver-tailored-1",
+		BranchID:         branch.ID,
+		VersionNumber:    1,
+		Status:           domain.VersionStatusCompleted,
+		MainRevisionUsed: 1,
 		TailoredContent: &domain.TailoredContent{
 			Summary: tailoredSummary,
 			Experiences: []domain.TailoredExperience{

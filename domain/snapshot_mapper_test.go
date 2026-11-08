@@ -57,7 +57,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 	})
 
 	t.Run("empty snapshot returns safe non-nil empty slices", func(t *testing.T) {
-		snap := &domain.MasterProfileSnapshot{}
+		snap := &domain.MainProfileSnapshot{}
 		res := domain.SnapshotToTailoredContent(snap)
 		if res == nil {
 			t.Fatal("expected non-nil result")
@@ -88,7 +88,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 		eduStart := domain.NewDate(2016, 9, 1)
 		certDate := domain.NewDate(2022, 6, 1)
 		hours := 40
-		snap := &domain.MasterProfileSnapshot{
+		snap := &domain.MainProfileSnapshot{
 			Profile: domain.Profile{
 				Summary: "Experienced distributed systems engineer with deep Go and cloud expertise.",
 			},
@@ -282,7 +282,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 	})
 
 	t.Run("facts indexed from snapshot.Facts if entity Facts slice is empty", func(t *testing.T) {
-		snap := &domain.MasterProfileSnapshot{
+		snap := &domain.MainProfileSnapshot{
 			Experiences: []domain.WorkExperience{
 				{
 					ID:        "exp-orphan-facts",
@@ -321,7 +321,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 	})
 
 	t.Run("nested skills from experiences and facts are consolidated into SkillGroups", func(t *testing.T) {
-		snap := &domain.MasterProfileSnapshot{
+		snap := &domain.MainProfileSnapshot{
 			Skills: []domain.Skill{
 				{ID: "sk-top", Name: "Go", Category: "Backend"},
 			},

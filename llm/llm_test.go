@@ -88,7 +88,7 @@ var sampleResponse = domain.GenerationResponse{
 func sampleRequest() domain.GenerationRequest {
 	return domain.GenerationRequest{
 		Model: "test-model-override",
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{
 				FullName:           "Ada Lovelace",
 				GlobalWritingRules: "Rule 1: Always highlight algorithmic complexity.",
@@ -243,7 +243,7 @@ func TestPromptBuilder_Composition(t *testing.T) {
 		t.Errorf("user prompt missing continuity instructions")
 	}
 
-	// Check Master Profile Graph presence with privacy masking and stripped contact data
+	// Check Main Profile Graph presence with privacy masking and stripped contact data
 	if strings.Contains(prompts.UserPrompt, "Ada Lovelace") {
 		t.Errorf("user prompt leaked candidate real name 'Ada Lovelace'")
 	}
@@ -811,7 +811,7 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 		t.Errorf("expected compat / llama3.3:70b, got %s / %s", p3.Name(), m3)
 	}
 
-	// Case 4: Master Profile Defaults (when preset has no overrides)
+	// Case 4: Main Profile Defaults (when preset has no overrides)
 	req4 := domain.GenerationRequest{BranchContext: domain.Branch{}}
 	profile4 := &domain.Profile{DefaultProvider: "openai", DefaultModel: "gpt-4o-mini"}
 	p4, m4, err := reg.Resolve(req4, nil, profile4)
@@ -1577,7 +1577,7 @@ func TestBuildGapAnalysisPrompt(t *testing.T) {
 	if !strings.Contains(payload.UserPrompt, "Must have deep expertise in Raft") {
 		t.Errorf("expected user prompt to contain target requirements")
 	}
-	if !strings.Contains(payload.UserPrompt, "<master_profile_data>") {
-		t.Errorf("expected user prompt to contain master profile data")
+	if !strings.Contains(payload.UserPrompt, "<main_profile_data>") {
+		t.Errorf("expected user prompt to contain main profile data")
 	}
 }

@@ -66,14 +66,14 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req domain.Generat
 	// Default valid tailored content grounded in seeded default data
 	var skillIDs []string
 	var expID, factID string
-	if req.MasterProfile != nil {
-		if len(req.MasterProfile.Skills) > 0 {
-			skillIDs = []string{req.MasterProfile.Skills[0].ID}
+	if req.MainProfile != nil {
+		if len(req.MainProfile.Skills) > 0 {
+			skillIDs = []string{req.MainProfile.Skills[0].ID}
 		}
-		if len(req.MasterProfile.Experiences) > 0 {
-			expID = req.MasterProfile.Experiences[0].ID
-			if len(req.MasterProfile.Experiences[0].Facts) > 0 {
-				factID = req.MasterProfile.Experiences[0].Facts[0].ID
+		if len(req.MainProfile.Experiences) > 0 {
+			expID = req.MainProfile.Experiences[0].ID
+			if len(req.MainProfile.Experiences[0].Facts) > 0 {
+				factID = req.MainProfile.Experiences[0].Facts[0].ID
 			}
 		}
 	}
@@ -206,7 +206,7 @@ func TestPool_ParallelExecution(t *testing.T) {
 			ID:                 fmt.Sprintf("ver-parallel-%d", i),
 			BranchID:           env.branchID,
 			Status:             domain.VersionStatusPending,
-			MasterRevisionUsed: 1,
+			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -256,8 +256,8 @@ func TestPool_ParallelExecution(t *testing.T) {
 	if b.ActiveVersionID == nil || *b.ActiveVersionID == "" {
 		t.Errorf("expected branch.ActiveVersionID to be set, got nil")
 	}
-	if b.LastSyncedMasterRevision != 1 {
-		t.Errorf("expected LastSyncedMasterRevision 1, got %d", b.LastSyncedMasterRevision)
+	if b.LastSyncedMainRevision != 1 {
+		t.Errorf("expected LastSyncedMainRevision 1, got %d", b.LastSyncedMainRevision)
 	}
 }
 
@@ -272,7 +272,7 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 		ID:                 "ver-block-1",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v1); err != nil {
@@ -396,7 +396,7 @@ func TestPool_GracefulShutdownAndDrain(t *testing.T) {
 			ID:                 fmt.Sprintf("ver-drain-%d", i),
 			BranchID:           env.branchID,
 			Status:             domain.VersionStatusPending,
-			MasterRevisionUsed: 1,
+			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -455,7 +455,7 @@ func TestPool_StartupCrashRecovery(t *testing.T) {
 		ID:                 "ver-lingering-pending",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vPending); err != nil {
@@ -466,7 +466,7 @@ func TestPool_StartupCrashRecovery(t *testing.T) {
 		ID:                 "ver-lingering-processing",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusProcessing,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vProcessing); err != nil {
@@ -524,7 +524,7 @@ func TestPool_LLMErrorTransition(t *testing.T) {
 		ID:                 "ver-llm-fail",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -602,7 +602,7 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 		ID:                 "ver-warn-1",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -644,7 +644,7 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 		ID:                 "ver-stale-pending",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to create v1: %v", err)
@@ -654,7 +654,7 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 		ID:                 "ver-stale-processing",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusProcessing,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
 		t.Fatalf("failed to create v2: %v", err)
@@ -721,7 +721,7 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		ID:                 "ver-panic-1",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, verPanic); err != nil {
@@ -761,7 +761,7 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		ID:                 "ver-success-2",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, verSuccess); err != nil {
@@ -1008,7 +1008,7 @@ func TestWorkerPool_TailoringPipeline_LLMTimeout(t *testing.T) {
 		ID:                 verID,
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 1,
+		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, &ver); err != nil {
@@ -1545,7 +1545,7 @@ func TestPool_GenerationJob_PerTenantConcurrencyCap(t *testing.T) {
 			ID:                 vID,
 			BranchID:           env.branchID,
 			Status:             domain.VersionStatusPending,
-			MasterRevisionUsed: 1,
+			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -1669,7 +1669,7 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 			ID:                 vID,
 			BranchID:           env.branchID,
 			Status:             domain.VersionStatusPending,
-			MasterRevisionUsed: 1,
+			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -1795,7 +1795,7 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 			ID:                 vID,
 			BranchID:           env.branchID,
 			Status:             domain.VersionStatusPending,
-			MasterRevisionUsed: 1,
+			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {

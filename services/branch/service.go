@@ -119,7 +119,7 @@ func (s *service) validateBranchReferences(ctx context.Context, branch *domain.B
 	return nil
 }
 
-// ListBranches returns all branches for the user, optionally filtering for stale branches whose synced revision is behind master.
+// ListBranches returns all branches for the user, optionally filtering for stale branches whose synced revision is behind main.
 func (s *service) ListBranches(ctx context.Context, userID string, staleOnly bool) ([]domain.Branch, error) {
 	branches, err := s.branchRepo.ListBranches(ctx, userID)
 	if err != nil {
@@ -150,7 +150,7 @@ func (s *service) GetBranch(ctx context.Context, userID, id string) (*domain.Bra
 	return s.branchRepo.GetBranch(ctx, userID, id)
 }
 
-// CreateBranch initializes and saves a new resume branch with master revision synchronization.
+// CreateBranch initializes and saves a new resume branch with main revision synchronization.
 func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error) {
 	if err := s.validateBranchReferences(ctx, branch); err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*dom
 	if s.profileRepo != nil {
 		prof, err := s.profileRepo.GetProfile(ctx, branch.UserID)
 		if err == nil && prof != nil {
-			branch.LastSyncedMasterRevision = prof.MasterRevision
+			branch.LastSyncedMainRevision = prof.MainRevision
 		}
 	}
 
@@ -235,7 +235,7 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 		if ver.Status != domain.VersionStatusCompleted && ver.Status != domain.VersionStatusCompletedWithWarnings {
 			return nil, fmt.Errorf("%w: active version %s must be completed (got %s)", domain.ErrValidation, ver.ID, ver.Status)
 		}
-		branch.LastSyncedMasterRevision = ver.MasterRevisionUsed
+		branch.LastSyncedMainRevision = ver.MainRevisionUsed
 	}
 
 	if err := s.branchRepo.UpdateBranch(ctx, branch); err != nil {
@@ -287,14 +287,14 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 		return s.renderDefaultBranchVersion(ctx, userID, branch)
 	}
 
-	var masterRevision int64 = 1
+	var mainRevision int64 = 1
 	provider := branch.ProviderOverride
 	model := branch.ModelOverride
 
 	if s.profileRepo != nil {
 		prof, err := s.profileRepo.GetProfile(ctx, userID)
 		if err == nil && prof != nil {
-			masterRevision = prof.MasterRevision
+			mainRevision = prof.MainRevision
 			if provider == "" {
 				provider = prof.DefaultProvider
 			}
@@ -314,11 +314,11 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 	}
 
 	ver := &domain.BranchVersion{
-		ID:                 "ver-" + uuid.New().String(),
-		UserID:             userID,
-		BranchID:           branch.ID,
-		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: masterRevision,
+		ID:                "ver-" + uuid.New().String(),
+		UserID:            userID,
+		BranchID:          branch.ID,
+		Status:            domain.VersionStatusPending,
+		MainRevisionUsed:  mainRevision,
 		TemplateSetIDUsed:  branch.TemplateSetID,
 		ProviderUsed:       provider,
 		ModelUsed:          model,
@@ -357,7 +357,7 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 
 // SyncBranches regenerates specified branches or all stale branches when branchIDs is empty.
 func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []string) ([]string, error) {
-	var masterRevision int64 = 1
+	var mainRevision int64 = 1
 	var defaultProvider, defaultModel string
 
 	if s.profileRepo != nil {
@@ -365,7 +365,7 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 		if err != nil {
 			return nil, err
 		}
-		masterRevision = prof.MasterRevision
+		mainRevision = prof.MainRevision
 		defaultProvider = prof.DefaultProvider
 		defaultModel = prof.DefaultModel
 	}
@@ -421,11 +421,11 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 		}
 
 		ver := &domain.BranchVersion{
-			ID:                 "ver-" + uuid.New().String(),
-			UserID:             userID,
-			BranchID:           b.ID,
-			Status:             domain.VersionStatusPending,
-			MasterRevisionUsed: masterRevision,
+			ID:               "ver-" + uuid.New().String(),
+			UserID:           userID,
+			BranchID:         b.ID,
+			Status:           domain.VersionStatusPending,
+			MainRevisionUsed: mainRevision,
 			TemplateSetIDUsed:  b.TemplateSetID,
 			ProviderUsed:       provider,
 			ModelUsed:          model,
@@ -520,11 +520,11 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 
 	// 3. Construct immutable sequential version vN+1
 	newVer := &domain.BranchVersion{
-		ID:                 "ver-" + uuid.New().String(),
-		UserID:             branch.UserID,
-		BranchID:           branch.ID,
-		Status:             domain.VersionStatusCompleted,
-		MasterRevisionUsed: snapshot.MasterRevision,
+		ID:               "ver-" + uuid.New().String(),
+		UserID:           branch.UserID,
+		BranchID:         branch.ID,
+		Status:           domain.VersionStatusCompleted,
+		MainRevisionUsed: snapshot.MainRevision,
 		TemplateSetIDUsed:  branch.TemplateSetID,
 		ProviderUsed:       "manual",
 		ModelUsed:          "manual",
@@ -549,7 +549,7 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	return newVer, nil
 }
 
-// renderDefaultBranchVersion synchronously renders a resume version for the default branch directly from the master profile.
+// renderDefaultBranchVersion synchronously renders a resume version for the default branch directly from the main profile.
 func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string, branch *domain.Branch) (*domain.BranchVersion, error) {
 	if s.profileRepo == nil {
 		return nil, errors.New("profile repository required for default branch rendering")
@@ -592,22 +592,22 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 
 	now := time.Now().UTC()
 	ver := &domain.BranchVersion{
-		ID:                 "ver-" + uuid.New().String(),
-		UserID:             userID,
-		BranchID:           branch.ID,
-		Status:             domain.VersionStatusCompleted,
-		MasterRevisionUsed: snapshot.MasterRevision,
-		TemplateSetIDUsed:  branch.TemplateSetID,
-		ProviderUsed:       "none",
-		ModelUsed:          "none",
-		SourceType:         domain.SourceTypeMasterProfile,
-		ParentVersionID:    branch.ActiveVersionID,
-		TailoredContent:    tailoredContent,
-		HTMLOutput:         rendered.HTML,
-		MarkdownOutput:     rendered.Markdown,
-		PlainTextOutput:    rendered.PlainText,
-		CreatedAt:          now,
-		CompletedAt:        &now,
+		ID:                "ver-" + uuid.New().String(),
+		UserID:            userID,
+		BranchID:          branch.ID,
+		Status:            domain.VersionStatusCompleted,
+		MainRevisionUsed:  snapshot.MainRevision,
+		TemplateSetIDUsed: branch.TemplateSetID,
+		ProviderUsed:      "none",
+		ModelUsed:         "none",
+		SourceType:        domain.SourceTypeMainProfile,
+		ParentVersionID:   branch.ActiveVersionID,
+		TailoredContent:   tailoredContent,
+		HTMLOutput:        rendered.HTML,
+		MarkdownOutput:    rendered.Markdown,
+		PlainTextOutput:   rendered.PlainText,
+		CreatedAt:         now,
+		CompletedAt:       &now,
 	}
 
 	if err := s.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -619,12 +619,12 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 	}
 
 	branch.ActiveVersionID = &ver.ID
-	branch.LastSyncedMasterRevision = snapshot.MasterRevision
+	branch.LastSyncedMainRevision = snapshot.MainRevision
 
 	return ver, nil
 }
 
-// AnalyzeGaps performs fast decoupled gap analysis for a branch against the master profile snapshot.
+// AnalyzeGaps performs fast decoupled gap analysis for a branch against the main profile snapshot.
 func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*domain.GapReport, error) {
 	var (
 		rec    *domain.LLMUsageRecord
@@ -677,7 +677,7 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 	var report *domain.GapReport
 	if s.llmService != nil {
 		req := domain.GenerationRequest{
-			MasterProfile: snapshot,
+			MainProfile:   snapshot,
 			BranchContext: *branch,
 		}
 		if analyzer, ok := s.llmService.(interface {
@@ -819,7 +819,7 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 
 	req := domain.GenerationRequest{
 		Model:              model,
-		MasterProfile:      snapshot,
+		MainProfile:        snapshot,
 		GlobalRules:        prof.GlobalWritingRules,
 		PresetInstructions: presetInstructions,
 		Preset:             preset,

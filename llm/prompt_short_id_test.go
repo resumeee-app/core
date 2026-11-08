@@ -9,7 +9,7 @@ import (
 	"resumeee/internal/llm"
 )
 
-// TestBuildPrompt_EntitiesUseShortIDs asserts that serialized master_profile_data contains
+// TestBuildPrompt_EntitiesUseShortIDs asserts that serialized main_profile_data contains
 // short IDs instead of raw 40-character UUIDs across skills, experiences, facts, and projects.
 func TestBuildPrompt_EntitiesUseShortIDs(t *testing.T) {
 	uuidExp := "exp-9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
@@ -18,7 +18,7 @@ func TestBuildPrompt_EntitiesUseShortIDs(t *testing.T) {
 	uuidProj := "proj-55556666-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 
 	req := domain.GenerationRequest{
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{FullName: "Test Candidate"},
 			Skills: []domain.Skill{
 				{
@@ -62,43 +62,43 @@ func TestBuildPrompt_EntitiesUseShortIDs(t *testing.T) {
 		t.Fatalf("unexpected BuildPrompt error: %v", err)
 	}
 
-	// Verify UserPrompt master_profile_data does NOT contain the raw 40-char UUIDs
+	// Verify UserPrompt main_profile_data does NOT contain the raw 40-char UUIDs
 	if strings.Contains(payload.UserPrompt, uuidExp) {
-		t.Errorf("UserPrompt master_profile_data unexpectedly leaked raw experience UUID: %s", uuidExp)
+		t.Errorf("UserPrompt main_profile_data unexpectedly leaked raw experience UUID: %s", uuidExp)
 	}
 	if strings.Contains(payload.UserPrompt, uuidSkill) {
-		t.Errorf("UserPrompt master_profile_data unexpectedly leaked raw skill UUID: %s", uuidSkill)
+		t.Errorf("UserPrompt main_profile_data unexpectedly leaked raw skill UUID: %s", uuidSkill)
 	}
 	if strings.Contains(payload.UserPrompt, uuidFact) {
-		t.Errorf("UserPrompt master_profile_data unexpectedly leaked raw fact UUID: %s", uuidFact)
+		t.Errorf("UserPrompt main_profile_data unexpectedly leaked raw fact UUID: %s", uuidFact)
 	}
 	if strings.Contains(payload.UserPrompt, uuidProj) {
-		t.Errorf("UserPrompt master_profile_data unexpectedly leaked raw project UUID: %s", uuidProj)
+		t.Errorf("UserPrompt main_profile_data unexpectedly leaked raw project UUID: %s", uuidProj)
 	}
 
-	// Verify short IDs ARE present in master_profile_data
+	// Verify short IDs ARE present in main_profile_data
 	if !strings.Contains(payload.UserPrompt, `"id": "exp-1"`) {
-		t.Errorf("UserPrompt master_profile_data missing projected short ID 'exp-1'")
+		t.Errorf("UserPrompt main_profile_data missing projected short ID 'exp-1'")
 	}
 	if !strings.Contains(payload.UserPrompt, `"id": "skill-go"`) {
-		t.Errorf("UserPrompt master_profile_data missing projected short ID 'skill-go'")
+		t.Errorf("UserPrompt main_profile_data missing projected short ID 'skill-go'")
 	}
 	if !strings.Contains(payload.UserPrompt, `"id": "fact-1"`) {
-		t.Errorf("UserPrompt master_profile_data missing projected short ID 'fact-1'")
+		t.Errorf("UserPrompt main_profile_data missing projected short ID 'fact-1'")
 	}
 	if !strings.Contains(payload.UserPrompt, `"id": "proj-1"`) {
-		t.Errorf("UserPrompt master_profile_data missing projected short ID 'proj-1'")
+		t.Errorf("UserPrompt main_profile_data missing projected short ID 'proj-1'")
 	}
 }
 
 // TestBuildPrompt_FactOwnerUsesShortID asserts that child fact owner_id references within
-// serialized master profile data are projected to the parent entity's short identifier.
+// serialized main profile data are projected to the parent entity's short identifier.
 func TestBuildPrompt_FactOwnerUsesShortID(t *testing.T) {
 	uuidExp := "exp-9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 	uuidFact := "fact-3db884b2-f155-442b-9e0a-ef5f8b96d997"
 
 	req := domain.GenerationRequest{
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{FullName: "Test Candidate"},
 			Experiences: []domain.WorkExperience{
 				{
@@ -140,7 +140,7 @@ func TestBuildPrompt_PinnedAndExcludedUseShortID(t *testing.T) {
 	uuidProj := "proj-55556666-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 
 	req := domain.GenerationRequest{
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{FullName: "Test Candidate"},
 			Experiences: []domain.WorkExperience{
 				{
@@ -185,7 +185,7 @@ func TestBuildPrompt_PriorVersionUsesShortID(t *testing.T) {
 	uuidSkill := "skill-12345678-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 
 	req := domain.GenerationRequest{
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{FullName: "Test Candidate"},
 			Skills: []domain.Skill{
 				{ID: uuidSkill, ShortID: "skill-go", Name: "Go"},

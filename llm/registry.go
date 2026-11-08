@@ -164,7 +164,7 @@ func (r *Registry) SetDefault(provider, model string) {
 // 1. GenerationRequest overrides (req.Model, req.BranchContext.ProviderOverride)
 // 2. Branch overrides (branch.ProviderOverride, branch.ModelOverride)
 // 3. Preset overrides (preset.ProviderOverride, preset.ModelOverride)
-// 4. Master Profile defaults (profile.DefaultProvider, profile.DefaultModel)
+// 4. Main Profile defaults (profile.DefaultProvider, profile.DefaultModel)
 // 5. System fallbacks (Registry default provider and model)
 func (r *Registry) Resolve(req domain.GenerationRequest, preset *domain.Preset, profile *domain.Profile) (domain.LLMProvider, string, error) {
 	if preset == nil && req.Preset != nil {

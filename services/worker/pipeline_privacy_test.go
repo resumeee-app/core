@@ -23,7 +23,7 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 		Phone:              "+1 (617) 253-1000",
 		Headline:           "Director of Software Engineering",
 		Summary:            "Margaret Hamilton pioneered asynchronous executive software.",
-		MasterRevision:     2,
+		MainRevision:       2,
 		GlobalWritingRules: "Prioritize mission-critical systems and zero-bug principles.",
 		Profiles: []domain.SocialLink{
 			{Network: "Website", URL: "https://margarethamilton.org"},
@@ -109,7 +109,7 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 		ID:                 "ver-privacy-test",
 		BranchID:           env.branchID,
 		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 2,
+		MainRevisionUsed:   2,
 		TemplateSetIDUsed:  "builtin-standard-clean",
 		SourceType:         domain.SourceTypeLLMGeneration,
 	}

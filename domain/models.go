@@ -46,7 +46,7 @@ type SourceType string
 const (
 	SourceTypeLLMGeneration SourceType = "llm_generation"
 	SourceTypeManualEdit    SourceType = "manual_edit"
-	SourceTypeMasterProfile SourceType = "master_profile"
+	SourceTypeMainProfile   SourceType = "main_profile"
 )
 
 // Location captures standard postal and geographical location attributes.
@@ -93,7 +93,7 @@ type User struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Profile represents the user's Master Profile root and Tier-1 global LLM configuration.
+// Profile represents the user's Main Profile root and Tier-1 global LLM configuration.
 type Profile struct {
 	ID                 string         `json:"id" gorm:"primaryKey;type:text"`
 	UserID             string         `json:"user_id" gorm:"index;not null"`
@@ -107,7 +107,7 @@ type Profile struct {
 	GlobalWritingRules string         `json:"global_writing_rules"` // Tier 1 LLM instructions
 	DefaultProvider    string         `json:"default_provider" gorm:"default:'gemini'"`
 	DefaultModel       string         `json:"default_model" gorm:"default:'gemini-3.8-flash'"`
-	MasterRevision     int64          `json:"master_revision" gorm:"not null;default:1"`
+	MainRevision       int64          `json:"main_revision" gorm:"not null;default:1"`
 	Metadata           map[string]any `json:"metadata,omitempty" gorm:"serializer:json"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
@@ -414,7 +414,7 @@ func (TemplateSet) TableName() string {
 }
 
 // Canonical default branch constants and helpers.
-const DefaultBranchName = "Master Profile (Default)"
+const DefaultBranchName = "Main Profile (Default)"
 
 // DefaultBranchID returns the deterministic branch ID for a user's default untailored branch.
 func DefaultBranchID(userID string) string {
@@ -441,8 +441,8 @@ type TargetResume struct {
 	ExcludedEntityIDs        []string   `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"`
 	ActiveVersionID          *string    `json:"active_version_id,omitempty" gorm:"index"`
 	GapReport                *GapReport `json:"gap_report,omitempty" gorm:"serializer:json"`
-	LastSyncedMasterRevision int64      `json:"last_synced_master_revision"`
-	IsStale                  bool       `json:"is_stale" gorm:"-"` // Computed: LastSyncedMasterRevision < Profile.MasterRevision
+	LastSyncedMainRevision int64      `json:"last_synced_main_revision"`
+	IsStale                bool       `json:"is_stale" gorm:"-"` // Computed: LastSyncedMainRevision < Profile.MainRevision
 	CreatedAt                time.Time  `json:"created_at"`
 	UpdatedAt                time.Time  `json:"updated_at"`
 }
@@ -481,14 +481,14 @@ func (b *TargetResume) BeforeSave(_ *gorm.DB) error {
 }
 
 // CanTailor returns true if the branch/resume can be tailored via LLM or manual bullet edits.
-// Default branches directly render the master profile and cannot be tailored.
+// Default branches directly render the main profile and cannot be tailored.
 func (b *TargetResume) CanTailor() bool {
 	return !b.IsDefault
 }
 
-// IsStaleRevision returns true if the last synced master revision is behind the given master revision.
-func (b *TargetResume) IsStaleRevision(currentMasterRevision int64) bool {
-	return b.LastSyncedMasterRevision < currentMasterRevision
+// IsStaleRevision returns true if the last synced main revision is behind the given main revision.
+func (b *TargetResume) IsStaleRevision(currentMainRevision int64) bool {
+	return b.LastSyncedMainRevision < currentMainRevision
 }
 
 // PresetName returns an empty string on domain.TargetResume, allowing view models to override it.
@@ -518,7 +518,7 @@ type ResumeVersion struct {
 	BranchID           string           `json:"branch_id,omitempty" gorm:"column:branch_id;index"` // Compatibility alias
 	VersionNumber      int              `json:"version_number" gorm:"uniqueIndex:idx_resume_version,priority:2;column:version_number;not null"`
 	Status             VersionStatus    `json:"status" gorm:"index;not null"`
-	MasterRevisionUsed int64            `json:"master_revision_used"`
+	MainRevisionUsed   int64            `json:"main_revision_used"`
 	TemplateSetIDUsed  string           `json:"template_set_id_used"`
 	StrategyIDUsed     *string          `json:"strategy_id_used,omitempty"`
 	ProviderUsed       string           `json:"provider_used"`
@@ -566,10 +566,10 @@ func (v *ResumeVersion) BeforeSave(_ *gorm.DB) error {
 // BranchVersion is an alias to ResumeVersion.
 type BranchVersion = ResumeVersion
 
-// MasterProfileSnapshot is an aggregate capture of the entire career graph at a specific MasterRevision.
-type MasterProfileSnapshot struct {
+// MainProfileSnapshot is an aggregate capture of the entire career graph at a specific MainRevision.
+type MainProfileSnapshot struct {
 	Profile        Profile          `json:"profile"`
-	MasterRevision int64            `json:"master_revision"`
+	MainRevision   int64            `json:"main_revision"`
 	Skills         []Skill          `json:"skills"`
 	Experiences    []WorkExperience `json:"experiences"`
 	Projects       []Project        `json:"projects"`

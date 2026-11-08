@@ -37,7 +37,7 @@ func TestPromptTemplates_EmbeddedFilesExist(t *testing.T) {
 
 func TestBuildGapAnalysisPrompt_Composition(t *testing.T) {
 	req := domain.GenerationRequest{
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{FullName: "Jane Doe"},
 			Skills: []domain.Skill{
 				{ID: "skill-1", ShortID: "skill-1", Name: "Go"},
@@ -99,8 +99,8 @@ func TestBuildGapAnalysisPrompt_Composition(t *testing.T) {
 	if !strings.Contains(payload.UserPrompt, "Focus on cloud-native patterns.") {
 		t.Errorf("gap analysis user prompt missing branch instructions")
 	}
-	if !strings.Contains(payload.UserPrompt, "<master_profile_data>") {
-		t.Errorf("gap analysis user prompt missing master_profile_data tag")
+	if !strings.Contains(payload.UserPrompt, "<main_profile_data>") {
+		t.Errorf("gap analysis user prompt missing main_profile_data tag")
 	}
 	if strings.Contains(payload.UserPrompt, "Jane Doe") {
 		t.Errorf("gap analysis user prompt leaked candidate real name 'Jane Doe'")
@@ -117,7 +117,7 @@ func TestBuildPrompt_Composition(t *testing.T) {
 	req := domain.GenerationRequest{
 		GlobalRules:        "Tier 1: Never write passive voice sentences.",
 		PresetInstructions: "Tier 2: Emphasize metrics and quantified business impact.",
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{FullName: "Alex Mercer"},
 			Experiences: []domain.WorkExperience{
 				{
@@ -215,15 +215,15 @@ func TestBuildPrompt_Composition(t *testing.T) {
 		t.Errorf("user prompt missing projected short ID for excluded entities")
 	}
 
-	// 4. User Prompt - Prior Active Version & Master Profile Data
+	// 4. User Prompt - Prior Active Version & Main Profile Data
 	if !strings.Contains(payload.UserPrompt, "<prior_active_version>") {
 		t.Errorf("user prompt missing prior_active_version tag")
 	}
 	if !strings.Contains(payload.UserPrompt, "Prior active summary highlighting distributed systems.") {
 		t.Errorf("user prompt missing prior version content")
 	}
-	if !strings.Contains(payload.UserPrompt, "<master_profile_data>") {
-		t.Errorf("user prompt missing master_profile_data tag")
+	if !strings.Contains(payload.UserPrompt, "<main_profile_data>") {
+		t.Errorf("user prompt missing main_profile_data tag")
 	}
 	if strings.Contains(payload.UserPrompt, "Alex Mercer") {
 		t.Errorf("user prompt leaked candidate real name 'Alex Mercer'")
@@ -245,7 +245,7 @@ func TestBuildPrompt_MultiLanguageSupport(t *testing.T) {
 		Preset: &domain.Preset{
 			Language: "Spanish",
 		},
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{FullName: "Alex Mercer"},
 		},
 		BranchContext: domain.Branch{
@@ -272,7 +272,7 @@ func TestBuildPrompt_MultiLanguageSupport(t *testing.T) {
 func TestBuildPrompt_InvalidAndRTLTargetLanguage_Rejected(t *testing.T) {
 	baseReq := domain.GenerationRequest{
 		PresetInstructions: "Tier 2: Focus on technical leadership.",
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: domain.Profile{FullName: "Alex Mercer"},
 		},
 		BranchContext: domain.Branch{

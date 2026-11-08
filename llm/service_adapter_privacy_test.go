@@ -88,7 +88,7 @@ func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 			ProviderOverride: "openai",
 			ModelOverride:    "gpt-4o",
 		},
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: *candidateProf,
 		},
 	}
@@ -153,7 +153,7 @@ func TestServiceAdapter_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 			ProviderOverride: "openai",
 			ModelOverride:    "gpt-4o",
 		},
-		MasterProfile: &domain.MasterProfileSnapshot{
+		MainProfile: &domain.MainProfileSnapshot{
 			Profile: *candidateProf,
 		},
 	}

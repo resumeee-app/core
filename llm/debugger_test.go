@@ -939,7 +939,7 @@ func TestFilePromptDebugger_DecodesAndFormatsPromptsAndResponses(t *testing.T) {
 			return fixedTime
 		}))
 
-		xmlPrompt := "System instruction\n<master_profile_data>{\"name\": \"Alice\", \"role\": \"developer\"}</master_profile_data>\nPlease tailor."
+		xmlPrompt := "System instruction\n<main_profile_data>{\"name\": \"Alice\", \"role\": \"developer\"}</main_profile_data>\nPlease tailor."
 		session, err := debugger.StartSession(llm.PromptDebugMeta{
 			Operation:  "tailor",
 			UserPrompt: xmlPrompt,
@@ -964,7 +964,7 @@ func TestFilePromptDebugger_DecodesAndFormatsPromptsAndResponses(t *testing.T) {
 		}
 		promptContent := string(promptBytes)
 
-		if !strings.Contains(promptContent, "<master_profile_data>\n```json\n{\n  \"name\": \"Alice\",\n  \"role\": \"developer\"\n}\n```\n</master_profile_data>") {
+		if !strings.Contains(promptContent, "<main_profile_data>\n```json\n{\n  \"name\": \"Alice\",\n  \"role\": \"developer\"\n}\n```\n</main_profile_data>") {
 			t.Errorf("expected embedded json in xml tag to be formatted, got:\n%s", promptContent)
 		}
 
@@ -974,7 +974,7 @@ func TestFilePromptDebugger_DecodesAndFormatsPromptsAndResponses(t *testing.T) {
 			t.Fatalf("failed to read output file: %v", err)
 		}
 		outputContent := string(outputBytes)
-		if !strings.Contains(outputContent, "<master_profile_data>\n```json\n{\n  \"name\": \"Alice\",\n  \"role\": \"developer\"\n}\n```\n</master_profile_data>") {
+		if !strings.Contains(outputContent, "<main_profile_data>\n```json\n{\n  \"name\": \"Alice\",\n  \"role\": \"developer\"\n}\n```\n</main_profile_data>") {
 			t.Errorf("expected embedded json in xml tag output to be formatted, got:\n%s", outputContent)
 		}
 

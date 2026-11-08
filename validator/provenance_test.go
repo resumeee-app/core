@@ -10,7 +10,7 @@ import (
 	"resumeee/internal/validator"
 )
 
-func sampleSnapshot() *domain.MasterProfileSnapshot {
+func sampleSnapshot() *domain.MainProfileSnapshot {
 	endDate := domain.NewDate(2023, 12, 31)
 	hours := 40
 	contact := domain.ContactDetail{Type: domain.ContactTypePhone, Value: "+1-555-0199"}
@@ -18,7 +18,7 @@ func sampleSnapshot() *domain.MasterProfileSnapshot {
 	eduEnd := domain.NewDate(2018, 5, 31)
 	certDate := domain.NewDate(2022, 5, 1)
 
-	return &domain.MasterProfileSnapshot{
+	return &domain.MainProfileSnapshot{
 		Profile: domain.Profile{
 			ID:       "prof-1",
 			FullName: "Ada Lovelace",

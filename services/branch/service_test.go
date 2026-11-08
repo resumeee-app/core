@@ -97,12 +97,12 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 
 	// Create initial v1
 	v1 := &domain.BranchVersion{
-		ID:                 "ver-init-1",
-		BranchID:           created.ID,
-		Status:             domain.VersionStatusCompleted,
-		MasterRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
-		SourceType:         domain.SourceTypeLLMGeneration,
+		ID:                "ver-init-1",
+		BranchID:          created.ID,
+		Status:            domain.VersionStatusCompleted,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		SourceType:        domain.SourceTypeLLMGeneration,
 	}
 	if err := branchRepo.CreateVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to create v1: %v", err)
@@ -297,10 +297,10 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 		t.Fatalf("failed to create branch 2: %v", err)
 	}
 
-	// Increment master revision to make branches stale
-	_, err = env.profileRepo.IncrementMasterRevision(ctx, env.defaultUser)
+	// Increment main revision to make branches stale
+	_, err = env.profileRepo.IncrementMainRevision(ctx, env.defaultUser)
 	if err != nil {
-		t.Fatalf("failed to increment master revision: %v", err)
+		t.Fatalf("failed to increment main revision: %v", err)
 	}
 
 	// Verify staleness
@@ -346,7 +346,7 @@ func TestService_GenerateVersion(t *testing.T) {
 	}
 }
 
-// 5. Rollback/Promotion updates LastSyncedMasterRevision and reflects staleness
+// 5. Rollback/Promotion updates LastSyncedMainRevision and reflects staleness
 func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 	env := setupTestBranchEnv(t, 10)
 	ctx := context.Background()
@@ -356,38 +356,38 @@ func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get profile: %v", err)
 	}
-	rev1 := prof.MasterRevision
+	rev1 := prof.MainRevision
 
-	// Update initial v1 to have MasterRevisionUsed = rev1
+	// Update initial v1 to have MainRevisionUsed = rev1
 	v1, err := env.branchRepo.GetVersion(ctx, env.branchID, env.v1ID)
 	if err != nil {
 		t.Fatalf("failed to get v1: %v", err)
 	}
-	v1.MasterRevisionUsed = rev1
+	v1.MainRevisionUsed = rev1
 	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to complete v1: %v", err)
 	}
 
-	// Advance profile master revision to rev2
-	rev2, err := env.profileRepo.IncrementMasterRevision(ctx, env.defaultUser)
+	// Advance profile main revision to rev2
+	rev2, err := env.profileRepo.IncrementMainRevision(ctx, env.defaultUser)
 	if err != nil {
-		t.Fatalf("failed to increment master revision: %v", err)
+		t.Fatalf("failed to increment main revision: %v", err)
 	}
 
-	// Create and complete v2 at MasterRevisionUsed = rev2
+	// Create and complete v2 at MainRevisionUsed = rev2
 	v2 := &domain.BranchVersion{
-		ID:                 "ver-v2-test",
-		BranchID:           env.branchID,
-		Status:             domain.VersionStatusCompleted,
-		MasterRevisionUsed: rev2,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
-		SourceType:         domain.SourceTypeLLMGeneration,
+		ID:               "ver-v2-test",
+		BranchID:         env.branchID,
+		Status:           domain.VersionStatusCompleted,
+		MainRevisionUsed: rev2,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		SourceType:       domain.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
-		t.Fatalf("failed to create v2: %v", err)
+		t.Fatalf("create v2: %v", err)
 	}
 	if err := env.branchRepo.CompleteVersion(ctx, v2); err != nil {
-		t.Fatalf("failed to complete v2: %v", err)
+		t.Fatalf("complete v2: %v", err)
 	}
 
 	// Fetch branch - should be active on v2 and not stale (rev2 == profile rev2)
@@ -402,15 +402,15 @@ func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 		t.Fatalf("expected branch not stale when active on v2 (rev %d), but got is_stale=true", rev2)
 	}
 
-	// Rollback active version to v1 (which had MasterRevisionUsed = rev1)
+	// Rollback active version to v1 (which had MainRevisionUsed = rev1)
 	b.ActiveVersionID = &env.v1ID
 	updated, err := env.svc.UpdateBranch(ctx, b)
 	if err != nil {
 		t.Fatalf("UpdateBranch rollback failed: %v", err)
 	}
 
-	if updated.LastSyncedMasterRevision != rev1 {
-		t.Errorf("expected LastSyncedMasterRevision to be rolled back to %d, got %d", rev1, updated.LastSyncedMasterRevision)
+	if updated.LastSyncedMainRevision != rev1 {
+		t.Errorf("expected LastSyncedMainRevision to be rolled back to %d, got %d", rev1, updated.LastSyncedMainRevision)
 	}
 	if !updated.IsStale {
 		t.Errorf("expected branch to be marked stale after rolling back to rev %d (profile is rev %d)", rev1, rev2)
@@ -421,8 +421,8 @@ func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to refetch branch: %v", err)
 	}
-	if refetched.LastSyncedMasterRevision != rev1 {
-		t.Errorf("persisted LastSyncedMasterRevision expected %d, got %d", rev1, refetched.LastSyncedMasterRevision)
+	if refetched.LastSyncedMainRevision != rev1 {
+		t.Errorf("persisted LastSyncedMainRevision expected %d, got %d", rev1, refetched.LastSyncedMainRevision)
 	}
 	if !refetched.IsStale {
 		t.Errorf("persisted branch expected IsStale=true, got false")
@@ -447,12 +447,12 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 	}
 
 	vOther := &domain.BranchVersion{
-		ID:                 "ver-other-branch",
-		BranchID:           created2.ID,
-		Status:             domain.VersionStatusCompleted,
-		MasterRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
-		SourceType:         domain.SourceTypeLLMGeneration,
+		ID:                "ver-other-branch",
+		BranchID:          created2.ID,
+		Status:            domain.VersionStatusCompleted,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		SourceType:        domain.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vOther); err != nil {
 		t.Fatalf("failed to create vOther: %v", err)
@@ -489,12 +489,12 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 
 	// 3. Pending/incomplete version assignment
 	vPending := &domain.BranchVersion{
-		ID:                 "ver-pending-test",
-		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
-		MasterRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
-		SourceType:         domain.SourceTypeLLMGeneration,
+		ID:                "ver-pending-test",
+		BranchID:          env.branchID,
+		Status:            domain.VersionStatusPending,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		SourceType:        domain.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vPending); err != nil {
 		t.Fatalf("failed to create pending version: %v", err)
@@ -537,8 +537,8 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if ver.Status != domain.VersionStatusCompleted {
 			t.Errorf("expected status completed, got %s", ver.Status)
 		}
-		if ver.SourceType != domain.SourceTypeMasterProfile {
-			t.Errorf("expected SourceType %s, got %s", domain.SourceTypeMasterProfile, ver.SourceType)
+		if ver.SourceType != domain.SourceTypeMainProfile {
+			t.Errorf("expected SourceType %s, got %s", domain.SourceTypeMainProfile, ver.SourceType)
 		}
 		if ver.ProviderUsed != "none" || ver.ModelUsed != "none" {
 			t.Errorf("expected provider/model to be none, got %s/%s", ver.ProviderUsed, ver.ModelUsed)
@@ -1085,7 +1085,7 @@ func TestService_GetPromptPreview_ZeroInternalLeakage(t *testing.T) {
 		`"updated_at"`,
 		`"is_global"`,
 		`"metadata"`,
-		`"master_revision"`,
+		`"main_revision"`,
 		`"exported_at"`,
 		`"default_provider"`,
 		`"default_model"`,

@@ -13,12 +13,12 @@ import (
 type Service interface {
 	GetProfile(ctx context.Context, userID string) (*domain.Profile, error)
 	UpdateProfile(ctx context.Context, profile *domain.Profile) error
-	GetSnapshot(ctx context.Context, userID string) (*domain.MasterProfileSnapshot, error)
+	GetSnapshot(ctx context.Context, userID string) (*domain.MainProfileSnapshot, error)
 
 	// JSON Resume Operations
-	ImportJSONResume(ctx context.Context, userID string, payload []byte) (*domain.MasterProfileSnapshot, error)
+	ImportJSONResume(ctx context.Context, userID string, payload []byte) (*domain.MainProfileSnapshot, error)
 	ExportJSONResume(ctx context.Context, userID string, versionID *string) (*JSONResume, error)
-	ExportFromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error)
+	ExportFromSnapshot(snapshot *domain.MainProfileSnapshot) (*JSONResume, error)
 	ExportFromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*JSONResume, error)
 }
 
@@ -43,12 +43,12 @@ func (s *profileService) UpdateProfile(ctx context.Context, profile *domain.Prof
 	return s.profileRepo.UpsertProfile(ctx, profile)
 }
 
-func (s *profileService) GetSnapshot(ctx context.Context, userID string) (*domain.MasterProfileSnapshot, error) {
+func (s *profileService) GetSnapshot(ctx context.Context, userID string) (*domain.MainProfileSnapshot, error) {
 	return s.profileRepo.GetSnapshot(ctx, userID)
 }
 
-// ImportJSONResume parses JSON Resume bytes and atomically replaces the user's master career graph.
-func (s *profileService) ImportJSONResume(ctx context.Context, userID string, payload []byte) (*domain.MasterProfileSnapshot, error) {
+// ImportJSONResume parses JSON Resume bytes and atomically replaces the user's main career graph.
+func (s *profileService) ImportJSONResume(ctx context.Context, userID string, payload []byte) (*domain.MainProfileSnapshot, error) {
 	if len(payload) == 0 {
 		return nil, fmt.Errorf("%w: empty JSON payload", domain.ErrValidation)
 	}
@@ -64,8 +64,8 @@ func (s *profileService) ImportJSONResume(ctx context.Context, userID string, pa
 	}
 
 	revision := int64(1)
-	if existingProfile != nil && existingProfile.MasterRevision > 0 {
-		revision = existingProfile.MasterRevision + 1
+	if existingProfile != nil && existingProfile.MainRevision > 0 {
+		revision = existingProfile.MainRevision + 1
 	}
 
 	var globalSkills []domain.Skill
@@ -85,7 +85,7 @@ func (s *profileService) ImportJSONResume(ctx context.Context, userID string, pa
 	return s.profileRepo.GetSnapshot(ctx, userID)
 }
 
-// ExportJSONResume exports either the master profile snapshot or a specific branch version into JSON Resume format.
+// ExportJSONResume exports either the main profile snapshot or a specific branch version into JSON Resume format.
 func (s *profileService) ExportJSONResume(ctx context.Context, userID string, versionID *string) (*JSONResume, error) {
 	if versionID == nil || *versionID == "" {
 		snapshot, err := s.profileRepo.GetSnapshot(ctx, userID)
@@ -124,7 +124,7 @@ func (s *profileService) ExportJSONResume(ctx context.Context, userID string, ve
 	return s.ExportFromTailored(prof, targetVersion.TailoredContent)
 }
 
-func (s *profileService) ExportFromSnapshot(snapshot *domain.MasterProfileSnapshot) (*JSONResume, error) {
+func (s *profileService) ExportFromSnapshot(snapshot *domain.MainProfileSnapshot) (*JSONResume, error) {
 	return FromSnapshot(snapshot)
 }
 

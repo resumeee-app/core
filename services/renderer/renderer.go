@@ -61,7 +61,7 @@ func putBuffer(b *bytes.Buffer) {
 	}
 }
 
-// RenderContext binds the Master Profile, Tailored Content, and template styling into a unified execution context.
+// RenderContext binds the Main Profile, Tailored Content, and template styling into a unified execution context.
 type RenderContext struct {
 	// Root shortcuts for ergonomic and backward-compatible template authoring
 	FullName       string

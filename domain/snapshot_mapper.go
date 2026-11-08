@@ -2,9 +2,9 @@ package domain
 
 import "strings"
 
-// SnapshotToTailoredContent deterministically projects a MasterProfileSnapshot into TailoredContent
+// SnapshotToTailoredContent deterministically projects a MainProfileSnapshot into TailoredContent
 // preserving 100% fidelity with zero LLM alteration, omissions, or prompt overrides.
-func SnapshotToTailoredContent(snapshot *MasterProfileSnapshot) *TailoredContent {
+func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 	if snapshot == nil {
 		return &TailoredContent{
 			SkillGroups:    []TailoredSkillGroup{},

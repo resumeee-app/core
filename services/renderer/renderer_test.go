@@ -914,3 +914,126 @@ func TestStripScriptTags(t *testing.T) {
 	}
 }
 
+func TestRenderer_AllEntityFieldsAccessible(t *testing.T) {
+	ctx := context.Background()
+	engine := renderer.New()
+
+	tmpl := domain.TemplateSet{
+		ID:     "tmpl-comprehensive-fields",
+		UserID: "user-1",
+		Name:   "All Fields Template",
+		HTMLTemplate: `<div>
+{{range .Experiences}}
+  <span class="emp-type">{{.EmploymentType}}</span>
+  <span class="is-current">{{.IsCurrent}}</span>
+  <span class="company-loc">{{.CompanyLocation.City}}, {{.CompanyLocation.Region}}</span>
+  <span class="hours">{{.HoursPerWeek}}</span>
+  <span class="supervisor">{{.SupervisorName}} ({{.SupervisorContact}})</span>
+  <span class="duties">{{.DutiesSummary}}</span>
+  <span class="exp-meta">{{index .Metadata "custom_meta"}}</span>
+{{end}}
+{{range .Education}}
+  <span class="edu-score">{{.Score}}</span>
+  <span class="edu-meta">{{index .Metadata "honors"}}</span>
+{{end}}
+{{range .Projects}}
+  <span class="proj-summary">{{.Summary}}</span>
+  <span class="proj-meta">{{index .Metadata "stars"}}</span>
+{{end}}
+{{range .Certifications}}
+  <span class="cert-summary">{{.Summary}}</span>
+  <span class="cert-meta">{{index .Metadata "badge"}}</span>
+{{end}}
+</div>`,
+		MarkdownTemplate: `# Resume
+{{range .Experiences}}
+- {{.Company}} [{{.EmploymentType}}] (Current: {{.IsCurrent}})
+  Duties: {{.DutiesSummary}}
+  Hours: {{.HoursPerWeek}}
+  Supervisor: {{.SupervisorName}}
+{{end}}
+{{range .Certifications}}
+- {{.Name}}: {{.Summary}}
+{{end}}`,
+		TextTemplate: `{{range .Experiences}}{{.Company}}: {{.EmploymentType}}, {{.DutiesSummary}}{{end}}`,
+	}
+
+	hours := 40
+	content := &domain.TailoredContent{
+		Experiences: []domain.TailoredExperience{
+			{
+				Company:           "Acme Technologies",
+				RoleTitle:         "Lead Systems Architect",
+				EmploymentType:    domain.EmploymentTypeFullTime,
+				IsCurrent:         true,
+				CompanyLocation:   domain.Location{City: "San Francisco", Region: "CA"},
+				HoursPerWeek:      &hours,
+				SupervisorName:    "Jane Doe",
+				SupervisorContact: "jane@acme.com",
+				DutiesSummary:     "Architected distributed event pipelines.",
+				Metadata:          map[string]any{"custom_meta": "level-7"},
+			},
+		},
+		Education: []domain.TailoredEducation{
+			{
+				Institution: "MIT",
+				Degree:      "B.S.",
+				Score:       "Summa Cum Laude",
+				Metadata:    map[string]any{"honors": "Dean's List"},
+			},
+		},
+		Projects: []domain.TailoredProject{
+			{
+				Name:     "Kube-Scale",
+				Summary:  "Distributed autoscaler for Kubernetes.",
+				Metadata: map[string]any{"stars": "1.2k"},
+			},
+		},
+		Certifications: []domain.TailoredCert{
+			{
+				Name:     "Certified Kubernetes Administrator",
+				Issuer:   "CNCF",
+				Summary:  "Comprehensive mastery of Kubernetes cluster administration.",
+				Metadata: map[string]any{"badge": "gold"},
+			},
+		},
+	}
+
+	out, err := engine.Render(ctx, &tmpl, &domain.Profile{FullName: "Test User"}, content)
+	if err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+
+	expectedSubstrings := []string{
+		"Full-time",
+		"true",
+		"San Francisco, CA",
+		"40",
+		"Jane Doe (jane@acme.com)",
+		"Architected distributed event pipelines.",
+		"level-7",
+		"Summa Cum Laude",
+		"Dean's List",
+		"Distributed autoscaler for Kubernetes.",
+		"1.2k",
+		"Comprehensive mastery of Kubernetes cluster administration.",
+		"gold",
+	}
+
+	for _, s := range expectedSubstrings {
+		if s == "Dean's List" {
+			if !strings.Contains(out.HTML, "Dean&#39;s List") && !strings.Contains(out.HTML, "Dean's List") {
+				t.Errorf("HTML output missing expected string: %q", s)
+			}
+			continue
+		}
+		if !strings.Contains(out.HTML, s) {
+			t.Errorf("HTML output missing expected string: %q", s)
+		}
+	}
+	if !strings.Contains(out.Markdown, "Comprehensive mastery of Kubernetes cluster administration.") {
+		t.Errorf("Markdown output missing certification summary")
+	}
+}
+
+

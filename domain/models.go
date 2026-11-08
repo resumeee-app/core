@@ -328,7 +328,6 @@ type TailoringStrategy struct {
 	TemplateSetID      string    `json:"template_set_id,omitempty" gorm:"column:template_set_id"`
 
 	Language           string    `json:"language" gorm:"default:'English';not null"`
-	IncludeAdminFields bool      `json:"include_admin_fields"`      // Government / visa CV admin fields
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }

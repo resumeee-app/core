@@ -2,6 +2,33 @@ package domain
 
 import "strings"
 
+// cloneDate returns a defensive copy of a Date pointer.
+func cloneDate(d *Date) *Date {
+	if d == nil {
+		return nil
+	}
+	cp := *d
+	return &cp
+}
+
+// cloneContactDetail returns a defensive copy of a ContactDetail pointer.
+func cloneContactDetail(c *ContactDetail) *ContactDetail {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	return &cp
+}
+
+// cloneInt returns a defensive copy of an int pointer.
+func cloneInt(i *int) *int {
+	if i == nil {
+		return nil
+	}
+	cp := *i
+	return &cp
+}
+
 // SnapshotToTailoredContent deterministically projects a MainProfileSnapshot into TailoredContent
 // preserving 100% fidelity with zero LLM alteration, omissions, or prompt overrides.
 func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
@@ -96,16 +123,19 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 			SourceEntityID:    exp.ID,
 			Company:           exp.Company,
 			RoleTitle:         exp.RoleTitle,
+			EmploymentType:    exp.EmploymentType,
 			StartDate:         exp.StartDate,
-			EndDate:           exp.EndDate,
+			EndDate:           cloneDate(exp.EndDate),
+			IsCurrent:         exp.IsCurrent,
 			Location:          exp.Location,
 			CompanyLocation:   exp.CompanyLocation,
-			CompanyContact:    exp.CompanyContact,
-			HoursPerWeek:      exp.HoursPerWeek,
+			CompanyContact:    cloneContactDetail(exp.CompanyContact),
+			HoursPerWeek:      cloneInt(exp.HoursPerWeek),
 			SupervisorName:    exp.SupervisorName,
 			SupervisorContact: exp.SupervisorContact,
 			DutiesSummary:     exp.DutiesSummary,
 			Bullets:           mapFactsToBullets(facts),
+			Metadata:          CloneMetadata(exp.Metadata),
 		})
 	}
 
@@ -120,10 +150,11 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 			Name:           proj.Name,
 			Role:           proj.Role,
 			URL:            proj.URL,
-			StartDate:      proj.StartDate,
-			EndDate:        proj.EndDate,
+			StartDate:      cloneDate(proj.StartDate),
+			EndDate:        cloneDate(proj.EndDate),
 			Summary:        proj.Summary,
 			Bullets:        mapFactsToBullets(facts),
+			Metadata:       CloneMetadata(proj.Metadata),
 		})
 	}
 
@@ -138,11 +169,12 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 			Institution:    edu.Institution,
 			Degree:         edu.Degree,
 			Field:          edu.Field,
-			StartDate:      edu.StartDate,
-			EndDate:        edu.EndDate,
+			StartDate:      cloneDate(edu.StartDate),
+			EndDate:        cloneDate(edu.EndDate),
 			Location:       edu.Location,
 			Score:          edu.Score,
 			Bullets:        mapFactsToBullets(facts),
+			Metadata:       CloneMetadata(edu.Metadata),
 		})
 	}
 
@@ -152,8 +184,10 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 			SourceEntityID: cert.ID,
 			Name:           cert.Name,
 			Issuer:         cert.Issuer,
-			Date:           cert.Date,
+			Date:           cloneDate(cert.Date),
 			URL:            cert.URL,
+			Summary:        cert.Summary,
+			Metadata:       CloneMetadata(cert.Metadata),
 		})
 	}
 

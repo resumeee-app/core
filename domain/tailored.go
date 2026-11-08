@@ -2,9 +2,18 @@ package domain
 
 import (
 	"encoding/json"
+	"maps"
 	"math"
 	"strings"
 )
+
+// CloneMetadata returns a defensive shallow copy of an entity metadata map, or nil if m is nil.
+func CloneMetadata(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	return maps.Clone(m)
+}
 
 // GapImportance represents the severity or tier of an identified gap.
 type GapImportance string
@@ -38,8 +47,10 @@ type TailoredExperience struct {
 	SourceEntityID    string           `json:"source_entity_id"` // Must match a WorkExperience.ID
 	Company           string           `json:"company"`
 	RoleTitle         string           `json:"role_title"`
+	EmploymentType    EmploymentType   `json:"employment_type,omitempty"`
 	StartDate         Date             `json:"start_date"`
 	EndDate           *Date            `json:"end_date,omitempty"`
+	IsCurrent         bool             `json:"is_current,omitempty"`
 	Location          Location         `json:"location,omitempty,omitzero"`
 	CompanyLocation   Location         `json:"company_location,omitempty,omitzero"`
 	CompanyContact    *ContactDetail   `json:"company_contact,omitempty"`
@@ -48,6 +59,7 @@ type TailoredExperience struct {
 	SupervisorContact string           `json:"supervisor_contact,omitempty"`
 	DutiesSummary     string           `json:"duties_summary,omitempty"`
 	Bullets           []TailoredBullet `json:"bullets"`
+	Metadata          map[string]any   `json:"metadata,omitempty"`
 }
 
 // BulletPoints provides backward-compatibility for template property access.
@@ -63,6 +75,7 @@ type TailoredProject struct {
 	EndDate        *Date            `json:"end_date,omitempty"`
 	Summary        string           `json:"summary,omitempty"`
 	Bullets        []TailoredBullet `json:"bullets"`
+	Metadata       map[string]any   `json:"metadata,omitempty"`
 }
 
 // BulletPoints provides backward-compatibility for template property access.
@@ -79,6 +92,7 @@ type TailoredEducation struct {
 	Location       Location         `json:"location,omitempty,omitzero"`
 	Score          string           `json:"score,omitempty"`
 	Bullets        []TailoredBullet `json:"bullets,omitempty"`
+	Metadata       map[string]any   `json:"metadata,omitempty"`
 }
 
 // BulletPoints provides backward-compatibility for template property access.
@@ -86,11 +100,13 @@ func (d TailoredEducation) BulletPoints() []TailoredBullet { return d.Bullets }
 
 // TailoredCert captures tailored professional credentials.
 type TailoredCert struct {
-	SourceEntityID string `json:"source_entity_id"` // Must match a Certification.ID
-	Name           string `json:"name"`
-	Issuer         string `json:"issuer"`
-	Date           *Date  `json:"date,omitempty"`
-	URL            string `json:"url,omitempty"`
+	SourceEntityID string         `json:"source_entity_id"` // Must match a Certification.ID
+	Name           string         `json:"name"`
+	Issuer         string         `json:"issuer"`
+	Date           *Date          `json:"date,omitempty"`
+	URL            string         `json:"url,omitempty"`
+	Summary        string         `json:"summary,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 // TailoredBullet represents an individual resume bullet with explicit citations to source Facts and Skills.

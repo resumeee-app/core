@@ -863,6 +863,11 @@ func TestValidatorInterfaceAndNew(t *testing.T) {
 func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	snapshot := sampleSnapshot()
 	snapshot.Experiences[0].Location = domain.Location{City: "San Francisco", Region: "CA", CountryCode: "USA"}
+	snapshot.Experiences[0].EmploymentType = domain.EmploymentTypeContract
+	snapshot.Experiences[0].Metadata = map[string]any{"clearance": "Top Secret"}
+	snapshot.Projects[0].Metadata = map[string]any{"stars": 120}
+	snapshot.Education[0].Metadata = map[string]any{"honors": "cum laude"}
+	snapshot.Certifications[0].Metadata = map[string]any{"badge_id": "CKA-1234"}
 
 	adversarialEndDate := domain.NewDate(2099, 1, 1)
 	advProjStart := domain.NewDate(1991, 1, 1)
@@ -875,9 +880,11 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				SourceEntityID: "exp-1",
 				Company:        "Hallucinated Stripe Inc",
 				RoleTitle:      "Chief Executive Officer",
+				EmploymentType: domain.EmploymentTypeFullTime,
 				StartDate:      domain.NewDate(1990, 1, 1),
 				EndDate:        &adversarialEndDate,
 				Location:       domain.Location{City: "Atlantis", CountryCode: "XX"},
+				Metadata:       map[string]any{"clearance": "Public", "injected": "exploit"},
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Architected streaming pipeline handling 100k eps.",
@@ -893,6 +900,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				Role:           "Lead Architect",
 				URL:            "https://fake.example.com",
 				StartDate:      &advProjStart,
+				Metadata:       map[string]any{"stars": 999999, "injected": "exploit"},
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Maintained custom exporter plugin",
@@ -908,6 +916,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				Degree:         "Ph.D.",
 				Field:          "Astrophysics",
 				StartDate:      &advEduStart,
+				Metadata:       map[string]any{"honors": "summa cum laude", "injected": "exploit"},
 				Bullets: []domain.TailoredBullet{
 					{
 						Text:          "Published research on distributed consensus",
@@ -923,6 +932,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				Issuer:         "Nobel Committee",
 				Date:           &advCertDate,
 				URL:            "https://fake-nobel.com",
+				Metadata:       map[string]any{"badge_id": "FORGED", "injected": "exploit"},
 			},
 		},
 	}
@@ -940,6 +950,9 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	if exp.RoleTitle != "Principal Engineer" {
 		t.Errorf("expected RoleTitle 'Principal Engineer', got '%s'", exp.RoleTitle)
 	}
+	if exp.EmploymentType != domain.EmploymentTypeContract {
+		t.Errorf("expected EmploymentType %q, got %q", domain.EmploymentTypeContract, exp.EmploymentType)
+	}
 	if exp.StartDate.String() != "2021-01-01" {
 		t.Errorf("expected StartDate '2021-01-01', got '%s'", exp.StartDate)
 	}
@@ -949,11 +962,23 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	if exp.Location.City != "San Francisco" {
 		t.Errorf("expected Location.City 'San Francisco', got '%s'", exp.Location.City)
 	}
+	if exp.Metadata["clearance"] != "Top Secret" {
+		t.Errorf("expected clearance 'Top Secret', got %v", exp.Metadata["clearance"])
+	}
+	if _, exists := exp.Metadata["injected"]; exists {
+		t.Errorf("expected injected metadata key to be omitted, got %v", exp.Metadata["injected"])
+	}
 
 	// 2. Project headers must be strictly reconciled to snapshot values
 	proj := res.SanitizedContent.Projects[0]
 	if proj.Name != "OpenTelemetry Collector Exporter" {
 		t.Errorf("expected Project Name 'OpenTelemetry Collector Exporter', got '%s'", proj.Name)
+	}
+	if proj.Metadata["stars"] != 120 {
+		t.Errorf("expected stars 120, got %v", proj.Metadata["stars"])
+	}
+	if _, exists := proj.Metadata["injected"]; exists {
+		t.Errorf("expected injected metadata key on project to be omitted, got %v", proj.Metadata["injected"])
 	}
 
 	// 3. Education headers must be strictly reconciled to snapshot values
@@ -970,6 +995,12 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	if edu.StartDate == nil || edu.StartDate.String() != "2014-09-01" {
 		t.Errorf("expected StartDate '2014-09-01', got '%s'", edu.StartDate)
 	}
+	if edu.Metadata["honors"] != "cum laude" {
+		t.Errorf("expected honors 'cum laude', got %v", edu.Metadata["honors"])
+	}
+	if _, exists := edu.Metadata["injected"]; exists {
+		t.Errorf("expected injected metadata key on education to be omitted, got %v", edu.Metadata["injected"])
+	}
 
 	// 4. Certification headers must be strictly reconciled to snapshot values
 	cert := res.SanitizedContent.Certifications[0]
@@ -981,6 +1012,76 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	}
 	if cert.Date == nil || cert.Date.String() != "2022-05-01" {
 		t.Errorf("expected Cert Date '2022-05-01', got '%s'", cert.Date)
+	}
+	if cert.Metadata["badge_id"] != "CKA-1234" {
+		t.Errorf("expected badge_id 'CKA-1234', got %v", cert.Metadata["badge_id"])
+	}
+	if _, exists := cert.Metadata["injected"]; exists {
+		t.Errorf("expected injected metadata key on cert to be omitted, got %v", cert.Metadata["injected"])
+	}
+}
+
+func TestValidate_Immutability_SnapshotPreserved(t *testing.T) {
+	snapshot := sampleSnapshot()
+	snapshot.Experiences[0].Metadata = map[string]any{"dept": "Engineering"}
+	snapshot.Experiences[0].EndDate = domain.DatePtr(domain.NewDate(2023, 12, 31))
+	snapshot.Projects[0].Metadata = map[string]any{"repo": "github.com/foo/bar"}
+	snapshot.Projects[0].StartDate = domain.DatePtr(domain.NewDate(2021, 5, 1))
+	snapshot.Education[0].Metadata = map[string]any{"gpa": "3.9"}
+	snapshot.Education[0].StartDate = domain.DatePtr(domain.NewDate(2014, 9, 1))
+	snapshot.Certifications[0].Metadata = map[string]any{"tier": "professional"}
+	snapshot.Certifications[0].Date = domain.DatePtr(domain.NewDate(2022, 5, 1))
+
+	content := sampleValidContent()
+	res, err := validator.Validate(content, snapshot, nil)
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+
+	// Mutate sanitized content in-place
+	res.SanitizedContent.Experiences[0].Metadata["dept"] = "Tampered Dept"
+	res.SanitizedContent.Experiences[0].Metadata["injected"] = "tampered"
+	*res.SanitizedContent.Experiences[0].EndDate = domain.NewDate(1999, 1, 1)
+
+	res.SanitizedContent.Projects[0].Metadata["repo"] = "tampered"
+	*res.SanitizedContent.Projects[0].StartDate = domain.NewDate(1999, 1, 1)
+
+	res.SanitizedContent.Education[0].Metadata["gpa"] = "1.0"
+	*res.SanitizedContent.Education[0].StartDate = domain.NewDate(1999, 1, 1)
+
+	res.SanitizedContent.Certifications[0].Metadata["tier"] = "tampered"
+	*res.SanitizedContent.Certifications[0].Date = domain.NewDate(1999, 1, 1)
+
+	// Verify snapshot remains completely unmutated
+	if snapshot.Experiences[0].Metadata["dept"] != "Engineering" {
+		t.Errorf("snapshot experience metadata was mutated: got %v, want 'Engineering'", snapshot.Experiences[0].Metadata["dept"])
+	}
+	if _, exists := snapshot.Experiences[0].Metadata["injected"]; exists {
+		t.Errorf("snapshot experience metadata gained unexpected key 'injected'")
+	}
+	if snapshot.Experiences[0].EndDate.String() != "2023-12-31" {
+		t.Errorf("snapshot experience EndDate was mutated: got %s, want 2023-12-31", snapshot.Experiences[0].EndDate)
+	}
+
+	if snapshot.Projects[0].Metadata["repo"] != "github.com/foo/bar" {
+		t.Errorf("snapshot project metadata was mutated: got %v, want 'github.com/foo/bar'", snapshot.Projects[0].Metadata["repo"])
+	}
+	if snapshot.Projects[0].StartDate.String() != "2021-05-01" {
+		t.Errorf("snapshot project StartDate was mutated: got %s, want 2021-05-01", snapshot.Projects[0].StartDate)
+	}
+
+	if snapshot.Education[0].Metadata["gpa"] != "3.9" {
+		t.Errorf("snapshot education metadata was mutated: got %v, want '3.9'", snapshot.Education[0].Metadata["gpa"])
+	}
+	if snapshot.Education[0].StartDate.String() != "2014-09-01" {
+		t.Errorf("snapshot education StartDate was mutated: got %s, want 2014-09-01", snapshot.Education[0].StartDate)
+	}
+
+	if snapshot.Certifications[0].Metadata["tier"] != "professional" {
+		t.Errorf("snapshot cert metadata was mutated: got %v, want 'professional'", snapshot.Certifications[0].Metadata["tier"])
+	}
+	if snapshot.Certifications[0].Date.String() != "2022-05-01" {
+		t.Errorf("snapshot cert Date was mutated: got %s, want 2022-05-01", snapshot.Certifications[0].Date)
 	}
 }
 

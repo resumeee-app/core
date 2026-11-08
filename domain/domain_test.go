@@ -218,7 +218,6 @@ func TestPresetsAndBranches(t *testing.T) {
 		Description:        "Ultra-concise engineering resume",
 		SystemInstructions: "Focus on metrics and active verbs.",
 		TemplateSetID:      "tmpl-1",
-		IncludeAdminFields: false,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}

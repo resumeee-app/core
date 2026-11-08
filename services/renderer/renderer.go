@@ -195,8 +195,10 @@ func SyntheticRenderContext() *RenderContext {
 				SourceEntityID:    "exp-1",
 				Company:           "Acme Corp",
 				RoleTitle:         "Senior Software Engineer",
+				EmploymentType:    domain.EmploymentTypeFullTime,
 				StartDate:         domain.NewDate(2020, 1, 1),
 				EndDate:           &endDate,
+				IsCurrent:         false,
 				Location:          domain.Location{City: "San Francisco", Region: "CA"},
 				CompanyLocation:   domain.Location{City: "San Francisco", Region: "CA"},
 				CompanyContact:    &domain.ContactDetail{Type: domain.ContactTypeEmail, Value: "hr@acme.com"},
@@ -244,6 +246,7 @@ func SyntheticRenderContext() *RenderContext {
 				Issuer:         "CNCF",
 				Date:           &certDate,
 				URL:            "https://cncf.io/cert/cka",
+				Summary:        "Demonstrated proficiency in cluster architecture and cloud native tooling.",
 			},
 		},
 		Profile: &domain.Profile{

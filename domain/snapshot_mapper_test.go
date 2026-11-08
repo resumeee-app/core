@@ -103,8 +103,10 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					ID:                "exp-1",
 					Company:           "Acme Corp",
 					RoleTitle:         "Principal Engineer",
+					EmploymentType:    domain.EmploymentTypeFullTime,
 					StartDate:         domain.NewDate(2021, 1, 1),
 					EndDate:           &endDate,
+					IsCurrent:         false,
 					Location:          domain.Location{City: "San Francisco", Region: "CA"},
 					CompanyLocation:   domain.Location{City: "San Francisco", Region: "CA"},
 					CompanyContact:    &domain.ContactDetail{Type: domain.ContactTypeEmail, Value: "hr@acme.corp"},
@@ -112,6 +114,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					SupervisorName:    "Jane Doe",
 					SupervisorContact: "jane@acme.corp",
 					DutiesSummary:     "Architected distributed platform systems.",
+					Metadata:          map[string]any{"level": "principal"},
 					Facts: []domain.Fact{
 						{
 							ID:        "fact-1",
@@ -138,6 +141,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					URL:       "https://github.com/example/resumeee",
 					StartDate: &projStart,
 					Summary:   "Open-source resume management system.",
+					Metadata:  map[string]any{"stars": 500},
 					Facts: []domain.Fact{
 						{
 							ID:        "fact-3",
@@ -158,6 +162,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					StartDate:   &eduStart,
 					EndDate:     &endDate,
 					Score:       "3.9 GPA",
+					Metadata:    map[string]any{"honors": "cum laude"},
 					Facts: []domain.Fact{
 						{
 							ID:        "fact-4",
@@ -168,11 +173,13 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 			},
 			Certifications: []domain.Certification{
 				{
-					ID:     "cert-1",
-					Name:   "Certified Kubernetes Administrator",
-					Issuer: "Cloud Native Computing Foundation",
-					Date:   &certDate,
-					URL:    "https://cncf.io/cert/cka",
+					ID:       "cert-1",
+					Name:     "Certified Kubernetes Administrator",
+					Issuer:   "Cloud Native Computing Foundation",
+					Date:     &certDate,
+					URL:      "https://cncf.io/cert/cka",
+					Summary:  "Hands-on CKA certification.",
+					Metadata: map[string]any{"accredited": true},
 				},
 			},
 		}
@@ -219,6 +226,12 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 		if exp.SourceEntityID != "exp-1" || exp.Company != "Acme Corp" || exp.RoleTitle != "Principal Engineer" {
 			t.Errorf("unexpected experience header: %+v", exp)
 		}
+		if exp.EmploymentType != domain.EmploymentTypeFullTime || exp.IsCurrent {
+			t.Errorf("unexpected experience employment type or current status: %+v", exp)
+		}
+		if exp.Metadata["level"] != "principal" {
+			t.Errorf("unexpected experience metadata: %+v", exp.Metadata)
+		}
 		if !exp.StartDate.EqualDate(domain.NewDate(2021, 1, 1)) || exp.EndDate == nil || !exp.EndDate.EqualDate(endDate) {
 			t.Errorf("unexpected experience dates: %+v", exp)
 		}
@@ -249,6 +262,9 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 		if proj.SourceEntityID != "proj-1" || proj.Name != "Resumeee Engine" || proj.Role != "Creator" {
 			t.Errorf("unexpected project: %+v", proj)
 		}
+		if proj.Metadata["stars"] != 500 {
+			t.Errorf("unexpected project metadata: %+v", proj.Metadata)
+		}
 		if len(proj.Bullets) != 1 || proj.Bullets[0].Text != "Implemented AST template parser with 100% test coverage." {
 			t.Errorf("unexpected project bullets: %+v", proj.Bullets)
 		}
@@ -264,6 +280,9 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 		if edu.SourceEntityID != "edu-1" || edu.Institution != "State University" || edu.Score != "3.9 GPA" {
 			t.Errorf("unexpected education: %+v", edu)
 		}
+		if edu.Metadata["honors"] != "cum laude" {
+			t.Errorf("unexpected education metadata: %+v", edu.Metadata)
+		}
 		if len(edu.Bullets) != 1 || edu.Bullets[0].Text != "Dean's Honor List all semesters." {
 			t.Errorf("unexpected education bullets: %+v", edu.Bullets)
 		}
@@ -278,6 +297,9 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 		cert := res.Certifications[0]
 		if cert.SourceEntityID != "cert-1" || cert.Name != "Certified Kubernetes Administrator" || cert.Issuer != "Cloud Native Computing Foundation" {
 			t.Errorf("unexpected certification: %+v", cert)
+		}
+		if cert.Summary != "Hands-on CKA certification." || cert.Metadata["accredited"] != true {
+			t.Errorf("unexpected certification summary or metadata: %+v", cert)
 		}
 	})
 
@@ -356,6 +378,110 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 		}
 		if res.SkillGroups[1].Category != "Database" || !reflect.DeepEqual(res.SkillGroups[1].Skills, []string{"PostgreSQL"}) {
 			t.Errorf("database skill group mismatch: %+v", res.SkillGroups[1])
+		}
+	})
+
+	t.Run("mutating returned tailored content pointers or metadata does not mutate snapshot", func(t *testing.T) {
+		endDate := domain.NewDate(2023, 12, 31)
+		projStart := domain.NewDate(2020, 1, 1)
+		eduStart := domain.NewDate(2015, 9, 1)
+		certDate := domain.NewDate(2021, 5, 1)
+		hours := 40
+		contact := domain.ContactDetail{Type: domain.ContactTypePhone, Value: "+1-555-0100"}
+
+		snap := &domain.MainProfileSnapshot{
+			Experiences: []domain.WorkExperience{
+				{
+					ID:             "exp-1",
+					Company:        "Acme",
+					RoleTitle:      "Lead",
+					StartDate:      domain.NewDate(2021, 1, 1),
+					EndDate:        &endDate,
+					CompanyContact: &contact,
+					HoursPerWeek:   &hours,
+					Metadata:       map[string]any{"sec_level": "secret"},
+				},
+			},
+			Projects: []domain.Project{
+				{
+					ID:        "proj-1",
+					Name:      "Tool",
+					StartDate: &projStart,
+					Metadata:  map[string]any{"status": "active"},
+				},
+			},
+			Education: []domain.Education{
+				{
+					ID:          "edu-1",
+					Institution: "Uni",
+					StartDate:   &eduStart,
+					Metadata:    map[string]any{"gpa": "3.8"},
+				},
+			},
+			Certifications: []domain.Certification{
+				{
+					ID:       "cert-1",
+					Name:     "Cloud Cert",
+					Date:     &certDate,
+					Metadata: map[string]any{"credential_id": "ABC"},
+				},
+			},
+		}
+
+		res := domain.SnapshotToTailoredContent(snap)
+
+		// Mutate fields in res
+		*res.Experiences[0].EndDate = domain.NewDate(1990, 1, 1)
+		res.Experiences[0].CompanyContact.Value = "+1-999-9999"
+		*res.Experiences[0].HoursPerWeek = 10
+		res.Experiences[0].Metadata["sec_level"] = "tampered"
+		res.Experiences[0].Metadata["extra"] = "injected"
+
+		*res.Projects[0].StartDate = domain.NewDate(1990, 1, 1)
+		res.Projects[0].Metadata["status"] = "tampered"
+
+		*res.Education[0].StartDate = domain.NewDate(1990, 1, 1)
+		res.Education[0].Metadata["gpa"] = "tampered"
+
+		*res.Certifications[0].Date = domain.NewDate(1990, 1, 1)
+		res.Certifications[0].Metadata["credential_id"] = "tampered"
+
+		// Assert snap is preserved
+		if snap.Experiences[0].EndDate.String() != "2023-12-31" {
+			t.Errorf("snap experience EndDate mutated: got %s, want 2023-12-31", snap.Experiences[0].EndDate)
+		}
+		if snap.Experiences[0].CompanyContact.Value != "+1-555-0100" {
+			t.Errorf("snap experience CompanyContact mutated: got %s, want +1-555-0100", snap.Experiences[0].CompanyContact.Value)
+		}
+		if *snap.Experiences[0].HoursPerWeek != 40 {
+			t.Errorf("snap experience HoursPerWeek mutated: got %d, want 40", *snap.Experiences[0].HoursPerWeek)
+		}
+		if snap.Experiences[0].Metadata["sec_level"] != "secret" {
+			t.Errorf("snap experience metadata mutated: got %v, want 'secret'", snap.Experiences[0].Metadata["sec_level"])
+		}
+		if _, exists := snap.Experiences[0].Metadata["extra"]; exists {
+			t.Errorf("snap experience metadata gained unexpected key 'extra'")
+		}
+
+		if snap.Projects[0].StartDate.String() != "2020-01-01" {
+			t.Errorf("snap project StartDate mutated: got %s, want 2020-01-01", snap.Projects[0].StartDate)
+		}
+		if snap.Projects[0].Metadata["status"] != "active" {
+			t.Errorf("snap project metadata mutated: got %v, want 'active'", snap.Projects[0].Metadata["status"])
+		}
+
+		if snap.Education[0].StartDate.String() != "2015-09-01" {
+			t.Errorf("snap education StartDate mutated: got %s, want 2015-09-01", snap.Education[0].StartDate)
+		}
+		if snap.Education[0].Metadata["gpa"] != "3.8" {
+			t.Errorf("snap education metadata mutated: got %v, want '3.8'", snap.Education[0].Metadata["gpa"])
+		}
+
+		if snap.Certifications[0].Date.String() != "2021-05-01" {
+			t.Errorf("snap certification Date mutated: got %s, want 2021-05-01", snap.Certifications[0].Date)
+		}
+		if snap.Certifications[0].Metadata["credential_id"] != "ABC" {
+			t.Errorf("snap certification metadata mutated: got %v, want 'ABC'", snap.Certifications[0].Metadata["credential_id"])
 		}
 	})
 }

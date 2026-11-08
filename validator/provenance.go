@@ -251,12 +251,15 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				SourceEntityID:    origExp.ID,
 				Company:           origExp.Company,
 				RoleTitle:         origExp.RoleTitle,
+				EmploymentType:    origExp.EmploymentType,
 				StartDate:         origExp.StartDate,
+				IsCurrent:         origExp.IsCurrent,
 				Location:          origExp.Location,
 				CompanyLocation:   origExp.CompanyLocation,
 				SupervisorName:    origExp.SupervisorName,
 				SupervisorContact: origExp.SupervisorContact,
 				Bullets:           sanitizedBullets,
+				Metadata:          domain.CloneMetadata(origExp.Metadata),
 			}
 			if origExp.EndDate != nil {
 				end := *origExp.EndDate
@@ -314,17 +317,26 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 			sanitizedBullets := sanitizeBullets("project", proj.SourceEntityID, proj.Bullets, factRegistry, validSkills, &warnings)
 
+			var projStart *domain.Date
+			if origProj.StartDate != nil {
+				st := *origProj.StartDate
+				projStart = &st
+			}
+			var projEnd *domain.Date
+			if origProj.EndDate != nil {
+				end := *origProj.EndDate
+				projEnd = &end
+			}
+
 			sanitizedProj := domain.TailoredProject{
 				SourceEntityID: origProj.ID,
 				Name:           origProj.Name,
 				Role:           origProj.Role,
 				URL:            origProj.URL,
-				StartDate:      origProj.StartDate,
+				StartDate:      projStart,
+				EndDate:        projEnd,
 				Bullets:        sanitizedBullets,
-			}
-			if origProj.EndDate != nil {
-				end := *origProj.EndDate
-				sanitizedProj.EndDate = &end
+				Metadata:       domain.CloneMetadata(origProj.Metadata),
 			}
 			if proj.Summary != "" {
 				sanitizedProj.Summary = proj.Summary
@@ -370,19 +382,28 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 			sanitizedBullets := sanitizeBullets("education", edu.SourceEntityID, edu.Bullets, factRegistry, validSkills, &warnings)
 
+			var eduStart *domain.Date
+			if origEdu.StartDate != nil {
+				st := *origEdu.StartDate
+				eduStart = &st
+			}
+			var eduEnd *domain.Date
+			if origEdu.EndDate != nil {
+				end := *origEdu.EndDate
+				eduEnd = &end
+			}
+
 			sanitizedEdu := domain.TailoredEducation{
 				SourceEntityID: origEdu.ID,
 				Institution:    origEdu.Institution,
 				Degree:         origEdu.Degree,
 				Field:          origEdu.Field,
-				StartDate:      origEdu.StartDate,
+				StartDate:      eduStart,
+				EndDate:        eduEnd,
 				Location:       origEdu.Location,
 				Score:          origEdu.Score,
 				Bullets:        sanitizedBullets,
-			}
-			if origEdu.EndDate != nil {
-				end := *origEdu.EndDate
-				sanitizedEdu.EndDate = &end
+				Metadata:       domain.CloneMetadata(origEdu.Metadata),
 			}
 
 			sanitizedEducation = append(sanitizedEducation, sanitizedEdu)
@@ -421,12 +442,24 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				continue
 			}
 
+			summary := origCert.Summary
+			if cert.Summary != "" {
+				summary = cert.Summary
+			}
+			var certDate *domain.Date
+			if origCert.Date != nil {
+				cd := *origCert.Date
+				certDate = &cd
+			}
+
 			sanitizedCert := domain.TailoredCert{
 				SourceEntityID: origCert.ID,
 				Name:           origCert.Name,
 				Issuer:         origCert.Issuer,
-				Date:           origCert.Date,
+				Date:           certDate,
 				URL:            origCert.URL,
+				Summary:        summary,
+				Metadata:       domain.CloneMetadata(origCert.Metadata),
 			}
 
 			sanitizedCerts = append(sanitizedCerts, sanitizedCert)

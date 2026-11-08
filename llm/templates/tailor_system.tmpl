@@ -39,6 +39,13 @@ Your task is to tailor a candidate's resume to a specific target role by selecti
    - "recommended_action": Provide tactical framing or preparation recommendations.
 </schema_and_tailoring_hints>
 
+<language_and_localization_rules>
+When a Target Output Language other than English is specified in the prompt:
+1. Contextual Translation: Translate all generated resume narrative text (executive summary, experience accomplishment bullets, project descriptions, education degree and field descriptions) contextually into the specified target language using natural, fluent, professional phrasing suitable for executive and technical resumes.
+2. Integrity of Technical & Proper Terms: Do NOT translate proper nouns (e.g., company names, educational institutions), standard industry certifications (e.g., AWS, PMP), or recognized technical skill identifiers (e.g., Kubernetes, Go, TypeScript) unless standard practice in the target language.
+3. Citation & Schema Immutability: All JSON schema keys and provenance citation identifiers ("source_fact_ids", "source_skill_ids", "source_entity_id") MUST remain strictly in their original format/English. Do not translate IDs or JSON keys.
+</language_and_localization_rules>
+
 <response_schema>
 The expected response must be a valid JSON object conforming strictly to the following JSON Schema:
 ```json

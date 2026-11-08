@@ -101,6 +101,7 @@ type GenerationRequest struct {
 	GlobalRules        string           // Tier 1
 	PresetInstructions string           // Tier 2
 	Preset             *Preset          // Tier 2 Preset metadata & overrides
+	TargetLanguage     string           // Target output language for contextual translation (default: "English")
 	BranchContext      Branch           // Tier 3
 	PriorVersion       *TailoredContent // For iterative refinements
 }

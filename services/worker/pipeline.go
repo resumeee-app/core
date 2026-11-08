@@ -100,12 +100,15 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 		model = prof.DefaultModel
 	}
 
+	targetLang := preset.EffectiveLanguage()
+
 	req := domain.GenerationRequest{
 		Model:              model,
 		MasterProfile:      snapshot,
 		GlobalRules:        prof.GlobalWritingRules,
 		PresetInstructions: presetInstructions,
 		Preset:             preset,
+		TargetLanguage:     targetLang,
 		BranchContext:      *branch,
 		PriorVersion:       priorContent,
 	}

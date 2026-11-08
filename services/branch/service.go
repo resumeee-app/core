@@ -815,12 +815,15 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 		model = prof.DefaultModel
 	}
 
+	targetLang := preset.EffectiveLanguage()
+
 	req := domain.GenerationRequest{
 		Model:              model,
 		MasterProfile:      snapshot,
 		GlobalRules:        prof.GlobalWritingRules,
 		PresetInstructions: presetInstructions,
 		Preset:             preset,
+		TargetLanguage:     targetLang,
 		BranchContext:      b,
 		PriorVersion:       priorContent,
 	}

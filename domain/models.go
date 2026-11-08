@@ -330,6 +330,7 @@ type TailoringStrategy struct {
 	ProviderOverride   string    `json:"provider_override,omitempty"`
 	ModelOverride      string    `json:"model_override,omitempty"`
 	ReasoningLevel     string    `json:"reasoning_level,omitempty"` // "none", "low", "medium", "high"
+	Language           string    `json:"language" gorm:"default:'English';not null"`
 	IncludeAdminFields bool      `json:"include_admin_fields"`      // Government / visa CV admin fields
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
@@ -340,8 +341,19 @@ func (TailoringStrategy) TableName() string {
 	return "tailoring_strategies"
 }
 
+// EffectiveLanguage returns the configured target language for tailoring, falling back to DefaultLanguage.
+func (s *TailoringStrategy) EffectiveLanguage() string {
+	if s == nil || strings.TrimSpace(s.Language) == "" {
+		return DefaultLanguage
+	}
+	return strings.TrimSpace(s.Language)
+}
+
 // BeforeCreate synchronizes aliases prior to insertion.
 func (s *TailoringStrategy) BeforeCreate(_ *gorm.DB) error {
+	if s.Language == "" {
+		s.Language = DefaultLanguage
+	}
 	if s.SuggestedThemeID == nil && s.TemplateSetID != "" {
 		themeID := s.TemplateSetID
 		s.SuggestedThemeID = &themeID
@@ -354,6 +366,9 @@ func (s *TailoringStrategy) BeforeCreate(_ *gorm.DB) error {
 
 // BeforeSave synchronizes aliases prior to saving.
 func (s *TailoringStrategy) BeforeSave(_ *gorm.DB) error {
+	if s.Language == "" {
+		s.Language = DefaultLanguage
+	}
 	if s.SuggestedThemeID == nil && s.TemplateSetID != "" {
 		themeID := s.TemplateSetID
 		s.SuggestedThemeID = &themeID

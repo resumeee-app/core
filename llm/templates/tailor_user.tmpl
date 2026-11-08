@@ -4,6 +4,9 @@ Tier 1: Global Writing Rules:
 
 Tier 2: Preset Formatting Instructions:
 {{if .PresetInstructions}}{{.PresetInstructions}}{{else}}None{{end}}
+{{- if and .TargetLanguage (ne .TargetLanguage "English")}}
+Target Output Language: {{.TargetLanguage}} (Translate all tailored narrative content into {{.TargetLanguage}} while preserving proper nouns, technical terms, and citation short IDs).
+{{- end}}
 
 Tier 3: Branch Target & Custom Instructions:
 Target Role: {{if .TargetRole}}{{.TargetRole}}{{else}}Not specified{{end}}

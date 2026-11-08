@@ -41,6 +41,7 @@ type PromptPayload struct {
 type tailorPromptContext struct {
 	GlobalRules        string
 	PresetInstructions string
+	TargetLanguage     string
 	TargetRole         string
 	TargetCompany      string
 	TargetRequirements string
@@ -140,9 +141,19 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 		excluded = strings.Join(projectedExcluded, ", ")
 	}
 
+	targetLanguage := obfReq.TargetLanguage
+	if strings.TrimSpace(targetLanguage) == "" && obfReq.Preset != nil {
+		targetLanguage = obfReq.Preset.EffectiveLanguage()
+	}
+	validatedLanguage, err := domain.ValidateLanguage(targetLanguage)
+	if err != nil {
+		return nil, fmt.Errorf("invalid prompt target language: %w", err)
+	}
+
 	ctx := tailorPromptContext{
 		GlobalRules:        strings.TrimSpace(obfReq.GlobalRules),
 		PresetInstructions: strings.TrimSpace(obfReq.PresetInstructions),
+		TargetLanguage:     validatedLanguage,
 		TargetRole:         strings.TrimSpace(obfReq.BranchContext.TargetRole),
 		TargetCompany:      strings.TrimSpace(obfReq.BranchContext.TargetCompany),
 		TargetRequirements: strings.TrimSpace(obfReq.BranchContext.TargetRequirements),

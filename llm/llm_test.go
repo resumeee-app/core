@@ -776,7 +776,7 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 			ModelOverride:    "branch-model-ignored",
 		},
 	}
-	p1, m1, err := reg.Resolve(req1, &domain.Preset{ProviderOverride: "anthropic", ModelOverride: "claude-ignored"}, &domain.Profile{DefaultProvider: "gemini", DefaultModel: "gemini-ignored"})
+	p1, m1, err := reg.Resolve(req1, &domain.Preset{}, &domain.Profile{DefaultProvider: "gemini", DefaultModel: "gemini-ignored"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -791,7 +791,7 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 			ModelOverride:    "claude-3-7-sonnet-20250219",
 		},
 	}
-	p2, m2, err := reg.Resolve(req2, &domain.Preset{ProviderOverride: "openai", ModelOverride: "gpt-ignored"}, &domain.Profile{DefaultProvider: "gemini", DefaultModel: "gemini-ignored"})
+	p2, m2, err := reg.Resolve(req2, &domain.Preset{}, &domain.Profile{DefaultProvider: "gemini", DefaultModel: "gemini-ignored"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -799,37 +799,25 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 		t.Errorf("expected anthropic / claude-3-7-sonnet-20250219, got %s / %s", p2.Name(), m2)
 	}
 
-	// Case 3: Preset Overrides (when branch has no overrides)
+	// Case 3: Main Profile Defaults (when branch has no overrides)
 	req3 := domain.GenerationRequest{BranchContext: domain.Branch{}}
-	preset3 := &domain.Preset{ProviderOverride: "compat", ModelOverride: "llama3.3:70b"}
-	profile3 := &domain.Profile{DefaultProvider: "gemini", DefaultModel: "gemini-ignored"}
-	p3, m3, err := reg.Resolve(req3, preset3, profile3)
+	profile3 := &domain.Profile{DefaultProvider: "openai", DefaultModel: "gpt-4o-mini"}
+	p3, m3, err := reg.Resolve(req3, nil, profile3)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p3.Name() != "compat" || m3 != "llama3.3:70b" {
-		t.Errorf("expected compat / llama3.3:70b, got %s / %s", p3.Name(), m3)
+	if p3.Name() != "openai" || m3 != "gpt-4o-mini" {
+		t.Errorf("expected openai / gpt-4o-mini, got %s / %s", p3.Name(), m3)
 	}
 
-	// Case 4: Main Profile Defaults (when preset has no overrides)
+	// Case 4: System Fallback (when profile and request are unconfigured)
 	req4 := domain.GenerationRequest{BranchContext: domain.Branch{}}
-	profile4 := &domain.Profile{DefaultProvider: "openai", DefaultModel: "gpt-4o-mini"}
-	p4, m4, err := reg.Resolve(req4, nil, profile4)
+	p4, m4, err := reg.Resolve(req4, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p4.Name() != "openai" || m4 != "gpt-4o-mini" {
-		t.Errorf("expected openai / gpt-4o-mini, got %s / %s", p4.Name(), m4)
-	}
-
-	// Case 5: System Fallback (when profile and request are unconfigured)
-	req5 := domain.GenerationRequest{BranchContext: domain.Branch{}}
-	p5, m5, err := reg.Resolve(req5, nil, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if p5.Name() != "gemini" || m5 != "gemini-3.8-flash" {
-		t.Errorf("expected system default gemini / gemini-3.8-flash, got %s / %s", p5.Name(), m5)
+	if p4.Name() != "gemini" || m4 != "gemini-3.8-flash" {
+		t.Errorf("expected system default gemini / gemini-3.8-flash, got %s / %s", p4.Name(), m4)
 	}
 }
 
@@ -973,7 +961,7 @@ func TestCompatProvider_SuccessWithConversationalPreamble(t *testing.T) {
 	}
 }
 
-func TestRegistry_PresetOverridePropagationThroughGenerationRequest(t *testing.T) {
+func TestRegistry_BranchOverridePropagationThroughGenerationRequest(t *testing.T) {
 	anthropic := &dummyProvider{name: "anthropic"}
 	gemini := &dummyProvider{name: "gemini"}
 
@@ -986,10 +974,9 @@ func TestRegistry_PresetOverridePropagationThroughGenerationRequest(t *testing.T
 		defaultModel:    "gemini-3.8-flash",
 	}
 
-	// Request carries Preset with provider and model overrides, while preset parameter to Resolve is nil
+	// Request carries BranchContext with provider and model overrides
 	req := domain.GenerationRequest{
-		BranchContext: domain.Branch{}, // no branch overrides
-		Preset: &domain.Preset{
+		BranchContext: domain.Branch{
 			ProviderOverride: "anthropic",
 			ModelOverride:    "claude-3-7-sonnet-20250219",
 		},
@@ -1005,10 +992,10 @@ func TestRegistry_PresetOverridePropagationThroughGenerationRequest(t *testing.T
 	}
 
 	if provider.Name() != "anthropic" {
-		t.Errorf("expected provider 'anthropic' from req.Preset, got %s", provider.Name())
+		t.Errorf("expected provider 'anthropic' from req.BranchContext, got %s", provider.Name())
 	}
 	if model != "claude-3-7-sonnet-20250219" {
-		t.Errorf("expected model 'claude-3-7-sonnet-20250219' from req.Preset, got %s", model)
+		t.Errorf("expected model 'claude-3-7-sonnet-20250219' from req.BranchContext, got %s", model)
 	}
 }
 

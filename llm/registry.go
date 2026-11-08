@@ -160,16 +160,12 @@ func (r *Registry) SetDefault(provider, model string) {
 	r.defaultModel = strings.TrimSpace(model)
 }
 
-// Resolve resolves the active LLMProvider and model according to the 4-tier precedence ladder:
+// Resolve resolves the active LLMProvider and model according to the precedence ladder:
 // 1. GenerationRequest overrides (req.Model, req.BranchContext.ProviderOverride)
 // 2. Branch overrides (branch.ProviderOverride, branch.ModelOverride)
-// 3. Preset overrides (preset.ProviderOverride, preset.ModelOverride)
-// 4. Main Profile defaults (profile.DefaultProvider, profile.DefaultModel)
-// 5. System fallbacks (Registry default provider and model)
-func (r *Registry) Resolve(req domain.GenerationRequest, preset *domain.Preset, profile *domain.Profile) (domain.LLMProvider, string, error) {
-	if preset == nil && req.Preset != nil {
-		preset = req.Preset
-	}
+// 3. Main Profile defaults (profile.DefaultProvider, profile.DefaultModel)
+// 4. System fallbacks (Registry default provider and model)
+func (r *Registry) Resolve(req domain.GenerationRequest, _ *domain.Preset, profile *domain.Profile) (domain.LLMProvider, string, error) {
 	r.mu.RLock()
 	hasProviders := len(r.providers) > 0
 	r.mu.RUnlock()
@@ -182,8 +178,6 @@ func (r *Registry) Resolve(req domain.GenerationRequest, preset *domain.Preset, 
 	providerName := ""
 	if p := strings.TrimSpace(req.BranchContext.ProviderOverride); p != "" {
 		providerName = p
-	} else if preset != nil && strings.TrimSpace(preset.ProviderOverride) != "" {
-		providerName = strings.TrimSpace(preset.ProviderOverride)
 	} else if profile != nil && strings.TrimSpace(profile.DefaultProvider) != "" {
 		providerName = strings.TrimSpace(profile.DefaultProvider)
 	} else {
@@ -208,8 +202,6 @@ func (r *Registry) Resolve(req domain.GenerationRequest, preset *domain.Preset, 
 		modelName = m
 	} else if m := strings.TrimSpace(req.BranchContext.ModelOverride); m != "" {
 		modelName = m
-	} else if preset != nil && strings.TrimSpace(preset.ModelOverride) != "" {
-		modelName = strings.TrimSpace(preset.ModelOverride)
 	} else if profile != nil && strings.TrimSpace(profile.DefaultModel) != "" {
 		modelName = strings.TrimSpace(profile.DefaultModel)
 	} else if r.DefaultModel() != "" && r.DefaultProvider() == provider.Name() {

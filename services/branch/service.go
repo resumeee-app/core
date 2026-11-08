@@ -747,24 +747,9 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 
 	var report *domain.GapReport
 	if s.llmService != nil {
-		var preset *domain.Preset
-		stratID := branch.TailoringStrategyID
-		if stratID == nil {
-			stratID = branch.PresetID
-		}
-		if stratID != nil && *stratID != "" && s.presetRepo != nil {
-			if p, pErr := s.presetRepo.GetPreset(ctx, userID, *stratID); pErr == nil {
-				preset = p
-			}
-		}
-
-		reasoningLevel := branch.ReasoningLevel
-		if reasoningLevel == "" && preset != nil {
-			reasoningLevel = preset.ReasoningLevel
-		}
 		req := domain.GenerationRequest{
 			Model:          branch.ModelOverride,
-			ReasoningLevel: reasoningLevel,
+			ReasoningLevel: branch.ReasoningLevel,
 			MainProfile:    snapshot,
 			BranchContext:  *branch,
 		}
@@ -896,17 +881,11 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 	}
 
 	model := b.ModelOverride
-	if model == "" && preset != nil {
-		model = preset.ModelOverride
-	}
 	if model == "" {
 		model = prof.DefaultModel
 	}
 
 	reasoningLevel := b.ReasoningLevel
-	if reasoningLevel == "" && preset != nil {
-		reasoningLevel = preset.ReasoningLevel
-	}
 
 	targetLang := preset.EffectiveLanguage()
 

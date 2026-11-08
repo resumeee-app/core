@@ -84,7 +84,7 @@ func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 	}
 
 	req := domain.GenerationRequest{
-		Preset: &domain.Preset{
+		BranchContext: domain.Branch{
 			ProviderOverride: "openai",
 			ModelOverride:    "gpt-4o",
 		},
@@ -149,7 +149,7 @@ func TestServiceAdapter_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 	}
 
 	req := domain.GenerationRequest{
-		Preset: &domain.Preset{
+		BranchContext: domain.Branch{
 			ProviderOverride: "openai",
 			ModelOverride:    "gpt-4o",
 		},

@@ -327,9 +327,6 @@ type TailoringStrategy struct {
 	// TemplateSetID is an alias retained for backwards compatibility with legacy UI/forms.
 	TemplateSetID      string    `json:"template_set_id,omitempty" gorm:"column:template_set_id"`
 
-	ProviderOverride   string    `json:"provider_override,omitempty"`
-	ModelOverride      string    `json:"model_override,omitempty"`
-	ReasoningLevel     string    `json:"reasoning_level,omitempty"` // "none", "low", "medium", "high"
 	Language           string    `json:"language" gorm:"default:'English';not null"`
 	IncludeAdminFields bool      `json:"include_admin_fields"`      // Government / visa CV admin fields
 	CreatedAt          time.Time `json:"created_at"`

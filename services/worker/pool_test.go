@@ -1950,7 +1950,7 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("branch reasoning_level takes precedence over preset reasoning_level", func(t *testing.T) {
+	t.Run("branch reasoning_level is passed to generation request", func(t *testing.T) {
 		env := setupTestWorkerEnv(t)
 		var capturedReq domain.GenerationRequest
 		reqReceived := make(chan struct{}, 1)
@@ -1981,13 +1981,11 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		pool.Start(ctx)
 		defer pool.Stop()
 
-		// Seed preset with reasoning_level "low"
 		preset := &domain.Preset{
 			ID:                 "preset-reasoning-test",
 			UserID:             env.defaultUser,
 			Name:               "Test Preset",
 			SystemInstructions: "Test instructions",
-			ReasoningLevel:     "low",
 		}
 		if err := env.presetRepo.CreatePreset(ctx, preset); err != nil {
 			t.Fatalf("failed to create preset: %v", err)
@@ -2039,7 +2037,7 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("preset reasoning_level used as fallback when branch reasoning_level is unset", func(t *testing.T) {
+	t.Run("branch reasoning_level is used directly and empty when unset on branch", func(t *testing.T) {
 		env := setupTestWorkerEnv(t)
 		var capturedReq domain.GenerationRequest
 		reqReceived := make(chan struct{}, 1)
@@ -2075,7 +2073,6 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 			UserID:             env.defaultUser,
 			Name:               "Fallback Preset",
 			SystemInstructions: "Test instructions",
-			ReasoningLevel:     "medium",
 		}
 		if err := env.presetRepo.CreatePreset(ctx, preset); err != nil {
 			t.Fatalf("failed to create preset: %v", err)
@@ -2121,8 +2118,8 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 			t.Fatal("timed out waiting for LLM invocation")
 		}
 
-		if capturedReq.ReasoningLevel != "medium" {
-			t.Errorf("expected ReasoningLevel %q (from preset fallback), got %q", "medium", capturedReq.ReasoningLevel)
+		if capturedReq.ReasoningLevel != "" {
+			t.Errorf("expected empty ReasoningLevel when unset on branch, got %q", capturedReq.ReasoningLevel)
 		}
 	})
 }

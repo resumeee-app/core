@@ -85,25 +85,16 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 	}
 
 	provider := branch.ProviderOverride
-	if provider == "" && preset != nil {
-		provider = preset.ProviderOverride
-	}
 	if provider == "" {
 		provider = prof.DefaultProvider
 	}
 
 	model := branch.ModelOverride
-	if model == "" && preset != nil {
-		model = preset.ModelOverride
-	}
 	if model == "" {
 		model = prof.DefaultModel
 	}
 
 	reasoningLevel := branch.ReasoningLevel
-	if reasoningLevel == "" && preset != nil {
-		reasoningLevel = preset.ReasoningLevel
-	}
 
 	targetLang := preset.EffectiveLanguage()
 

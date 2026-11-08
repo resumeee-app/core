@@ -100,10 +100,16 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 		model = prof.DefaultModel
 	}
 
+	reasoningLevel := branch.ReasoningLevel
+	if reasoningLevel == "" && preset != nil {
+		reasoningLevel = preset.ReasoningLevel
+	}
+
 	targetLang := preset.EffectiveLanguage()
 
 	req := domain.GenerationRequest{
 		Model:              model,
+		ReasoningLevel:     reasoningLevel,
 		MainProfile:        snapshot,
 		GlobalRules:        prof.GlobalWritingRules,
 		PresetInstructions: presetInstructions,

@@ -437,6 +437,7 @@ type TargetResume struct {
 	TemplateSetID            string     `json:"template_set_id" gorm:"index;not null"`
 	ProviderOverride         string     `json:"provider_override,omitempty"`
 	ModelOverride            string     `json:"model_override,omitempty"`
+	ReasoningLevel           string     `json:"reasoning_level,omitempty" gorm:"column:reasoning_level"`
 	PinnedEntityIDs          []string   `json:"pinned_entity_ids,omitempty" gorm:"serializer:json"`
 	ExcludedEntityIDs        []string   `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"`
 	ActiveVersionID          *string    `json:"active_version_id,omitempty" gorm:"index"`

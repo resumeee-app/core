@@ -1947,3 +1947,183 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 	}
 }
 
+func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("branch reasoning_level takes precedence over preset reasoning_level", func(t *testing.T) {
+		env := setupTestWorkerEnv(t)
+		var capturedReq domain.GenerationRequest
+		reqReceived := make(chan struct{}, 1)
+
+		llm := &callbackLLM{
+			fn: func(_ context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+				capturedReq = req
+				select {
+				case reqReceived <- struct{}{}:
+				default:
+				}
+				return &domain.GenerationResponse{
+					TailoredContent: domain.TailoredContent{Summary: "Tailored"},
+				}, nil
+			},
+		}
+
+		pool := worker.NewPool(worker.PoolConfig{
+			Concurrency:  1,
+			QueueSize:    5,
+			BranchRepo:   env.branchRepo,
+			ProfileRepo:  env.profileRepo,
+			PresetRepo:   env.presetRepo,
+			TemplateRepo: env.templateRepo,
+			LLMService:   llm,
+			Validator:    env.validator,
+		})
+		pool.Start(ctx)
+		defer pool.Stop()
+
+		// Seed preset with reasoning_level "low"
+		preset := &domain.Preset{
+			ID:                 "preset-reasoning-test",
+			UserID:             env.defaultUser,
+			Name:               "Test Preset",
+			SystemInstructions: "Test instructions",
+			ReasoningLevel:     "low",
+		}
+		if err := env.presetRepo.CreatePreset(ctx, preset); err != nil {
+			t.Fatalf("failed to create preset: %v", err)
+		}
+
+		// Seed branch with reasoning_level "high"
+		presetID := preset.ID
+		branch := &domain.Branch{
+			ID:                  "branch-reasoning-override",
+			UserID:              env.defaultUser,
+			Name:                "Tailored Branch",
+			TemplateSetID:       "builtin-standard-clean",
+			TailoringStrategyID: &presetID,
+			PresetID:            &presetID,
+			ReasoningLevel:      "high",
+		}
+		if err := env.branchRepo.CreateBranch(ctx, branch); err != nil {
+			t.Fatalf("failed to create branch: %v", err)
+		}
+
+		versionID := "ver-reasoning-override"
+		ver := &domain.BranchVersion{
+			ID:                versionID,
+			UserID:            env.defaultUser,
+			BranchID:          branch.ID,
+			Status:            domain.VersionStatusPending,
+			TemplateSetIDUsed: "builtin-standard-clean",
+		}
+		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
+			t.Fatalf("failed to create version: %v", err)
+		}
+
+		if err := pool.Enqueue(worker.GenerationJob{
+			VersionID: versionID,
+			BranchID:  branch.ID,
+			UserID:    env.defaultUser,
+		}); err != nil {
+			t.Fatalf("failed to enqueue job: %v", err)
+		}
+
+		select {
+		case <-reqReceived:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for LLM invocation")
+		}
+
+		if capturedReq.ReasoningLevel != "high" {
+			t.Errorf("expected ReasoningLevel %q (from branch), got %q", "high", capturedReq.ReasoningLevel)
+		}
+	})
+
+	t.Run("preset reasoning_level used as fallback when branch reasoning_level is unset", func(t *testing.T) {
+		env := setupTestWorkerEnv(t)
+		var capturedReq domain.GenerationRequest
+		reqReceived := make(chan struct{}, 1)
+
+		llm := &callbackLLM{
+			fn: func(_ context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+				capturedReq = req
+				select {
+				case reqReceived <- struct{}{}:
+				default:
+				}
+				return &domain.GenerationResponse{
+					TailoredContent: domain.TailoredContent{Summary: "Tailored"},
+				}, nil
+			},
+		}
+
+		pool := worker.NewPool(worker.PoolConfig{
+			Concurrency:  1,
+			QueueSize:    5,
+			BranchRepo:   env.branchRepo,
+			ProfileRepo:  env.profileRepo,
+			PresetRepo:   env.presetRepo,
+			TemplateRepo: env.templateRepo,
+			LLMService:   llm,
+			Validator:    env.validator,
+		})
+		pool.Start(ctx)
+		defer pool.Stop()
+
+		preset := &domain.Preset{
+			ID:                 "preset-reasoning-fallback",
+			UserID:             env.defaultUser,
+			Name:               "Fallback Preset",
+			SystemInstructions: "Test instructions",
+			ReasoningLevel:     "medium",
+		}
+		if err := env.presetRepo.CreatePreset(ctx, preset); err != nil {
+			t.Fatalf("failed to create preset: %v", err)
+		}
+
+		presetID := preset.ID
+		branch := &domain.Branch{
+			ID:                  "branch-reasoning-fallback",
+			UserID:              env.defaultUser,
+			Name:                "Fallback Branch",
+			TemplateSetID:       "builtin-standard-clean",
+			TailoringStrategyID: &presetID,
+			PresetID:            &presetID,
+			ReasoningLevel:      "", // Unset on branch
+		}
+		if err := env.branchRepo.CreateBranch(ctx, branch); err != nil {
+			t.Fatalf("failed to create branch: %v", err)
+		}
+
+		versionID := "ver-reasoning-fallback"
+		ver := &domain.BranchVersion{
+			ID:                versionID,
+			UserID:            env.defaultUser,
+			BranchID:          branch.ID,
+			Status:            domain.VersionStatusPending,
+			TemplateSetIDUsed: "builtin-standard-clean",
+		}
+		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
+			t.Fatalf("failed to create version: %v", err)
+		}
+
+		if err := pool.Enqueue(worker.GenerationJob{
+			VersionID: versionID,
+			BranchID:  branch.ID,
+			UserID:    env.defaultUser,
+		}); err != nil {
+			t.Fatalf("failed to enqueue job: %v", err)
+		}
+
+		select {
+		case <-reqReceived:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for LLM invocation")
+		}
+
+		if capturedReq.ReasoningLevel != "medium" {
+			t.Errorf("expected ReasoningLevel %q (from preset fallback), got %q", "medium", capturedReq.ReasoningLevel)
+		}
+	})
+}
+

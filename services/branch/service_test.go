@@ -620,6 +620,17 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
 			t.Errorf("expected ErrDefaultBranchImmutable, got: %v", err)
 		}
+
+		// Reset target role and test reasoning level rejection on default branch
+		b.TargetRole = ""
+		b.ReasoningLevel = "high"
+		_, err = env.svc.UpdateBranch(ctx, b)
+		if err == nil {
+			t.Fatalf("expected error modifying reasoning level on default branch, got nil")
+		}
+		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+			t.Errorf("expected ErrDefaultBranchImmutable for reasoning_level, got: %v", err)
+		}
 	})
 
 	t.Run("DeleteBranch on default branch returns ErrDefaultBranchImmutable", func(t *testing.T) {

@@ -189,7 +189,7 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 		// Enforce default branch immutability: disallow tailor fields
 		if branch.TargetRole != "" || branch.TargetCompany != "" || branch.TargetRequirements != "" ||
 			branch.BranchInstructions != "" || branch.PresetID != nil || branch.ProviderOverride != "" ||
-			branch.ModelOverride != "" || len(branch.PinnedEntityIDs) > 0 || len(branch.ExcludedEntityIDs) > 0 {
+			branch.ModelOverride != "" || branch.ReasoningLevel != "" || len(branch.PinnedEntityIDs) > 0 || len(branch.ExcludedEntityIDs) > 0 {
 			return nil, fmt.Errorf("%w: default branch cannot be tailored with custom roles, presets, or instructions", domain.ErrDefaultBranchImmutable)
 		}
 		if branch.Name != "" && branch.Name != domain.DefaultBranchName {
@@ -676,9 +676,26 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 
 	var report *domain.GapReport
 	if s.llmService != nil {
+		var preset *domain.Preset
+		stratID := branch.TailoringStrategyID
+		if stratID == nil {
+			stratID = branch.PresetID
+		}
+		if stratID != nil && *stratID != "" && s.presetRepo != nil {
+			if p, pErr := s.presetRepo.GetPreset(ctx, userID, *stratID); pErr == nil {
+				preset = p
+			}
+		}
+
+		reasoningLevel := branch.ReasoningLevel
+		if reasoningLevel == "" && preset != nil {
+			reasoningLevel = preset.ReasoningLevel
+		}
 		req := domain.GenerationRequest{
-			MainProfile:   snapshot,
-			BranchContext: *branch,
+			Model:          branch.ModelOverride,
+			ReasoningLevel: reasoningLevel,
+			MainProfile:    snapshot,
+			BranchContext:  *branch,
 		}
 		if analyzer, ok := s.llmService.(interface {
 			GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error)
@@ -815,10 +832,16 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 		model = prof.DefaultModel
 	}
 
+	reasoningLevel := b.ReasoningLevel
+	if reasoningLevel == "" && preset != nil {
+		reasoningLevel = preset.ReasoningLevel
+	}
+
 	targetLang := preset.EffectiveLanguage()
 
 	req := domain.GenerationRequest{
 		Model:              model,
+		ReasoningLevel:     reasoningLevel,
 		MainProfile:        snapshot,
 		GlobalRules:        prof.GlobalWritingRules,
 		PresetInstructions: presetInstructions,

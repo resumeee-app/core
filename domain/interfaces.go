@@ -144,16 +144,28 @@ type RenderOutput struct {
 	PlainText string `json:"plain_text"`
 }
 
+// TemplateValidator defines the abstraction for validating template syntax and integrity prior to persistence.
+type TemplateValidator interface {
+	Validate(tmpl *TemplateSet) error
+}
+
+// TemplateValidatorFunc is a functional adapter that implements TemplateValidator.
+type TemplateValidatorFunc func(tmpl *TemplateSet) error
+
+// Validate calls f(tmpl).
+func (f TemplateValidatorFunc) Validate(tmpl *TemplateSet) error {
+	return f(tmpl)
+}
+
 // TemplateRenderer defines the external testing and execution seam for resume rendering.
 type TemplateRenderer interface {
+	TemplateValidator
+
 	// Render compiles and executes all three formats in a TemplateSet against candidate profile and tailored content.
 	Render(ctx context.Context, tmpl *TemplateSet, profile *Profile, content *TailoredContent) (*RenderOutput, error)
 
 	// RenderFormat executes a single template string targeting the designated format.
 	RenderFormat(format OutputFormat, tmplStr string, data any) (string, error)
-
-	// Validate checks that all templates within a TemplateSet parse cleanly and cite only whitelisted functions.
-	Validate(tmpl *TemplateSet) error
 }
 
 // PDFParseJobRepository defines persistence operations for asynchronous PDF parsing jobs.

@@ -134,8 +134,8 @@ func TestTailoringStrategy_DefaultLanguageOnSave(t *testing.T) {
 	strat := domain.TailoringStrategy{
 		Name: "Custom Strategy",
 	}
-	if err := strat.BeforeCreate(nil); err != nil {
-		t.Fatalf("BeforeCreate failed: %v", err)
+	if err := strat.Normalize(); err != nil {
+		t.Fatalf("Normalize failed: %v", err)
 	}
 	if strat.Language != domain.DefaultLanguage {
 		t.Fatalf("expected language %q, got %q", domain.DefaultLanguage, strat.Language)

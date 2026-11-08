@@ -3,9 +3,12 @@ package domain
 import (
 	"strings"
 	"time"
-
-	"gorm.io/gorm"
 )
+
+// Normalizable represents any domain entity that requires normalization or alias synchronization prior to persistence.
+type Normalizable interface {
+	Normalize() error
+}
 
 // OwnerType represents the polymorphic owner entity type of a Fact.
 type OwnerType string
@@ -345,23 +348,11 @@ func (s *TailoringStrategy) EffectiveLanguage() string {
 	return strings.TrimSpace(s.Language)
 }
 
-// BeforeCreate synchronizes aliases prior to insertion.
-func (s *TailoringStrategy) BeforeCreate(_ *gorm.DB) error {
-	if s.Language == "" {
-		s.Language = DefaultLanguage
+// Normalize synchronizes language defaults and template/theme aliases.
+func (s *TailoringStrategy) Normalize() error {
+	if s == nil {
+		return nil
 	}
-	if s.SuggestedThemeID == nil && s.TemplateSetID != "" {
-		themeID := s.TemplateSetID
-		s.SuggestedThemeID = &themeID
-	}
-	if s.TemplateSetID == "" && s.SuggestedThemeID != nil {
-		s.TemplateSetID = *s.SuggestedThemeID
-	}
-	return nil
-}
-
-// BeforeSave synchronizes aliases prior to saving.
-func (s *TailoringStrategy) BeforeSave(_ *gorm.DB) error {
 	if s.Language == "" {
 		s.Language = DefaultLanguage
 	}
@@ -465,14 +456,11 @@ func (b *TargetResume) syncAliases() {
 	}
 }
 
-// BeforeCreate synchronizes aliases prior to insertion.
-func (b *TargetResume) BeforeCreate(_ *gorm.DB) error {
-	b.syncAliases()
-	return nil
-}
-
-// BeforeSave synchronizes aliases prior to saving.
-func (b *TargetResume) BeforeSave(_ *gorm.DB) error {
+// Normalize synchronizes aliases prior to persistence.
+func (b *TargetResume) Normalize() error {
+	if b == nil {
+		return nil
+	}
 	b.syncAliases()
 	return nil
 }
@@ -548,14 +536,11 @@ func (v *ResumeVersion) syncAliases() {
 	}
 }
 
-// BeforeCreate synchronizes resume_id and branch_id prior to insertion.
-func (v *ResumeVersion) BeforeCreate(_ *gorm.DB) error {
-	v.syncAliases()
-	return nil
-}
-
-// BeforeSave synchronizes resume_id and branch_id prior to saving.
-func (v *ResumeVersion) BeforeSave(_ *gorm.DB) error {
+// Normalize synchronizes resume and branch aliases prior to persistence.
+func (v *ResumeVersion) Normalize() error {
+	if v == nil {
+		return nil
+	}
 	v.syncAliases()
 	return nil
 }

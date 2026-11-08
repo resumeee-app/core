@@ -78,6 +78,9 @@ const (
 	UserRoleAdmin UserRole = "admin"
 )
 
+// SystemUserID is the canonical user identifier for shared system resources, built-in presets, and global skills.
+const SystemUserID = "system"
+
 // User represents an authenticated tenant account backed by Firebase Auth.
 type User struct {
 	ID        string    `json:"id" gorm:"primaryKey;type:text"` // Firebase UID
@@ -364,7 +367,7 @@ func (s *TailoringStrategy) BeforeSave(_ *gorm.DB) error {
 // IsBuiltIn returns true if the strategy is a system-provided built-in strategy.
 // Built-in strategies are immutable and protected against update or deletion.
 func (s TailoringStrategy) IsBuiltIn() bool {
-	return strings.HasPrefix(s.ID, "builtin-")
+	return strings.HasPrefix(s.ID, "builtin-") || s.UserID == SystemUserID
 }
 
 // TemplateSetName returns an empty string on domain.TailoringStrategy, allowing view models to override it.

@@ -188,6 +188,12 @@ func (t *TokenInfo) IsAdmin() bool {
 	return t.Admin || strings.EqualFold(t.Role, string(UserRoleAdmin))
 }
 
+// UserRepository defines persistence operations for tenant user accounts.
+type UserRepository interface {
+	GetUser(ctx context.Context, id string) (*User, error)
+	UpsertUser(ctx context.Context, user *User) error
+}
+
 // TokenVerifier validates bearer identity tokens from an external authentication provider.
 type TokenVerifier interface {
 	VerifyIDToken(ctx context.Context, idToken string) (*TokenInfo, error)

@@ -202,6 +202,12 @@ type TokenVerifier interface {
 	VerifyIDToken(ctx context.Context, idToken string) (*TokenInfo, error)
 }
 
+// AuthProvider abstracts identity credential validation and provider naming.
+type AuthProvider interface {
+	TokenVerifier
+	Name() string
+}
+
 // QuotaRepository provides atomic accounting and persistence for tenant LLM quotas and usage records.
 type QuotaRepository interface {
 	GetQuota(ctx context.Context, userID string) (*TenantQuota, error)

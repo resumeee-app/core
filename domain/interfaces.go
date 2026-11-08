@@ -88,6 +88,7 @@ type BranchRepository interface {
 	CreateVersion(ctx context.Context, version *BranchVersion) error
 	GetVersion(ctx context.Context, branchID, versionID string) (*BranchVersion, error)
 	GetVersionByNumber(ctx context.Context, branchID string, versionNumber int) (*BranchVersion, error)
+	GetVersionsByIDs(ctx context.Context, versionIDs []string) ([]BranchVersion, error)
 	ListVersions(ctx context.Context, branchID string) ([]BranchVersion, error)
 	UpdateVersionStatus(ctx context.Context, versionID string, status VersionStatus, errMsg string) error
 	CompleteVersion(ctx context.Context, version *BranchVersion) error

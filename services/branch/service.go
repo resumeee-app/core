@@ -119,11 +119,73 @@ func (s *service) validateBranchReferences(ctx context.Context, branch *domain.B
 	return nil
 }
 
+func isGapReportEmpty(g *domain.GapReport) bool {
+	if g == nil {
+		return true
+	}
+	return g.MatchScore == nil && g.OverallMatchSummary == "" && len(g.MissingRequirements) == 0 && len(g.IdentifiedGaps) == 0
+}
+
+func ensureGapReportScore(g *domain.GapReport) {
+	if g == nil {
+		return
+	}
+	g.Normalize()
+	if g.MatchScore == nil {
+		score := domain.CalculateDeterministicMatchScore(g.MissingRequirements)
+		g.MatchScore = &score
+	}
+}
+
+func (s *service) populateBranchGapReport(ctx context.Context, branch *domain.Branch) {
+	if branch == nil {
+		return
+	}
+	if !isGapReportEmpty(branch.GapReport) {
+		ensureGapReportScore(branch.GapReport)
+		return
+	}
+	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" && s.branchRepo != nil {
+		ver, err := s.branchRepo.GetVersion(ctx, branch.ID, *branch.ActiveVersionID)
+		if err == nil && ver != nil && ver.GapReport != nil {
+			ensureGapReportScore(ver.GapReport)
+			branch.GapReport = ver.GapReport
+		}
+	}
+}
+
 // ListBranches returns all branches for the user, optionally filtering for stale branches whose synced revision is behind main.
 func (s *service) ListBranches(ctx context.Context, userID string, staleOnly bool) ([]domain.Branch, error) {
 	branches, err := s.branchRepo.ListBranches(ctx, userID)
 	if err != nil {
 		return nil, err
+	}
+
+	var missingActiveVersionIDs []string
+	for i := range branches {
+		if !isGapReportEmpty(branches[i].GapReport) {
+			ensureGapReportScore(branches[i].GapReport)
+		} else if branches[i].ActiveVersionID != nil && *branches[i].ActiveVersionID != "" {
+			missingActiveVersionIDs = append(missingActiveVersionIDs, *branches[i].ActiveVersionID)
+		}
+	}
+
+	if len(missingActiveVersionIDs) > 0 && s.branchRepo != nil {
+		activeVersions, err := s.branchRepo.GetVersionsByIDs(ctx, missingActiveVersionIDs)
+		if err == nil {
+			versionMap := make(map[string]*domain.BranchVersion, len(activeVersions))
+			for i := range activeVersions {
+				versionMap[activeVersions[i].ID] = &activeVersions[i]
+			}
+			for i := range branches {
+				if isGapReportEmpty(branches[i].GapReport) && branches[i].ActiveVersionID != nil {
+					if ver, ok := versionMap[*branches[i].ActiveVersionID]; ok && ver.GapReport != nil {
+						ensureGapReportScore(ver.GapReport)
+						branches[i].GapReport = ver.GapReport
+					}
+				}
+			}
+		}
 	}
 
 	if staleOnly {
@@ -147,7 +209,12 @@ func (s *service) ListBranches(ctx context.Context, userID string, staleOnly boo
 
 // GetBranch retrieves a branch record by its identifier.
 func (s *service) GetBranch(ctx context.Context, userID, id string) (*domain.Branch, error) {
-	return s.branchRepo.GetBranch(ctx, userID, id)
+	branch, err := s.branchRepo.GetBranch(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	s.populateBranchGapReport(ctx, branch)
+	return branch, nil
 }
 
 // CreateBranch initializes and saves a new resume branch with main revision synchronization.
@@ -218,7 +285,7 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 			}
 		}
 
-		return s.branchRepo.GetBranch(ctx, branch.UserID, branch.ID)
+		return s.GetBranch(ctx, branch.UserID, branch.ID)
 	}
 
 	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" {
@@ -236,12 +303,16 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 			return nil, fmt.Errorf("%w: active version %s must be completed (got %s)", domain.ErrValidation, ver.ID, ver.Status)
 		}
 		branch.LastSyncedMainRevision = ver.MainRevisionUsed
+		if ver.GapReport != nil {
+			ensureGapReportScore(ver.GapReport)
+		}
+		branch.GapReport = ver.GapReport
 	}
 
 	if err := s.branchRepo.UpdateBranch(ctx, branch); err != nil {
 		return nil, err
 	}
-	return s.branchRepo.GetBranch(ctx, branch.UserID, branch.ID)
+	return s.GetBranch(ctx, branch.UserID, branch.ID)
 }
 
 // DeleteBranch removes a branch if it is not the immutable default branch.

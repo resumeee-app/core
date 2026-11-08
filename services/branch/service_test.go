@@ -429,6 +429,171 @@ func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 	}
 }
 
+func TestService_UpdateBranchSyncsGapReportOnActiveVersionSwitch(t *testing.T) {
+	env := setupTestBranchEnv(t, 10)
+	ctx := context.Background()
+
+	score70 := 70.0
+	score95 := 95.0
+
+	// Set up v1 with GapReport score 70
+	v1, err := env.branchRepo.GetVersion(ctx, env.branchID, env.v1ID)
+	if err != nil {
+		t.Fatalf("failed to get v1: %v", err)
+	}
+	v1.Status = domain.VersionStatusCompleted
+	v1.GapReport = &domain.GapReport{
+		OverallMatchSummary: "V1 match report",
+		MatchScore:          &score70,
+		MissingRequirements: []domain.GapItem{
+			{Requirement: "Rust programming", Importance: domain.GapImportanceCritical},
+			{Requirement: "Distributed consensus", Importance: domain.GapImportancePreferred},
+		},
+	}
+	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+		t.Fatalf("failed to complete v1: %v", err)
+	}
+
+	// Create v2 with GapReport score 95
+	v2 := &domain.BranchVersion{
+		ID:                "ver-v2-gap-test",
+		BranchID:          env.branchID,
+		Status:            domain.VersionStatusCompleted,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		SourceType:        domain.SourceTypeLLMGeneration,
+		GapReport: &domain.GapReport{
+			OverallMatchSummary: "V2 improved match report",
+			MatchScore:          &score95,
+			MissingRequirements: []domain.GapItem{
+				{Requirement: "Docker orchestration", Importance: domain.GapImportanceNiceToHave},
+			},
+		},
+	}
+	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
+		t.Fatalf("failed to create v2: %v", err)
+	}
+	if err := env.branchRepo.CompleteVersion(ctx, v2); err != nil {
+		t.Fatalf("failed to complete v2: %v", err)
+	}
+
+	// Fetch current branch
+	b, err := env.svc.GetBranch(ctx, env.defaultUser, env.branchID)
+	if err != nil {
+		t.Fatalf("failed to get branch: %v", err)
+	}
+
+	// Switch active version back to v1
+	b.ActiveVersionID = &env.v1ID
+	b.GapReport = nil // Simulate calling update with just ActiveVersionID switch
+	updated, err := env.svc.UpdateBranch(ctx, b)
+	if err != nil {
+		t.Fatalf("UpdateBranch to v1 failed: %v", err)
+	}
+	if updated.GapReport == nil || updated.GapReport.MatchScore == nil || *updated.GapReport.MatchScore != score70 {
+		t.Fatalf("expected updated branch GapReport score %f, got %v", score70, updated.GapReport)
+	}
+	if updated.GapReport.OverallMatchSummary != "V1 match report" {
+		t.Errorf("expected summary 'V1 match report', got %q", updated.GapReport.OverallMatchSummary)
+	}
+
+	// Now switch active version forward to v2
+	b.ActiveVersionID = &v2.ID
+	b.GapReport = nil
+	updatedV2, err := env.svc.UpdateBranch(ctx, b)
+	if err != nil {
+		t.Fatalf("UpdateBranch to v2 failed: %v", err)
+	}
+	if updatedV2.GapReport == nil || updatedV2.GapReport.MatchScore == nil || *updatedV2.GapReport.MatchScore != score95 {
+		t.Fatalf("expected updated branch GapReport score %f, got %v", score95, updatedV2.GapReport)
+	}
+	if updatedV2.GapReport.OverallMatchSummary != "V2 improved match report" {
+		t.Errorf("expected summary 'V2 improved match report', got %q", updatedV2.GapReport.OverallMatchSummary)
+	}
+}
+
+func TestService_GetAndListBranchesFallbackResolution(t *testing.T) {
+	env := setupTestBranchEnv(t, 10)
+	ctx := context.Background()
+
+	score87 := 87.0
+
+	// Create branch with active version
+	b := &domain.Branch{
+		ID:            "branch-service-fallback-" + uuid.New().String(),
+		UserID:        env.defaultUser,
+		Name:          "Data Platform Architect",
+		TemplateSetID: renderer.TemplateStandardCleanID,
+	}
+	if err := env.branchRepo.CreateBranch(ctx, b); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+
+	v := &domain.BranchVersion{
+		ID:                "ver-service-fallback",
+		BranchID:          b.ID,
+		Status:            domain.VersionStatusCompleted,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		SourceType:        domain.SourceTypeLLMGeneration,
+		GapReport: &domain.GapReport{
+			OverallMatchSummary: "Fallback summary from version",
+			MatchScore:          &score87,
+			MissingRequirements: []domain.GapItem{
+				{Requirement: "Apache Spark Streaming", Importance: domain.GapImportanceCritical},
+			},
+		},
+	}
+	if err := env.branchRepo.CreateVersion(ctx, v); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	// Directly set ActiveVersionID without GapReport on parent branch in repo (simulating legacy store state)
+	b.ActiveVersionID = &v.ID
+	b.GapReport = nil
+	if err := env.branchRepo.UpdateBranch(ctx, b); err != nil {
+		t.Fatalf("update branch in repo: %v", err)
+	}
+
+	// 1. Service GetBranch must fallback-resolve GapReport
+	fetched, err := env.svc.GetBranch(ctx, env.defaultUser, b.ID)
+	if err != nil {
+		t.Fatalf("svc.GetBranch failed: %v", err)
+	}
+	if fetched.GapReport == nil {
+		t.Fatalf("expected svc.GetBranch to fallback-resolve GapReport, got nil")
+	}
+	if fetched.GapReport.MatchScore == nil || *fetched.GapReport.MatchScore != score87 {
+		t.Errorf("expected fallback match score %f, got %v", score87, fetched.GapReport.MatchScore)
+	}
+	if fetched.GapReport.OverallMatchSummary != "Fallback summary from version" {
+		t.Errorf("expected summary 'Fallback summary from version', got %q", fetched.GapReport.OverallMatchSummary)
+	}
+
+	// 2. Service ListBranches must fallback-resolve GapReport
+	branches, err := env.svc.ListBranches(ctx, env.defaultUser, false)
+	if err != nil {
+		t.Fatalf("svc.ListBranches failed: %v", err)
+	}
+
+	var found *domain.Branch
+	for i := range branches {
+		if branches[i].ID == b.ID {
+			found = &branches[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected branch %s in ListBranches output", b.ID)
+	}
+	if found.GapReport == nil {
+		t.Fatalf("expected svc.ListBranches to fallback-resolve GapReport, got nil")
+	}
+	if found.GapReport.MatchScore == nil || *found.GapReport.MatchScore != score87 {
+		t.Errorf("expected ListBranches fallback match score %f, got %v", score87, found.GapReport.MatchScore)
+	}
+}
+
 // 6. Foreign, non-existent, or incomplete ActiveVersionID must be rejected
 func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 	env := setupTestBranchEnv(t, 10)

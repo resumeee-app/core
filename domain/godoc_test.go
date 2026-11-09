@@ -131,6 +131,10 @@ func findRepoRoot(t *testing.T) string {
 
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			realDir, evalErr := filepath.EvalSymlinks(dir)
+			if evalErr == nil {
+				return realDir
+			}
 			return dir
 		}
 		parent := filepath.Dir(dir)

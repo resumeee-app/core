@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -21,6 +22,10 @@ var (
 	gapAnalysisUserTmpl     = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_user.tmpl"))
 	resumeExtractSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/resume_extract_system.tmpl"))
 	resumeExtractUserTmpl   = template.Must(template.ParseFS(templateFS, "templates/resume_extract_user.tmpl"))
+	atsExtractSystemTmpl    = template.Must(template.ParseFS(templateFS, "templates/ats_extract_system.tmpl"))
+	atsExtractUserTmpl      = template.Must(template.ParseFS(templateFS, "templates/ats_extract_user.tmpl"))
+	atsMatchSystemTmpl      = template.Must(template.ParseFS(templateFS, "templates/ats_match_system.tmpl"))
+	atsMatchUserTmpl        = template.Must(template.ParseFS(templateFS, "templates/ats_match_user.tmpl"))
 )
 
 // ReadTemplateFile reads a template file by name from the embedded templates directory.
@@ -237,6 +242,119 @@ func BuildResumeExtractPrompt(rawText string) (*PromptPayload, error) {
 	userBuilder.Grow(2048 + len(rawText))
 	if err := resumeExtractUserTmpl.Execute(&userBuilder, ctx); err != nil {
 		return nil, fmt.Errorf("failed to render resume extract user prompt template: %w", err)
+	}
+
+	return &PromptPayload{
+		SystemPrompt: sysBuilder.String(),
+		UserPrompt:   userBuilder.String(),
+	}, nil
+}
+
+type atsExtractPromptContext struct {
+	FormatUsed string
+	ResumeText string
+}
+
+type atsMatchPromptContext struct {
+	TargetRole             string
+	TargetCompany          string
+	TargetRequirements     string
+	ExtractedCandidateJSON string
+}
+
+var atsPromptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|response_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
+
+func sanitizeATSPromptValue(content string, stripOuterTag string) string {
+	trimmed := strings.TrimSpace(content)
+	if stripOuterTag != "" {
+		openTag := "<" + stripOuterTag + ">"
+		closeTag := "</" + stripOuterTag + ">"
+		if strings.HasPrefix(strings.ToLower(trimmed), strings.ToLower(openTag)) &&
+			strings.HasSuffix(strings.ToLower(trimmed), strings.ToLower(closeTag)) &&
+			len(trimmed) >= len(openTag)+len(closeTag) {
+			trimmed = strings.TrimSpace(trimmed[len(openTag) : len(trimmed)-len(closeTag)])
+		}
+	}
+	return atsPromptTagRegex.ReplaceAllStringFunc(trimmed, func(m string) string {
+		escaped := strings.ReplaceAll(m, "<", "&lt;")
+		return strings.ReplaceAll(escaped, ">", "&gt;")
+	})
+}
+
+// BuildATSExtractionPrompt compiles the Stage 1 ATS extraction system and user prompts,
+// obfuscating any candidate contact PII in the rendered resume text prior to LLM transmission.
+func BuildATSExtractionPrompt(req domain.ATSSimulationRequest) (*PromptPayload, *privacy.Session, error) {
+	formatUsed, err := domain.NormalizeATSFormat(req.FormatUsed)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	session := privacy.NewSessionFromSnapshot(req.MainProfile)
+	obfResumeText := sanitizeATSPromptValue(session.ObfuscateString(strings.TrimSpace(req.ResumeText)), "resume_document")
+
+	var sysBuilder strings.Builder
+	sysBuilder.Grow(2048)
+	if err := atsExtractSystemTmpl.Execute(&sysBuilder, nil); err != nil {
+		return nil, nil, fmt.Errorf("failed to render ats extract system prompt template: %w", err)
+	}
+
+	ctx := atsExtractPromptContext{
+		FormatUsed: formatUsed,
+		ResumeText: obfResumeText,
+	}
+
+	var userBuilder strings.Builder
+	userBuilder.Grow(1024 + len(obfResumeText))
+	if err := atsExtractUserTmpl.Execute(&userBuilder, ctx); err != nil {
+		return nil, nil, fmt.Errorf("failed to render ats extract user prompt template: %w", err)
+	}
+
+	return &PromptPayload{
+		SystemPrompt: sysBuilder.String(),
+		UserPrompt:   userBuilder.String(),
+	}, session, nil
+}
+
+// BuildATSMatchingPrompt compiles the Stage 2 ATS job matching system and user prompts
+// using exclusively the extracted candidate representation from Stage 1 and the target job description.
+func BuildATSMatchingPrompt(branch domain.Branch, extracted *domain.ATSExtractedCandidate, session *privacy.Session) (*PromptPayload, error) {
+	var sysBuilder strings.Builder
+	sysBuilder.Grow(1024)
+	if err := atsMatchSystemTmpl.Execute(&sysBuilder, nil); err != nil {
+		return nil, fmt.Errorf("failed to render ats match system prompt template: %w", err)
+	}
+
+	candidateToSerialize := extracted
+	if candidateToSerialize == nil {
+		candidateToSerialize = &domain.ATSExtractedCandidate{}
+	}
+	candidateToSerialize.Normalize()
+
+	candidateJSONBytes, err := json.MarshalIndent(candidateToSerialize, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize extracted candidate data: %w", err)
+	}
+
+	targetRole := strings.TrimSpace(branch.TargetRole)
+	targetCompany := strings.TrimSpace(branch.TargetCompany)
+	targetReqs := strings.TrimSpace(branch.TargetRequirements)
+	if session != nil {
+		targetRole = session.ObfuscateString(targetRole)
+		targetCompany = session.ObfuscateString(targetCompany)
+		targetReqs = session.ObfuscateString(targetReqs)
+	}
+
+	ctx := atsMatchPromptContext{
+		TargetRole:             sanitizeATSPromptValue(targetRole, ""),
+		TargetCompany:          sanitizeATSPromptValue(targetCompany, ""),
+		TargetRequirements:     sanitizeATSPromptValue(targetReqs, "target_job_description"),
+		ExtractedCandidateJSON: sanitizeATSPromptValue(string(candidateJSONBytes), "extracted_candidate_data"),
+	}
+
+	var userBuilder strings.Builder
+	userBuilder.Grow(2048 + len(candidateJSONBytes))
+	if err := atsMatchUserTmpl.Execute(&userBuilder, ctx); err != nil {
+		return nil, fmt.Errorf("failed to render ats match user prompt template: %w", err)
 	}
 
 	return &PromptPayload{

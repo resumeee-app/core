@@ -320,4 +320,76 @@ func TestTailoredContent_OmitZeroNonTailoringFields(t *testing.T) {
 	})
 }
 
+func TestConvertATSRatioToPercent(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    float64
+		expected float64
+	}{
+		{name: "negative clamped to 0", input: -0.25, expected: 0},
+		{name: "zero remains 0", input: 0, expected: 0},
+		{name: "ratio 0.5 converts to 50", input: 0.5, expected: 50},
+		{name: "ratio 0.875 converts to 87.5", input: 0.875, expected: 87.5},
+		{name: "ratio 1.0 converts to 100", input: 1.0, expected: 100},
+		{name: "percentage 85 remains 85", input: 85.0, expected: 85},
+		{name: "percentage above 100 clamped to 100", input: 120.0, expected: 100},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := domain.ConvertATSRatioToPercent(tc.input)
+			if got != tc.expected {
+				t.Errorf("ConvertATSRatioToPercent(%v) = %v; want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestATSScore_Normalize(t *testing.T) {
+	score := &domain.ATSScore{
+		ExtractionConfidenceScore: 105.0,
+		JobMatchingScore:          -5.0,
+		ExtractedCandidate: &domain.ATSExtractedCandidate{
+			Summary: "Backend engineer",
+			Experiences: []domain.ATSExtractedExperience{
+				{Company: "Acme", Title: "Senior Dev"},
+			},
+		},
+	}
+	score.Normalize()
+
+	if score.ExtractionConfidenceScore != 100.0 {
+		t.Errorf("expected ExtractionConfidenceScore clamped to 100, got %v", score.ExtractionConfidenceScore)
+	}
+	if score.JobMatchingScore != 0.0 {
+		t.Errorf("expected JobMatchingScore clamped to 0, got %v", score.JobMatchingScore)
+	}
+	if score.ExtractedCandidate.Skills == nil {
+		t.Errorf("expected ExtractedCandidate.Skills initialized to non-nil slice")
+	}
+	if score.ExtractedCandidate.Experiences[0].Highlights == nil {
+		t.Errorf("expected Highlights initialized to non-nil slice")
+	}
+}
+
+func TestCalculateDeterministicATSScore(t *testing.T) {
+	resumeText := "# Jane Doe\n## Summary\nDistributed systems engineer skilled in Go, Kubernetes, and PostgreSQL.\n## Experience\n- Built high-throughput microservices in Go and Kubernetes."
+	jobDesc := "Looking for a Senior Go Engineer with Kubernetes, PostgreSQL, and AWS experience."
+
+	score := domain.CalculateDeterministicATSScore(resumeText, "markdown", jobDesc)
+	if score == nil {
+		t.Fatal("expected non-nil ATSScore")
+	}
+	if score.ExtractionConfidenceScore <= 0 || score.ExtractionConfidenceScore > 100 {
+		t.Errorf("expected ExtractionConfidenceScore in (0, 100], got %v", score.ExtractionConfidenceScore)
+	}
+	if score.JobMatchingScore <= 0 || score.JobMatchingScore > 100 {
+		t.Errorf("expected JobMatchingScore in (0, 100], got %v", score.JobMatchingScore)
+	}
+	if score.FormatUsed != "markdown" {
+		t.Errorf("expected FormatUsed 'markdown', got %q", score.FormatUsed)
+	}
+}
+
+
 

@@ -2,9 +2,11 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"math"
 	"strings"
+	"time"
 )
 
 // CloneMetadata returns a defensive shallow copy of an entity metadata map, or nil if m is nil.
@@ -229,4 +231,206 @@ func CalculateSkillCoverageRatio(candidateSkills []Skill, gaps []GapItem, target
 	ratio := float64(matched) / float64(total)
 	return math.Round(ratio*100) / 100
 }
+
+// ATSExtractedExperience represents a work experience entry extracted by simulated ATS parsing.
+type ATSExtractedExperience struct {
+	Company    string   `json:"company"`
+	Title      string   `json:"title"`
+	DateRange  string   `json:"date_range,omitempty"`
+	Highlights []string `json:"highlights,omitempty"`
+}
+
+// ATSExtractedEducation represents an education entry extracted by simulated ATS parsing.
+type ATSExtractedEducation struct {
+	Institution string `json:"institution"`
+	Degree      string `json:"degree"`
+	Field       string `json:"field,omitempty"`
+	DateRange   string `json:"date_range,omitempty"`
+}
+
+// ATSExtractedCandidate represents the categorized candidate content parsed from a text-based resume.
+type ATSExtractedCandidate struct {
+	Summary        string                   `json:"summary,omitempty"`
+	Skills         []string                 `json:"skills"`
+	Experiences    []ATSExtractedExperience `json:"experiences"`
+	Educations     []ATSExtractedEducation  `json:"educations"`
+	Certifications []string                 `json:"certifications,omitempty"`
+}
+
+// Normalize ensures slices in ATSExtractedCandidate are non-nil.
+func (c *ATSExtractedCandidate) Normalize() {
+	if c == nil {
+		return
+	}
+	if c.Skills == nil {
+		c.Skills = []string{}
+	}
+	if c.Experiences == nil {
+		c.Experiences = []ATSExtractedExperience{}
+	}
+	for i := range c.Experiences {
+		if c.Experiences[i].Highlights == nil {
+			c.Experiences[i].Highlights = []string{}
+		}
+	}
+	if c.Educations == nil {
+		c.Educations = []ATSExtractedEducation{}
+	}
+	if c.Certifications == nil {
+		c.Certifications = []string{}
+	}
+}
+
+// ATSScore represents the two-signal ATS simulation evaluation for a tailored resume version:
+// 1. ExtractionConfidenceScore (0..100%): how complete the extracted information is from the text-based resume.
+// 2. JobMatchingScore (0..100%): perceived matching score of the extracted information against the job description.
+type ATSScore struct {
+	ExtractionConfidenceScore float64                `json:"extraction_confidence_score"`
+	JobMatchingScore          float64                `json:"job_matching_score"`
+	FormatUsed                string                 `json:"format_used,omitempty"`
+	ExtractionSummary         string                 `json:"extraction_summary,omitempty"`
+	MatchingSummary           string                 `json:"matching_summary,omitempty"`
+	ExtractedCandidate        *ATSExtractedCandidate `json:"extracted_candidate,omitempty"`
+	EvaluatedAt               *time.Time             `json:"evaluated_at,omitempty"`
+}
+
+// NormalizeATSFormat validates and normalizes an ATS simulation format against the allowed values
+// ("", "markdown", "md", "html", "text", "txt", "plain_text").
+func NormalizeATSFormat(rawFormat string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(rawFormat)) {
+	case "", "markdown", "md":
+		return string(OutputFormatMarkdown), nil
+	case "html":
+		return string(OutputFormatHTML), nil
+	case "text", "txt", "plain_text":
+		return string(OutputFormatPlainText), nil
+	default:
+		return "", fmt.Errorf("%w: unsupported ATS format %q (expected html, markdown, or text)", ErrValidation, rawFormat)
+	}
+}
+
+// Normalize clamps score percentages to [0, 100] and normalizes nested extracted candidate slices.
+func (s *ATSScore) Normalize() {
+	if s == nil {
+		return
+	}
+	if s.ExtractionConfidenceScore < 0 {
+		s.ExtractionConfidenceScore = 0
+	} else if s.ExtractionConfidenceScore > 100 {
+		s.ExtractionConfidenceScore = 100
+	} else {
+		s.ExtractionConfidenceScore = math.Round(s.ExtractionConfidenceScore*10) / 10
+	}
+
+	if s.JobMatchingScore < 0 {
+		s.JobMatchingScore = 0
+	} else if s.JobMatchingScore > 100 {
+		s.JobMatchingScore = 100
+	} else {
+		s.JobMatchingScore = math.Round(s.JobMatchingScore*10) / 10
+	}
+
+	if s.ExtractedCandidate != nil {
+		s.ExtractedCandidate.Normalize()
+	}
+}
+
+// ConvertATSRatioToPercent converts an ATS score ratio in [0, 1] (where 1.0 = 100%) or percentage in (1, 100]
+// into a clamped [0, 100] percentage value rounded to one decimal place.
+func ConvertATSRatioToPercent(val float64) float64 {
+	if math.IsNaN(val) || val <= 0 {
+		return 0.0
+	}
+	if val <= 1.0 {
+		return math.Round(val*1000) / 10
+	}
+	if val > 100.0 {
+		return 100.0
+	}
+	return math.Round(val*10) / 10
+}
+
+// CalculateDeterministicATSScore provides a deterministic fallback ATS extraction and matching score
+// when no external LLM provider is configured.
+func CalculateDeterministicATSScore(resumeText, formatUsed, jobDescription string) *ATSScore {
+	trimmedResume := strings.TrimSpace(resumeText)
+	trimmedJD := strings.TrimSpace(jobDescription)
+	if formatUsed == "" {
+		formatUsed = string(OutputFormatMarkdown)
+	}
+
+	extractionScore := 0.0
+	if len(trimmedResume) > 0 {
+		extractionScore = 60.0
+		lowerResume := strings.ToLower(trimmedResume)
+		if strings.Contains(lowerResume, "summary") || len(trimmedResume) >= 120 {
+			extractionScore += 15.0
+		}
+		if strings.Contains(lowerResume, "experience") || strings.Contains(lowerResume, "work") || strings.Contains(lowerResume, "- ") || strings.Contains(lowerResume, "<li>") {
+			extractionScore += 15.0
+		}
+		if strings.Contains(lowerResume, "skill") || strings.Contains(lowerResume, "education") {
+			extractionScore += 10.0
+		}
+	}
+
+	matchingScore := 0.0
+	var matchedTokens []string
+	if len(trimmedResume) > 0 && len(trimmedJD) > 0 {
+		lowerResume := strings.ToLower(trimmedResume)
+		words := strings.FieldsFunc(strings.ToLower(trimmedJD), func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+		})
+		stopWords := map[string]bool{
+			"the": true, "and": true, "for": true, "with": true, "that": true,
+			"this": true, "from": true, "your": true, "have": true, "will": true,
+			"are": true, "our": true, "you": true, "looking": true, "experience": true,
+		}
+		seen := make(map[string]bool)
+		totalKeywords := 0
+		matchedKeywords := 0
+		for _, w := range words {
+			if len(w) < 2 || stopWords[w] || seen[w] {
+				continue
+			}
+			seen[w] = true
+			totalKeywords++
+			if strings.Contains(lowerResume, w) {
+				matchedKeywords++
+				matchedTokens = append(matchedTokens, w)
+			}
+		}
+		if totalKeywords == 0 {
+			matchingScore = 80.0
+		} else {
+			ratio := float64(matchedKeywords) / float64(totalKeywords)
+			matchingScore = math.Round(ratio*1000) / 10
+			if matchingScore < 15.0 && matchedKeywords > 0 {
+				matchingScore = 15.0
+			}
+		}
+	}
+
+	candidate := &ATSExtractedCandidate{
+		Summary:     "Deterministically parsed resume content.",
+		Skills:      matchedTokens,
+		Experiences: []ATSExtractedExperience{},
+		Educations:  []ATSExtractedEducation{},
+	}
+	candidate.Normalize()
+
+	now := time.Now().UTC()
+	res := &ATSScore{
+		ExtractionConfidenceScore: extractionScore,
+		JobMatchingScore:          matchingScore,
+		FormatUsed:                formatUsed,
+		ExtractionSummary:         "Extracted structured candidate sections from rendered resume text.",
+		MatchingSummary:           "Evaluated extracted candidate profile against target job description.",
+		ExtractedCandidate:        candidate,
+		EvaluatedAt:               &now,
+	}
+	res.Normalize()
+	return res
+}
+
 

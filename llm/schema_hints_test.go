@@ -68,6 +68,24 @@ func TestLeanMainProfileSchema_EnrichedFieldDescriptions(t *testing.T) {
 	recursivelyCheckDescriptions(t, "root", schema)
 }
 
+func TestATSExtractionResponseSchema_EnrichedFieldDescriptions(t *testing.T) {
+	schema := llm.ATSExtractionResponseSchema()
+	if schema == nil {
+		t.Fatal("ATSExtractionResponseSchema returned nil")
+	}
+
+	recursivelyCheckDescriptions(t, "root", schema)
+}
+
+func TestATSMatchingResponseSchema_EnrichedFieldDescriptions(t *testing.T) {
+	schema := llm.ATSMatchingResponseSchema()
+	if schema == nil {
+		t.Fatal("ATSMatchingResponseSchema returned nil")
+	}
+
+	recursivelyCheckDescriptions(t, "root", schema)
+}
+
 func TestGapReportSchema_Integrity(t *testing.T) {
 	schema := llm.GapReportSchema()
 	if schema == nil {

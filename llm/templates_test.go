@@ -21,6 +21,10 @@ func TestPromptTemplates_EmbeddedFilesExist(t *testing.T) {
 		"gap_analysis_user.tmpl",
 		"resume_extract_system.tmpl",
 		"resume_extract_user.tmpl",
+		"ats_extract_system.tmpl",
+		"ats_extract_user.tmpl",
+		"ats_match_system.tmpl",
+		"ats_match_user.tmpl",
 	}
 
 	for _, file := range requiredFiles {
@@ -358,6 +362,18 @@ func TestPromptTemplates_EmbeddedJSONSchemas(t *testing.T) {
 			templateFile: "resume_extract_system.tmpl",
 			schemaGetter: llm.ResumeExtractResponseSchema,
 			expectedProp: "basics",
+		},
+		{
+			name:         "ats extract system prompt contains ATSExtractionResponseSchema",
+			templateFile: "ats_extract_system.tmpl",
+			schemaGetter: llm.ATSExtractionResponseSchema,
+			expectedProp: "extraction_confidence_score",
+		},
+		{
+			name:         "ats match system prompt contains ATSMatchingResponseSchema",
+			templateFile: "ats_match_system.tmpl",
+			schemaGetter: llm.ATSMatchingResponseSchema,
+			expectedProp: "job_matching_score",
 		},
 	}
 

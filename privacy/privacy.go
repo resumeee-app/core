@@ -698,3 +698,37 @@ func (s *Session) DeobfuscateGenerationResponse(resp *domain.GenerationResponse)
 	s.DeobfuscateTailoredContent(&resp.TailoredContent)
 	s.DeobfuscateGapReport(&resp.GapReport)
 }
+
+// DeobfuscateATSScore restores original contact details across an ATSScore and its ExtractedCandidate.
+func (s *Session) DeobfuscateATSScore(score *domain.ATSScore) {
+	if s == nil || score == nil {
+		return
+	}
+	score.ExtractionSummary = s.DeobfuscateString(score.ExtractionSummary)
+	score.MatchingSummary = s.DeobfuscateString(score.MatchingSummary)
+	if score.ExtractedCandidate != nil {
+		c := score.ExtractedCandidate
+		c.Summary = s.DeobfuscateString(c.Summary)
+		for i := range c.Skills {
+			c.Skills[i] = s.DeobfuscateString(c.Skills[i])
+		}
+		for i := range c.Experiences {
+			c.Experiences[i].Company = s.DeobfuscateString(c.Experiences[i].Company)
+			c.Experiences[i].Title = s.DeobfuscateString(c.Experiences[i].Title)
+			c.Experiences[i].DateRange = s.DeobfuscateString(c.Experiences[i].DateRange)
+			for j := range c.Experiences[i].Highlights {
+				c.Experiences[i].Highlights[j] = s.DeobfuscateString(c.Experiences[i].Highlights[j])
+			}
+		}
+		for i := range c.Educations {
+			c.Educations[i].Institution = s.DeobfuscateString(c.Educations[i].Institution)
+			c.Educations[i].Degree = s.DeobfuscateString(c.Educations[i].Degree)
+			c.Educations[i].Field = s.DeobfuscateString(c.Educations[i].Field)
+			c.Educations[i].DateRange = s.DeobfuscateString(c.Educations[i].DateRange)
+		}
+		for i := range c.Certifications {
+			c.Certifications[i] = s.DeobfuscateString(c.Certifications[i])
+		}
+	}
+}
+

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -1284,6 +1285,14 @@ type spyQuotaRepo struct {
 		DailyLimit      int
 		MonthlyLimit    int
 	}
+	commits []struct {
+		ReservationID string
+		Usage         domain.TokenUsage
+	}
+	releases []struct {
+		ReservationID string
+		Reason        string
+	}
 }
 
 func (s *spyQuotaRepo) ReserveQuota(_ context.Context, userID string, op domain.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*domain.LLMUsageRecord, error) {
@@ -1315,11 +1324,29 @@ func (s *spyQuotaRepo) GetQuota(_ context.Context, userID string) (*domain.Tenan
 	return &domain.TenantQuota{UserID: userID}, nil
 }
 
-func (s *spyQuotaRepo) CommitUsage(_ context.Context, _ string, _ domain.TokenUsage) error {
+func (s *spyQuotaRepo) CommitUsage(_ context.Context, reservationID string, usage domain.TokenUsage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commits = append(s.commits, struct {
+		ReservationID string
+		Usage         domain.TokenUsage
+	}{
+		ReservationID: reservationID,
+		Usage:         usage,
+	})
 	return nil
 }
 
-func (s *spyQuotaRepo) ReleaseQuota(_ context.Context, _ string, _ string) error {
+func (s *spyQuotaRepo) ReleaseQuota(_ context.Context, reservationID string, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.releases = append(s.releases, struct {
+		ReservationID string
+		Reason        string
+	}{
+		ReservationID: reservationID,
+		Reason:        reason,
+	})
 	return nil
 }
 
@@ -1337,21 +1364,52 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 	}
 
 	b := &domain.Branch{
-		ID:            "branch-quota-test",
-		UserID:        defaultUser,
-		Name:          "DevOps Lead",
-		TemplateSetID: renderer.TemplateStandardCleanID,
+		ID:                 "branch-quota-test",
+		UserID:             defaultUser,
+		Name:               "DevOps Lead",
+		TargetRequirements: "Go, Kubernetes, Terraform",
+		TemplateSetID:      renderer.TemplateStandardCleanID,
 	}
 	err = store.CreateBranch(ctx, b)
 	if err != nil {
 		t.Fatalf("failed to create branch: %v", err)
 	}
 
-	stubLLM := &stubLLMService{
-		gapReport: &domain.GapReport{OverallMatchSummary: "Quota test gap report"},
+	vQuota1 := &domain.BranchVersion{
+		ID:               "ver-quota-ats-1",
+		BranchID:         b.ID,
+		MainRevisionUsed: 1,
+		Status:           domain.VersionStatusCompleted,
+		MarkdownOutput:   "# DevOps Resume\nGo, Kubernetes, Terraform",
+	}
+	if err := store.CreateVersion(ctx, vQuota1); err != nil {
+		t.Fatalf("failed to create vQuota1: %v", err)
+	}
+	if err := store.CompleteVersion(ctx, vQuota1); err != nil {
+		t.Fatalf("failed to complete vQuota1: %v", err)
 	}
 
-	t.Run("Custom limits propagated across GenerateVersion, SyncBranches, and AnalyzeGaps", func(t *testing.T) {
+	vQuota2 := &domain.BranchVersion{
+		ID:               "ver-quota-ats-2",
+		BranchID:         b.ID,
+		MainRevisionUsed: 1,
+		Status:           domain.VersionStatusCompleted,
+		MarkdownOutput:   "# DevOps Resume v2\nGo, Kubernetes, Terraform",
+	}
+	if err := store.CreateVersion(ctx, vQuota2); err != nil {
+		t.Fatalf("failed to create vQuota2: %v", err)
+	}
+	if err := store.CompleteVersion(ctx, vQuota2); err != nil {
+		t.Fatalf("failed to complete vQuota2: %v", err)
+	}
+
+	stubLLM := &stubATSSimulator{
+		stubLLMService: stubLLMService{
+			gapReport: &domain.GapReport{OverallMatchSummary: "Quota test gap report"},
+		},
+	}
+
+	t.Run("Custom limits propagated across GenerateVersion, SyncBranches, AnalyzeGaps, and SimulateATS", func(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
 		enqueuer := newStubEnqueuer(10)
 
@@ -1385,11 +1443,17 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 			t.Fatalf("AnalyzeGaps failed: %v", err)
 		}
 
+		// 4. SimulateATS
+		_, err = svc.SimulateATS(ctx, defaultUser, b.ID, &domain.ATSSimulationOptions{VersionID: vQuota1.ID})
+		if err != nil {
+			t.Fatalf("SimulateATS failed: %v", err)
+		}
+
 		spyQuota.mu.Lock()
 		defer spyQuota.mu.Unlock()
 
-		if len(spyQuota.reservations) != 3 {
-			t.Fatalf("expected 3 reservations, got %d", len(spyQuota.reservations))
+		if len(spyQuota.reservations) != 4 {
+			t.Fatalf("expected 4 reservations, got %d", len(spyQuota.reservations))
 		}
 
 		for i, res := range spyQuota.reservations {
@@ -1433,11 +1497,16 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 			t.Fatalf("AnalyzeGaps failed: %v", err)
 		}
 
+		_, err = svcDefault.SimulateATS(ctx, defaultUser, b.ID, &domain.ATSSimulationOptions{VersionID: vQuota2.ID})
+		if err != nil {
+			t.Fatalf("SimulateATS failed: %v", err)
+		}
+
 		spyQuota.mu.Lock()
 		defer spyQuota.mu.Unlock()
 
-		if len(spyQuota.reservations) != 3 {
-			t.Fatalf("expected 3 reservations, got %d", len(spyQuota.reservations))
+		if len(spyQuota.reservations) != 4 {
+			t.Fatalf("expected 4 reservations, got %d", len(spyQuota.reservations))
 		}
 
 		for i, res := range spyQuota.reservations {
@@ -1450,6 +1519,487 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 		}
 	})
 }
+
+type stubATSSimulator struct {
+	stubLLMService
+	mu      sync.Mutex
+	atsResp *domain.ATSSimulationResponse
+	atsErr  error
+	delay   time.Duration
+	calls   int
+	lastReq domain.ATSSimulationRequest
+}
+
+func (s *stubATSSimulator) SimulateATS(_ context.Context, req domain.ATSSimulationRequest) (*domain.ATSSimulationResponse, error) {
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.lastReq = req
+	if s.atsErr != nil {
+		return nil, s.atsErr
+	}
+	if s.atsResp != nil {
+		cp := *s.atsResp
+		return &cp, nil
+	}
+	return &domain.ATSSimulationResponse{
+		Score: domain.ATSScore{
+			ExtractionConfidenceScore: 93.0,
+			JobMatchingScore:          87.0,
+			FormatUsed:                req.FormatUsed,
+			ExtractionSummary:         "High confidence extraction",
+			MatchingSummary:           "Strong job match",
+		},
+		Usage: domain.TokenUsage{TotalTokens: 400},
+	}, nil
+}
+
+type failingSnapshotProfileRepo struct {
+	domain.ProfileRepository
+	snapErr error
+}
+
+func (f *failingSnapshotProfileRepo) GetSnapshot(ctx context.Context, userID string) (*domain.MainProfileSnapshot, error) {
+	if f.snapErr != nil {
+		return nil, f.snapErr
+	}
+	return f.ProfileRepository.GetSnapshot(ctx, userID)
+}
+
+func TestService_SimulateATS(t *testing.T) {
+	ctx := context.Background()
+	env := setupTestBranchEnv(t, 10)
+
+	t.Run("Rejects Default Main Branch", func(t *testing.T) {
+		branches, err := env.svc.ListBranches(ctx, env.defaultUser, false)
+		if err != nil {
+			t.Fatalf("ListBranches failed: %v", err)
+		}
+		var defaultBranchID string
+		for _, b := range branches {
+			if b.IsDefault {
+				defaultBranchID = b.ID
+				break
+			}
+		}
+		if defaultBranchID == "" {
+			t.Fatal("expected seeded default branch")
+		}
+
+		_, err = env.svc.SimulateATS(ctx, env.defaultUser, defaultBranchID, nil)
+		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+			t.Errorf("expected ErrDefaultBranchImmutable for default branch, got %v", err)
+		}
+	})
+
+	t.Run("Rejects tailored branch when Job Description is missing", func(t *testing.T) {
+		noJDBranch := &domain.Branch{
+			ID:                 "branch-no-jd",
+			UserID:             env.defaultUser,
+			Name:               "No JD Branch",
+			TargetRole:         "Backend Engineer",
+			TargetRequirements: "   ",
+			TemplateSetID:      renderer.TemplateStandardCleanID,
+		}
+		if _, err := env.svc.CreateBranch(ctx, noJDBranch); err != nil {
+			t.Fatalf("CreateBranch failed: %v", err)
+		}
+
+		_, err := env.svc.SimulateATS(ctx, env.defaultUser, noJDBranch.ID, nil)
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("expected ErrValidation when job description is missing, got %v", err)
+		}
+	})
+
+	t.Run("Rejects when version is not completed", func(t *testing.T) {
+		b, err := env.svc.GetBranch(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("GetBranch failed: %v", err)
+		}
+		b.TargetRequirements = "Strong Go, Kubernetes, and distributed systems architecture."
+		if _, err := env.svc.UpdateBranch(ctx, b); err != nil {
+			t.Fatalf("UpdateBranch failed: %v", err)
+		}
+
+		pendingVer := &domain.BranchVersion{
+			ID:       "ver-pending-ats",
+			BranchID: env.branchID,
+			Status:   domain.VersionStatusPending,
+		}
+		if err := env.branchRepo.CreateVersion(ctx, pendingVer); err != nil {
+			t.Fatalf("CreateVersion failed: %v", err)
+		}
+
+		_, err = env.svc.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+			VersionID: pendingVer.ID,
+		})
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("expected ErrValidation for pending version, got %v", err)
+		}
+	})
+
+	t.Run("Triggers once per tailored version and persists across active version switches", func(t *testing.T) {
+		v1, err := env.svc.GetVersion(ctx, env.branchID, env.v1ID)
+		if err != nil {
+			t.Fatalf("GetVersion v1 failed: %v", err)
+		}
+		v1.MarkdownOutput = "# Jane Doe\n## Summary\nLead Systems Architect skilled in Go and Kubernetes."
+		if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+			t.Fatalf("CompleteVersion v1 failed: %v", err)
+		}
+
+		sim := &stubATSSimulator{}
+		svc := branch.NewService(branch.Config{
+			BranchRepo:   env.branchRepo,
+			ProfileRepo:  env.profileRepo,
+			TemplateRepo: env.branchRepo.(domain.TemplateRepository),
+			Renderer:     renderer.NewTemplateRenderer(),
+			LLMService:   sim,
+		})
+
+		// First trigger on v1 succeeds
+		score, err := svc.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+			Format: "markdown",
+		})
+		if err != nil {
+			t.Fatalf("SimulateATS failed on first trigger: %v", err)
+		}
+		if score.ExtractionConfidenceScore != 93.0 || score.JobMatchingScore != 87.0 {
+			t.Errorf("unexpected score values: %+v", score)
+		}
+		if sim.calls != 1 {
+			t.Errorf("expected 1 LLM simulator call, got %d", sim.calls)
+		}
+
+		// Second trigger on the same version (v1) must fail with ErrConflict (triggers once per tailored version)
+		_, err = svc.SimulateATS(ctx, env.defaultUser, env.branchID, nil)
+		if !errors.Is(err, domain.ErrConflict) {
+			t.Errorf("expected ErrConflict on duplicate ATS trigger for same version, got %v", err)
+		}
+		if sim.calls != 1 {
+			t.Errorf("expected simulator not to be called again on conflict, got %d calls", sim.calls)
+		}
+
+		// Verify parent branch has v1's ATS score
+		bAfterV1, err := svc.GetBranch(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("GetBranch failed: %v", err)
+		}
+		if bAfterV1.ATSScore == nil || bAfterV1.ATSScore.JobMatchingScore != 87.0 {
+			t.Errorf("expected branch ATSScore 87.0, got %+v", bAfterV1.ATSScore)
+		}
+
+		// Create and complete v2 (newly tailored version has nil ATSScore)
+		v2 := &domain.BranchVersion{
+			ID:               "ver-ats-switch-2",
+			BranchID:         env.branchID,
+			MainRevisionUsed: 2,
+			Status:           domain.VersionStatusCompleted,
+			MarkdownOutput:   "# Tailored v2\n## Summary\nCloud architect",
+			HTMLOutput:       "<h1>Tailored v2</h1>",
+			PlainTextOutput:  "Tailored v2",
+		}
+		if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
+			t.Fatalf("CreateVersion v2 failed: %v", err)
+		}
+		if err := env.branchRepo.CompleteVersion(ctx, v2); err != nil {
+			t.Fatalf("CompleteVersion v2 failed: %v", err)
+		}
+
+		bOnV2, err := svc.GetBranch(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("GetBranch on v2 failed: %v", err)
+		}
+		if bOnV2.ATSScore != nil {
+			t.Errorf("expected branch ATSScore to be nil when newly completed v2 is active, got %+v", bOnV2.ATSScore)
+		}
+
+		// Switch active version back to v1 via UpdateBranch -> branch.ATSScore restores to v1's persisted score!
+		v1ID := env.v1ID
+		bOnV2.ActiveVersionID = &v1ID
+		bSwitchedToV1, err := svc.UpdateBranch(ctx, bOnV2)
+		if err != nil {
+			t.Fatalf("UpdateBranch switch to v1 failed: %v", err)
+		}
+		if bSwitchedToV1.ATSScore == nil || bSwitchedToV1.ATSScore.ExtractionConfidenceScore != 93.0 || bSwitchedToV1.ATSScore.JobMatchingScore != 87.0 {
+			t.Errorf("expected branch ATSScore restored to v1's (93.0, 87.0) after switching active version, got %+v", bSwitchedToV1.ATSScore)
+		}
+	})
+
+	t.Run("Rejects unsupported Format with ErrValidation", func(t *testing.T) {
+		_, err := env.svc.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+			Format: "docx",
+		})
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("expected ErrValidation for unsupported format 'docx', got %v", err)
+		}
+	})
+
+	t.Run("Propagates GetSnapshot error to prevent cleartext PII transmission", func(t *testing.T) {
+		vSnap := &domain.BranchVersion{
+			ID:               "ver-ats-snap-err",
+			BranchID:         env.branchID,
+			MainRevisionUsed: 2,
+			Status:           domain.VersionStatusCompleted,
+			MarkdownOutput:   "# Jane Doe\nGo Engineer",
+		}
+		if err := env.branchRepo.CreateVersion(ctx, vSnap); err != nil {
+			t.Fatalf("CreateVersion failed: %v", err)
+		}
+		if err := env.branchRepo.CompleteVersion(ctx, vSnap); err != nil {
+			t.Fatalf("CompleteVersion failed: %v", err)
+		}
+
+		sim := &stubATSSimulator{}
+		svcSnapErr := branch.NewService(branch.Config{
+			BranchRepo: env.branchRepo,
+			ProfileRepo: &failingSnapshotProfileRepo{
+				ProfileRepository: env.profileRepo,
+				snapErr:           errors.New("db connection lost"),
+			},
+			LLMService: sim,
+		})
+
+		_, err := svcSnapErr.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+			VersionID: vSnap.ID,
+		})
+		if err == nil || !strings.Contains(err.Error(), "failed to load profile snapshot") {
+			t.Fatalf("expected snapshot error to abort SimulateATS, got %v", err)
+		}
+		if sim.calls != 0 {
+			t.Errorf("expected LLM simulator not to be called when snapshot load fails, got %d calls", sim.calls)
+		}
+	})
+
+	t.Run("Commits quota usage (including 800 fallback tokens) and releases quota on LLM failure", func(t *testing.T) {
+		vQuotaCommit := &domain.BranchVersion{
+			ID:               "ver-ats-quota-commit",
+			BranchID:         env.branchID,
+			MainRevisionUsed: 2,
+			Status:           domain.VersionStatusCompleted,
+			MarkdownOutput:   "# Jane Doe\nGo Engineer",
+		}
+		if err := env.branchRepo.CreateVersion(ctx, vQuotaCommit); err != nil {
+			t.Fatalf("CreateVersion failed: %v", err)
+		}
+		if err := env.branchRepo.CompleteVersion(ctx, vQuotaCommit); err != nil {
+			t.Fatalf("CompleteVersion failed: %v", err)
+		}
+
+		spyQuota := &spyQuotaRepo{}
+		simZeroTokens := &stubATSSimulator{
+			atsResp: &domain.ATSSimulationResponse{
+				Score: domain.ATSScore{
+					ExtractionConfidenceScore: 90.0,
+					JobMatchingScore:          85.0,
+				},
+				Usage: domain.TokenUsage{TotalTokens: 0},
+			},
+		}
+		svcQuota := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			QuotaRepo:   spyQuota,
+			LLMService:  simZeroTokens,
+		})
+
+		if _, err := svcQuota.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+			VersionID: vQuotaCommit.ID,
+		}); err != nil {
+			t.Fatalf("SimulateATS failed: %v", err)
+		}
+		if len(spyQuota.commits) != 1 || spyQuota.commits[0].Usage.TotalTokens != 800 {
+			t.Errorf("expected 1 quota commit with fallback 800 tokens, got %+v", spyQuota.commits)
+		}
+
+		// Now test LLM failure releases quota reservation
+		vQuotaFail := &domain.BranchVersion{
+			ID:               "ver-ats-quota-fail",
+			BranchID:         env.branchID,
+			MainRevisionUsed: 2,
+			Status:           domain.VersionStatusCompleted,
+			MarkdownOutput:   "# Jane Doe\nGo Engineer",
+		}
+		if err := env.branchRepo.CreateVersion(ctx, vQuotaFail); err != nil {
+			t.Fatalf("CreateVersion failed: %v", err)
+		}
+		if err := env.branchRepo.CompleteVersion(ctx, vQuotaFail); err != nil {
+			t.Fatalf("CompleteVersion failed: %v", err)
+		}
+
+		simErr := &stubATSSimulator{atsErr: errors.New("upstream llm failure")}
+		svcQuotaFail := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			QuotaRepo:   spyQuota,
+			LLMService:  simErr,
+		})
+
+		if _, err := svcQuotaFail.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+			VersionID: vQuotaFail.ID,
+		}); err == nil {
+			t.Fatal("expected error from failing LLM simulator")
+		}
+		if len(spyQuota.releases) != 1 {
+			t.Errorf("expected 1 quota release on LLM failure, got %+v", spyQuota.releases)
+		}
+	})
+
+	t.Run("Renders missing HTML format on the fly when only MarkdownOutput is cached", func(t *testing.T) {
+		vPartial := &domain.BranchVersion{
+			ID:                "ver-ats-partial-render",
+			BranchID:          env.branchID,
+			MainRevisionUsed:  2,
+			Status:            domain.VersionStatusCompleted,
+			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+			MarkdownOutput:    "# Cached Markdown Only",
+			HTMLOutput:        "",
+			TailoredContent: &domain.TailoredContent{
+				Summary: "Distributed systems architect",
+			},
+		}
+		if err := env.branchRepo.CreateVersion(ctx, vPartial); err != nil {
+			t.Fatalf("CreateVersion failed: %v", err)
+		}
+		if err := env.branchRepo.CompleteVersion(ctx, vPartial); err != nil {
+			t.Fatalf("CompleteVersion failed: %v", err)
+		}
+
+		sim := &stubATSSimulator{}
+		svcRender := branch.NewService(branch.Config{
+			BranchRepo:   env.branchRepo,
+			ProfileRepo:  env.profileRepo,
+			TemplateRepo: env.branchRepo.(domain.TemplateRepository),
+			Renderer:     renderer.NewTemplateRenderer(),
+			LLMService:   sim,
+		})
+
+		score, err := svcRender.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+			VersionID: vPartial.ID,
+			Format:    "html",
+		})
+		if err != nil {
+			t.Fatalf("SimulateATS with html format failed: %v", err)
+		}
+		if score.FormatUsed != "html" {
+			t.Errorf("expected FormatUsed 'html', got %q", score.FormatUsed)
+		}
+		if !strings.Contains(sim.lastReq.ResumeText, "<") {
+			t.Errorf("expected rendered HTML resume text to be passed to simulator, got %q", sim.lastReq.ResumeText)
+		}
+	})
+
+	t.Run("Falls back deterministically when LLMService is nil and formats Projects and Certifications", func(t *testing.T) {
+		vDet := &domain.BranchVersion{
+			ID:               "ver-ats-deterministic",
+			BranchID:         env.branchID,
+			MainRevisionUsed: 2,
+			Status:           domain.VersionStatusCompleted,
+			TailoredContent: &domain.TailoredContent{
+				Summary: "Distributed Go and Kubernetes engineer",
+				Projects: []domain.TailoredProject{
+					{
+						Name:    "RaftKV",
+						Role:    "Creator",
+						Summary: "Consensus store in Go",
+						Bullets: []domain.TailoredBullet{{Text: "Implemented Raft leader election"}},
+					},
+				},
+				Certifications: []domain.TailoredCert{
+					{
+						Name:   "Certified Kubernetes Administrator",
+						Issuer: "CNCF",
+					},
+				},
+			},
+		}
+		if err := env.branchRepo.CreateVersion(ctx, vDet); err != nil {
+			t.Fatalf("CreateVersion failed: %v", err)
+		}
+		if err := env.branchRepo.CompleteVersion(ctx, vDet); err != nil {
+			t.Fatalf("CompleteVersion failed: %v", err)
+		}
+
+		svcDet := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			LLMService:  nil,
+		})
+
+		score, err := svcDet.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+			VersionID: vDet.ID,
+		})
+		if err != nil {
+			t.Fatalf("deterministic SimulateATS failed: %v", err)
+		}
+		if score.ExtractionConfidenceScore <= 0 || score.JobMatchingScore <= 0 {
+			t.Errorf("expected positive deterministic ATS scores, got %+v", score)
+		}
+		if score.EvaluatedAt == nil {
+			t.Errorf("expected EvaluatedAt to be populated on deterministic score")
+		}
+	})
+
+	t.Run("Rejects concurrent in-flight SimulateATS requests for the same version with ErrConflict", func(t *testing.T) {
+		vConc := &domain.BranchVersion{
+			ID:               "ver-ats-concurrent",
+			BranchID:         env.branchID,
+			MainRevisionUsed: 2,
+			Status:           domain.VersionStatusCompleted,
+			MarkdownOutput:   "# Concurrent Test\nGo and Kubernetes",
+		}
+		if err := env.branchRepo.CreateVersion(ctx, vConc); err != nil {
+			t.Fatalf("CreateVersion failed: %v", err)
+		}
+		if err := env.branchRepo.CompleteVersion(ctx, vConc); err != nil {
+			t.Fatalf("CompleteVersion failed: %v", err)
+		}
+
+		simSlow := &stubATSSimulator{
+			delay: 80 * time.Millisecond,
+		}
+		svcConc := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			LLMService:  simSlow,
+		})
+
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i := 0; i < 2; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				_, errs[idx] = svcConc.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+					VersionID: vConc.ID,
+				})
+			}(i)
+		}
+		wg.Wait()
+
+		successCount := 0
+		conflictCount := 0
+		for _, e := range errs {
+			if e == nil {
+				successCount++
+			} else if errors.Is(e, domain.ErrConflict) {
+				conflictCount++
+			} else {
+				t.Errorf("unexpected error in concurrent SimulateATS: %v", e)
+			}
+		}
+		if successCount != 1 || conflictCount != 1 {
+			t.Errorf("expected exactly 1 success and 1 ErrConflict in concurrent SimulateATS, got success=%d conflict=%d (errs=%v)", successCount, conflictCount, errs)
+		}
+		if simSlow.calls != 1 {
+			t.Errorf("expected LLM simulator to be invoked only once across concurrent requests, got %d", simSlow.calls)
+		}
+	})
+}
+
 
 
 

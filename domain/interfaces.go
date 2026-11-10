@@ -92,7 +92,30 @@ type BranchRepository interface {
 	ListVersions(ctx context.Context, branchID string) ([]BranchVersion, error)
 	UpdateVersionStatus(ctx context.Context, versionID string, status VersionStatus, errMsg string) error
 	CompleteVersion(ctx context.Context, version *BranchVersion) error
+	UpdateVersionATSScore(ctx context.Context, versionID string, atsScore *ATSScore) error
 	FailInterruptedVersions(ctx context.Context, reason string) error
+}
+
+// ATSSimulationOptions encapsulates optional parameters when triggering an on-demand ATS score simulation.
+type ATSSimulationOptions struct {
+	VersionID string `json:"version_id,omitempty"`
+	Format    string `json:"format,omitempty"` // "markdown", "html", or "text"
+}
+
+// ATSSimulationRequest contains the inputs required by the LLM service to execute two-stage ATS extraction and matching.
+type ATSSimulationRequest struct {
+	Model          string
+	ReasoningLevel string
+	ResumeText     string
+	FormatUsed     string
+	BranchContext  Branch
+	MainProfile    *MainProfileSnapshot
+}
+
+// ATSSimulationResponse wraps the two-stage ATS score evaluation and token consumption metrics.
+type ATSSimulationResponse struct {
+	Score ATSScore   `json:"score"`
+	Usage TokenUsage `json:"usage"`
 }
 
 // GenerationRequest contains full context required by an LLM provider to tailor a resume.

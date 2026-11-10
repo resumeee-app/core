@@ -3,6 +3,9 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	"resumeee/internal/domain"
 	"resumeee/internal/privacy"
@@ -110,3 +113,127 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req domain.Gen
 	resp.GapReport.Normalize()
 	return &resp.GapReport, nil
 }
+
+type atsExtractionLLMOutput struct {
+	ExtractionConfidenceScore float64                      `json:"extraction_confidence_score"`
+	ExtractionSummary         string                       `json:"extraction_summary"`
+	ExtractedCandidate        domain.ATSExtractedCandidate `json:"extracted_candidate"`
+}
+
+type atsMatchingLLMOutput struct {
+	JobMatchingScore float64 `json:"job_matching_score"`
+	MatchingSummary  string  `json:"matching_summary"`
+}
+
+// SimulateATS executes the two-stage ATS perception simulation for a rendered resume version:
+//  1. Stage 1 extracts and categorizes content from the text-based resume (HTML, Markdown, or plain text),
+//     producing an Extraction Confidence Score from 0 to 1 (converted to 0..100%).
+//  2. Stage 2 evaluates only the extracted candidate profile from Stage 1 against the job description,
+//     producing a Job Matching Score from 0 to 1 (converted to 0..100%).
+func (a *ServiceAdapter) SimulateATS(ctx context.Context, req domain.ATSSimulationRequest) (*domain.ATSSimulationResponse, error) {
+	formatUsed, err := domain.NormalizeATSFormat(req.FormatUsed)
+	if err != nil {
+		return nil, err
+	}
+	req.FormatUsed = formatUsed
+
+	var profile *domain.Profile
+	if req.MainProfile != nil {
+		profile = &req.MainProfile.Profile
+	}
+
+	genReq := domain.GenerationRequest{
+		Model:          req.Model,
+		ReasoningLevel: req.ReasoningLevel,
+		MainProfile:    req.MainProfile,
+		BranchContext:  req.BranchContext,
+	}
+
+	provider, model, err := a.registry.Resolve(genReq, nil, profile)
+	if err != nil {
+		return nil, err
+	}
+
+	completeStep := func(systemPrompt, userPrompt string) (string, domain.TokenUsage, error) {
+		if rawUsage, ok := provider.(RawUsageCompleter); ok {
+			return rawUsage.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
+		}
+		if raw, ok := provider.(RawCompleter); ok {
+			text, cErr := raw.CompleteText(ctx, systemPrompt, userPrompt, model)
+			return text, domain.TokenUsage{}, cErr
+		}
+		return "", domain.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion for ATS simulation", ErrInvalidResponse, provider.Name())
+	}
+
+	// Stage 1: ATS Content Extraction & Extraction Confidence Score
+	extractPrompts, session, err := BuildATSExtractionPrompt(req)
+	if err != nil {
+		return nil, err
+	}
+
+	rawExtract, usage1, err := completeStep(extractPrompts.SystemPrompt, extractPrompts.UserPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("ats extraction failed: %w", err)
+	}
+
+	cleanedExtract := ExtractJSON(rawExtract)
+	if strings.TrimSpace(cleanedExtract) == "" {
+		return nil, fmt.Errorf("%w: empty JSON in ATS extraction response", ErrInvalidResponse)
+	}
+
+	var parsedExtract atsExtractionLLMOutput
+	if err := json.Unmarshal([]byte(cleanedExtract), &parsedExtract); err != nil {
+		return nil, fmt.Errorf("%w: failed to parse ATS extraction response: %v", ErrInvalidResponse, err)
+	}
+	parsedExtract.ExtractedCandidate.Normalize()
+
+	// Stage 2: Perceived Job Matching Score using ONLY the extracted candidate data
+	matchPrompts, err := BuildATSMatchingPrompt(req.BranchContext, &parsedExtract.ExtractedCandidate, session)
+	if err != nil {
+		return nil, err
+	}
+
+	rawMatch, usage2, err := completeStep(matchPrompts.SystemPrompt, matchPrompts.UserPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("ats matching failed: %w", err)
+	}
+
+	cleanedMatch := ExtractJSON(rawMatch)
+	if strings.TrimSpace(cleanedMatch) == "" {
+		return nil, fmt.Errorf("%w: empty JSON in ATS matching response", ErrInvalidResponse)
+	}
+
+	var parsedMatch atsMatchingLLMOutput
+	if err := json.Unmarshal([]byte(cleanedMatch), &parsedMatch); err != nil {
+		return nil, fmt.Errorf("%w: failed to parse ATS matching response: %v", ErrInvalidResponse, err)
+	}
+
+	now := time.Now().UTC()
+	candidateCopy := parsedExtract.ExtractedCandidate
+	atsScore := domain.ATSScore{
+		ExtractionConfidenceScore: domain.ConvertATSRatioToPercent(parsedExtract.ExtractionConfidenceScore),
+		JobMatchingScore:          domain.ConvertATSRatioToPercent(parsedMatch.JobMatchingScore),
+		FormatUsed:                formatUsed,
+		ExtractionSummary:         strings.TrimSpace(parsedExtract.ExtractionSummary),
+		MatchingSummary:           strings.TrimSpace(parsedMatch.MatchingSummary),
+		ExtractedCandidate:        &candidateCopy,
+		EvaluatedAt:               &now,
+	}
+
+	if session != nil {
+		session.DeobfuscateATSScore(&atsScore)
+	}
+	atsScore.Normalize()
+
+	totalUsage := domain.TokenUsage{
+		PromptTokens:     usage1.PromptTokens + usage2.PromptTokens,
+		CompletionTokens: usage1.CompletionTokens + usage2.CompletionTokens,
+		TotalTokens:      usage1.TotalTokens + usage2.TotalTokens,
+	}
+
+	return &domain.ATSSimulationResponse{
+		Score: atsScore,
+		Usage: totalUsage,
+	}, nil
+}
+

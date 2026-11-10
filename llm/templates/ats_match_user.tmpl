@@ -1,0 +1,12 @@
+<target_job_description>
+Target Role: {{if .TargetRole}}{{.TargetRole}}{{else}}Not specified{{end}}
+Target Company: {{if .TargetCompany}}{{.TargetCompany}}{{else}}Not specified{{end}}
+Job Description:
+{{.TargetRequirements}}
+</target_job_description>
+
+<extracted_candidate_data>
+{{.ExtractedCandidateJSON}}
+</extracted_candidate_data>
+
+Using only the extracted candidate data above, produce a valid JSON object with top-level keys "job_matching_score" (0 to 1) and "matching_summary" evaluating the match against the job description. Output valid JSON only.

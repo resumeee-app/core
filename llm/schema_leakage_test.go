@@ -58,6 +58,8 @@ func TestSchemas_ZeroInternalFieldLeakage(t *testing.T) {
 		{name: "ResumeExtractResponseSchema", getter: llm.ResumeExtractResponseSchema},
 		{name: "GeminiResponseSchema", getter: llm.GeminiResponseSchema},
 		{name: "LeanMainProfileSchema", getter: llm.LeanMainProfileSchema},
+		{name: "ATSExtractionResponseSchema", getter: llm.ATSExtractionResponseSchema},
+		{name: "ATSMatchingResponseSchema", getter: llm.ATSMatchingResponseSchema},
 	}
 
 	for _, sc := range schemas {

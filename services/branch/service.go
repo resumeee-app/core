@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +34,7 @@ type Service interface {
 	GetVersion(ctx context.Context, branchID, versionNumOrID string) (*domain.BranchVersion, error)
 	EditVersion(ctx context.Context, userID, branchID, parentVersionNumOrID string, editedContent domain.TailoredContent) (*domain.BranchVersion, error)
 	AnalyzeGaps(ctx context.Context, userID, branchID string) (*domain.GapReport, error)
+	SimulateATS(ctx context.Context, userID, branchID string, opts *domain.ATSSimulationOptions) (*domain.ATSScore, error)
 	GetPromptPreview(ctx context.Context, userID, branchID string, opts *domain.PromptPreviewOptions) (*domain.PromptPreview, error)
 }
 
@@ -64,6 +67,8 @@ type service struct {
 	logger            *slog.Logger
 	dailyRequestLimit int
 	monthlyTokenLimit int
+	atsInFlightMu     sync.Mutex
+	atsInFlight       map[string]bool
 }
 
 // NewService constructs a new Branch service.
@@ -90,6 +95,7 @@ func NewService(cfg Config) Service {
 		logger:            cfg.Logger,
 		dailyRequestLimit: dailyLimit,
 		monthlyTokenLimit: monthlyLimit,
+		atsInFlight:       make(map[string]bool),
 	}
 }
 
@@ -137,20 +143,49 @@ func ensureGapReportScore(g *domain.GapReport) {
 	}
 }
 
-func (s *service) populateBranchGapReport(ctx context.Context, branch *domain.Branch) {
+func hydrateBranchFromActiveVersion(branch *domain.Branch, ver *domain.BranchVersion, overwriteExisting bool) {
+	if branch == nil || ver == nil {
+		return
+	}
+	if overwriteExisting {
+		branch.LastSyncedMainRevision = ver.MainRevisionUsed
+		if ver.GapReport != nil {
+			ensureGapReportScore(ver.GapReport)
+		}
+		branch.GapReport = ver.GapReport
+		if ver.ATSScore != nil {
+			ver.ATSScore.Normalize()
+		}
+		branch.ATSScore = ver.ATSScore
+		return
+	}
+	if isGapReportEmpty(branch.GapReport) && ver.GapReport != nil {
+		ensureGapReportScore(ver.GapReport)
+		branch.GapReport = ver.GapReport
+	}
+	if branch.ATSScore == nil && ver.ATSScore != nil {
+		ver.ATSScore.Normalize()
+		branch.ATSScore = ver.ATSScore
+	}
+}
+
+func (s *service) populateBranchActiveMetrics(ctx context.Context, branch *domain.Branch) {
 	if branch == nil {
 		return
 	}
-	if !isGapReportEmpty(branch.GapReport) {
+	hasGapReport := !isGapReportEmpty(branch.GapReport)
+	if hasGapReport {
 		ensureGapReportScore(branch.GapReport)
+	}
+	if branch.ATSScore != nil {
+		branch.ATSScore.Normalize()
+	}
+	if (hasGapReport && branch.ATSScore != nil) || branch.ActiveVersionID == nil || *branch.ActiveVersionID == "" || s.branchRepo == nil {
 		return
 	}
-	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" && s.branchRepo != nil {
-		ver, err := s.branchRepo.GetVersion(ctx, branch.ID, *branch.ActiveVersionID)
-		if err == nil && ver != nil && ver.GapReport != nil {
-			ensureGapReportScore(ver.GapReport)
-			branch.GapReport = ver.GapReport
-		}
+	ver, err := s.branchRepo.GetVersion(ctx, branch.ID, *branch.ActiveVersionID)
+	if err == nil && ver != nil {
+		hydrateBranchFromActiveVersion(branch, ver, false)
 	}
 }
 
@@ -163,9 +198,14 @@ func (s *service) ListBranches(ctx context.Context, userID string, staleOnly boo
 
 	var missingActiveVersionIDs []string
 	for i := range branches {
-		if !isGapReportEmpty(branches[i].GapReport) {
+		hasGap := !isGapReportEmpty(branches[i].GapReport)
+		if hasGap {
 			ensureGapReportScore(branches[i].GapReport)
-		} else if branches[i].ActiveVersionID != nil && *branches[i].ActiveVersionID != "" {
+		}
+		if branches[i].ATSScore != nil {
+			branches[i].ATSScore.Normalize()
+		}
+		if (!hasGap || branches[i].ATSScore == nil) && branches[i].ActiveVersionID != nil && *branches[i].ActiveVersionID != "" {
 			missingActiveVersionIDs = append(missingActiveVersionIDs, *branches[i].ActiveVersionID)
 		}
 	}
@@ -178,10 +218,9 @@ func (s *service) ListBranches(ctx context.Context, userID string, staleOnly boo
 				versionMap[activeVersions[i].ID] = &activeVersions[i]
 			}
 			for i := range branches {
-				if isGapReportEmpty(branches[i].GapReport) && branches[i].ActiveVersionID != nil {
-					if ver, ok := versionMap[*branches[i].ActiveVersionID]; ok && ver.GapReport != nil {
-						ensureGapReportScore(ver.GapReport)
-						branches[i].GapReport = ver.GapReport
+				if branches[i].ActiveVersionID != nil {
+					if ver, ok := versionMap[*branches[i].ActiveVersionID]; ok {
+						hydrateBranchFromActiveVersion(&branches[i], ver, false)
 					}
 				}
 			}
@@ -213,7 +252,7 @@ func (s *service) GetBranch(ctx context.Context, userID, id string) (*domain.Bra
 	if err != nil {
 		return nil, err
 	}
-	s.populateBranchGapReport(ctx, branch)
+	s.populateBranchActiveMetrics(ctx, branch)
 	return branch, nil
 }
 
@@ -302,11 +341,7 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 		if ver.Status != domain.VersionStatusCompleted && ver.Status != domain.VersionStatusCompletedWithWarnings {
 			return nil, fmt.Errorf("%w: active version %s must be completed (got %s)", domain.ErrValidation, ver.ID, ver.Status)
 		}
-		branch.LastSyncedMainRevision = ver.MainRevisionUsed
-		if ver.GapReport != nil {
-			ensureGapReportScore(ver.GapReport)
-		}
-		branch.GapReport = ver.GapReport
+		hydrateBranchFromActiveVersion(branch, ver, true)
 	}
 
 	if err := s.branchRepo.UpdateBranch(ctx, branch); err != nil {
@@ -695,32 +730,58 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 	return ver, nil
 }
 
+func (s *service) reserveOperationQuota(ctx context.Context, userID string, op domain.LLMOperationType, estimatedTokens, fallbackTokens int) (func(domain.TokenUsage, error), error) {
+	if s.llmService == nil || s.quotaRepo == nil {
+		return func(domain.TokenUsage, error) {}, nil
+	}
+	rec, err := s.quotaRepo.ReserveQuota(ctx, userID, op, estimatedTokens, s.dailyRequestLimit, s.monthlyTokenLimit)
+	if err != nil {
+		return nil, err
+	}
+	return func(usage domain.TokenUsage, retErr error) {
+		if rec == nil {
+			return
+		}
+		if retErr != nil {
+			_ = s.quotaRepo.ReleaseQuota(ctx, rec.ID, retErr.Error())
+			return
+		}
+		if usage.TotalTokens == 0 {
+			usage.TotalTokens = fallbackTokens
+		}
+		_ = s.quotaRepo.CommitUsage(ctx, rec.ID, usage)
+	}, nil
+}
+
+func (s *service) tryAcquireATSInFlight(versionID string) bool {
+	s.atsInFlightMu.Lock()
+	defer s.atsInFlightMu.Unlock()
+	if s.atsInFlight[versionID] {
+		return false
+	}
+	s.atsInFlight[versionID] = true
+	return true
+}
+
+func (s *service) releaseATSInFlight(versionID string) {
+	s.atsInFlightMu.Lock()
+	defer s.atsInFlightMu.Unlock()
+	delete(s.atsInFlight, versionID)
+}
+
 // AnalyzeGaps performs fast decoupled gap analysis for a branch against the main profile snapshot.
 func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*domain.GapReport, error) {
 	var (
-		rec    *domain.LLMUsageRecord
 		retErr error
 		usage  domain.TokenUsage
 	)
-	if s.llmService != nil && s.quotaRepo != nil {
-		r, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationGapAnalysis, 1000, s.dailyRequestLimit, s.monthlyTokenLimit)
-		if qErr != nil {
-			return nil, qErr
-		}
-		rec = r
-		defer func() {
-			if rec != nil {
-				if retErr != nil {
-					_ = s.quotaRepo.ReleaseQuota(ctx, rec.ID, retErr.Error())
-				} else {
-					if usage.TotalTokens == 0 {
-						usage.TotalTokens = 500
-					}
-					_ = s.quotaRepo.CommitUsage(ctx, rec.ID, usage)
-				}
-			}
-		}()
+	finishQuota, err := s.reserveOperationQuota(ctx, userID, domain.OperationGapAnalysis, 1000, 500)
+	if err != nil {
+		return nil, err
 	}
+	defer func() {
+		finishQuota(usage, retErr)
+	}()
 
 	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
 	if err != nil {
@@ -911,4 +972,264 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 		UserPrompt:   payload.UserPrompt,
 	}, nil
 }
+
+func formatTailoredContentAsText(tc *domain.TailoredContent) string {
+	if tc == nil {
+		return ""
+	}
+	var sb strings.Builder
+	if tc.Summary != "" {
+		sb.WriteString("## Summary\n")
+		sb.WriteString(tc.Summary)
+		sb.WriteString("\n\n")
+	}
+	if len(tc.SkillGroups) > 0 {
+		sb.WriteString("## Skills\n")
+		for _, sg := range tc.SkillGroups {
+			sb.WriteString("- ")
+			if sg.Category != "" {
+				sb.WriteString(sg.Category + ": ")
+			}
+			sb.WriteString(strings.Join(sg.Skills, ", "))
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+	if len(tc.Experiences) > 0 {
+		sb.WriteString("## Experience\n")
+		for _, exp := range tc.Experiences {
+			sb.WriteString("### " + exp.RoleTitle + " - " + exp.Company + "\n")
+			for _, b := range exp.Bullets {
+				sb.WriteString("- " + b.Text + "\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+	if len(tc.Projects) > 0 {
+		sb.WriteString("## Projects\n")
+		for _, proj := range tc.Projects {
+			header := "### " + proj.Name
+			if proj.Role != "" {
+				header += " (" + proj.Role + ")"
+			}
+			sb.WriteString(header + "\n")
+			if proj.Summary != "" {
+				sb.WriteString(proj.Summary + "\n")
+			}
+			for _, b := range proj.Bullets {
+				sb.WriteString("- " + b.Text + "\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+	if len(tc.Education) > 0 {
+		sb.WriteString("## Education\n")
+		for _, edu := range tc.Education {
+			sb.WriteString("- " + edu.Degree + " " + edu.Field + " - " + edu.Institution + "\n")
+		}
+		sb.WriteString("\n")
+	}
+	if len(tc.Certifications) > 0 {
+		sb.WriteString("## Certifications\n")
+		for _, cert := range tc.Certifications {
+			line := "- " + cert.Name
+			if cert.Issuer != "" {
+				line += " (" + cert.Issuer + ")"
+			}
+			sb.WriteString(line + "\n")
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func (s *service) resolveVersionResumeText(ctx context.Context, userID string, branch *domain.Branch, ver *domain.BranchVersion, snapshot *domain.MainProfileSnapshot, requestedFormat string) (string, string, error) {
+	htmlOut := ver.HTMLOutput
+	mdOut := ver.MarkdownOutput
+	txtOut := ver.PlainTextOutput
+	if (htmlOut == "" || mdOut == "" || txtOut == "") && ver.TailoredContent != nil && s.renderer != nil && s.templateRepo != nil {
+		tmplID := ver.TemplateSetIDUsed
+		if tmplID == "" {
+			tmplID = branch.TemplateSetID
+		}
+		if tmplID != "" {
+			if tmpl, tErr := s.templateRepo.GetTemplate(ctx, userID, tmplID); tErr == nil && tmpl != nil {
+				var prof *domain.Profile
+				if snapshot != nil {
+					prof = &snapshot.Profile
+				}
+				if rendered, rErr := s.renderer.Render(ctx, tmpl, prof, ver.TailoredContent); rErr == nil && rendered != nil {
+					if htmlOut == "" {
+						htmlOut = rendered.HTML
+					}
+					if mdOut == "" {
+						mdOut = rendered.Markdown
+					}
+					if txtOut == "" {
+						txtOut = rendered.PlainText
+					}
+				}
+			}
+		}
+	}
+
+	var resumeText, formatUsed string
+	switch requestedFormat {
+	case string(domain.OutputFormatHTML):
+		if strings.TrimSpace(htmlOut) != "" {
+			resumeText = htmlOut
+			formatUsed = string(domain.OutputFormatHTML)
+		}
+	case string(domain.OutputFormatPlainText):
+		if strings.TrimSpace(txtOut) != "" {
+			resumeText = txtOut
+			formatUsed = string(domain.OutputFormatPlainText)
+		}
+	}
+	if strings.TrimSpace(resumeText) == "" {
+		if strings.TrimSpace(mdOut) != "" {
+			resumeText = mdOut
+			formatUsed = string(domain.OutputFormatMarkdown)
+		} else if strings.TrimSpace(txtOut) != "" {
+			resumeText = txtOut
+			formatUsed = string(domain.OutputFormatPlainText)
+		} else if strings.TrimSpace(htmlOut) != "" {
+			resumeText = htmlOut
+			formatUsed = string(domain.OutputFormatHTML)
+		} else if ver.TailoredContent != nil {
+			resumeText = formatTailoredContentAsText(ver.TailoredContent)
+			formatUsed = string(domain.OutputFormatMarkdown)
+		}
+	}
+
+	if strings.TrimSpace(resumeText) == "" {
+		return "", "", fmt.Errorf("%w: tailored version contains no resume text to evaluate", domain.ErrValidation)
+	}
+	return resumeText, formatUsed, nil
+}
+
+// SimulateATS executes on-demand ATS extraction and job matching score calculation for a completed tailored version.
+// It enforces:
+//   - Disabled for Default Main Branch (returns domain.ErrDefaultBranchImmutable).
+//   - Disabled when Job Description (TargetRequirements) is not provided (returns domain.ErrValidation).
+//   - Triggered once per successfully tailored version (returns domain.ErrConflict if already calculated for that version).
+func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts *domain.ATSSimulationOptions) (*domain.ATSScore, error) {
+	rawFormat := ""
+	if opts != nil {
+		rawFormat = opts.Format
+	}
+	requestedFormat, err := domain.NormalizeATSFormat(rawFormat)
+	if err != nil {
+		return nil, err
+	}
+
+	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
+	if err != nil {
+		return nil, err
+	}
+
+	if branch.IsDefault {
+		return nil, fmt.Errorf("%w: ATS score simulation is disabled for the default main branch", domain.ErrDefaultBranchImmutable)
+	}
+
+	if strings.TrimSpace(branch.TargetRequirements) == "" {
+		return nil, fmt.Errorf("%w: job description (target_requirements) is required to calculate ATS score", domain.ErrValidation)
+	}
+
+	targetVersionID := ""
+	if opts != nil && strings.TrimSpace(opts.VersionID) != "" {
+		targetVersionID = strings.TrimSpace(opts.VersionID)
+	} else if branch.ActiveVersionID != nil && strings.TrimSpace(*branch.ActiveVersionID) != "" {
+		targetVersionID = strings.TrimSpace(*branch.ActiveVersionID)
+	}
+	if targetVersionID == "" {
+		return nil, fmt.Errorf("%w: branch has no completed tailored version to evaluate", domain.ErrValidation)
+	}
+
+	ver, err := s.GetVersion(ctx, branch.ID, targetVersionID)
+	if err != nil {
+		return nil, err
+	}
+	if ver.Status != domain.VersionStatusCompleted && ver.Status != domain.VersionStatusCompletedWithWarnings {
+		return nil, fmt.Errorf("%w: ATS score can only be generated for a completed tailored version (status is %s)", domain.ErrValidation, ver.Status)
+	}
+
+	if ver.ATSScore != nil {
+		return nil, fmt.Errorf("%w: ATS score has already been generated for version %s", domain.ErrConflict, ver.ID)
+	}
+
+	if !s.tryAcquireATSInFlight(ver.ID) {
+		return nil, fmt.Errorf("%w: ATS score calculation already in progress or completed for version %s", domain.ErrConflict, ver.ID)
+	}
+	defer s.releaseATSInFlight(ver.ID)
+
+	var snapshot *domain.MainProfileSnapshot
+	if s.profileRepo != nil {
+		snap, snapErr := s.profileRepo.GetSnapshot(ctx, userID)
+		if snapErr != nil {
+			return nil, fmt.Errorf("failed to load profile snapshot for ATS privacy session: %w", snapErr)
+		}
+		snapshot = snap
+	}
+
+	resumeText, formatUsed, err := s.resolveVersionResumeText(ctx, userID, branch, ver, snapshot, requestedFormat)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		retErr error
+		usage  domain.TokenUsage
+	)
+	finishQuota, err := s.reserveOperationQuota(ctx, userID, domain.OperationATSSimulation, 1500, 800)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		finishQuota(usage, retErr)
+	}()
+
+	var atsScore *domain.ATSScore
+	if s.llmService != nil {
+		if simulator, ok := s.llmService.(interface {
+			SimulateATS(ctx context.Context, req domain.ATSSimulationRequest) (*domain.ATSSimulationResponse, error)
+		}); ok {
+			model := branch.ModelOverride
+			if model == "" && snapshot != nil {
+				model = snapshot.Profile.DefaultModel
+			}
+			simResp, simErr := simulator.SimulateATS(ctx, domain.ATSSimulationRequest{
+				Model:          model,
+				ReasoningLevel: branch.ReasoningLevel,
+				ResumeText:     resumeText,
+				FormatUsed:     formatUsed,
+				BranchContext:  *branch,
+				MainProfile:    snapshot,
+			})
+			if simErr != nil {
+				retErr = fmt.Errorf("ats simulation failed: %w", simErr)
+				return nil, retErr
+			}
+			scoreCopy := simResp.Score
+			atsScore = &scoreCopy
+			usage = simResp.Usage
+		}
+	}
+	if atsScore == nil {
+		atsScore = domain.CalculateDeterministicATSScore(resumeText, formatUsed, branch.TargetRequirements)
+	}
+
+	if atsScore.EvaluatedAt == nil {
+		now := time.Now().UTC()
+		atsScore.EvaluatedAt = &now
+	}
+	atsScore.Normalize()
+
+	if err := s.branchRepo.UpdateVersionATSScore(ctx, ver.ID, atsScore); err != nil {
+		retErr = err
+		return nil, retErr
+	}
+
+	return atsScore, nil
+}
+
 

@@ -429,6 +429,7 @@ type TargetResume struct {
 	ExcludedEntityIDs        []string   `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"`
 	ActiveVersionID          *string    `json:"active_version_id,omitempty" gorm:"index"`
 	GapReport                *GapReport `json:"gap_report,omitempty" gorm:"serializer:json"`
+	ATSScore                 *ATSScore  `json:"ats_score,omitempty" gorm:"serializer:json"`
 	LastSyncedMainRevision int64      `json:"last_synced_main_revision"`
 	IsStale                bool       `json:"is_stale" gorm:"-"` // Computed: LastSyncedMainRevision < Profile.MainRevision
 	CreatedAt                time.Time  `json:"created_at"`
@@ -512,6 +513,7 @@ type ResumeVersion struct {
 	ParentVersionID    *string          `json:"parent_version_id,omitempty" gorm:"index"`
 	TailoredContent    *TailoredContent `json:"tailored_content,omitempty" gorm:"serializer:json"`
 	GapReport          *GapReport       `json:"gap_report,omitempty" gorm:"serializer:json"`
+	ATSScore           *ATSScore        `json:"ats_score,omitempty" gorm:"serializer:json"`
 	ValidationWarnings []string         `json:"validation_warnings,omitempty" gorm:"serializer:json"`
 	ErrorMessage       string           `json:"error_message,omitempty"`
 	HTMLOutput         string           `json:"html_output,omitempty"`
@@ -622,6 +624,7 @@ const (
 	OperationResumeTailoring LLMOperationType = "resume_tailoring"
 	OperationGapAnalysis     LLMOperationType = "gap_analysis"
 	OperationPDFParse        LLMOperationType = "pdf_parse"
+	OperationATSSimulation   LLMOperationType = "ats_simulation"
 )
 
 // ReservationStatus tracks the lifecycle of an atomic LLM quota reservation.

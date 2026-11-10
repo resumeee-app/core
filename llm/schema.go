@@ -1045,3 +1045,137 @@ func LeanMainProfileSchemaJSON() (string, error) {
 	return string(b), nil
 }
 
+// ATSExtractionResponseSchema returns the canonical JSON Schema for Stage 1 ATS extraction and confidence scoring.
+func ATSExtractionResponseSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"extraction_confidence_score": map[string]any{
+				"type":        "number",
+				"description": "Confidence score from 0 to 1 (where 1.0 is 100%) indicating how complete and unambiguously structured the extracted resume information is",
+			},
+			"extraction_summary": map[string]any{
+				"type":        "string",
+				"description": "Concise explanation of ATS extraction completeness and any structural or formatting observations",
+			},
+			"extracted_candidate": map[string]any{
+				"type":        "object",
+				"description": "Structured candidate career profile extracted and categorized from the text-based resume",
+				"properties": map[string]any{
+					"summary": map[string]any{
+						"type":        "string",
+						"description": "Extracted professional summary or objective statement",
+					},
+					"skills": map[string]any{
+						"type":        "array",
+						"description": "Categorized technical, domain, and professional skills extracted from the resume",
+						"items":       map[string]any{"type": "string"},
+					},
+					"experiences": map[string]any{
+						"type":        "array",
+						"description": "Work experience entries parsed from the resume",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"company": map[string]any{
+									"type":        "string",
+									"description": "Employer or organization name",
+								},
+								"title": map[string]any{
+									"type":        "string",
+									"description": "Job title or role held",
+								},
+								"date_range": map[string]any{
+									"type":        "string",
+									"description": "Employment date range as parsed from the resume",
+								},
+								"highlights": map[string]any{
+									"type":        "array",
+									"description": "Accomplishment bullets and responsibilities extracted for this role",
+									"items":       map[string]any{"type": "string"},
+								},
+							},
+							"required":             []string{"company", "title"},
+							"additionalProperties": false,
+						},
+					},
+					"educations": map[string]any{
+						"type":        "array",
+						"description": "Academic credentials parsed from the resume",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"institution": map[string]any{
+									"type":        "string",
+									"description": "University, college, or school name",
+								},
+								"degree": map[string]any{
+									"type":        "string",
+									"description": "Degree or qualification earned",
+								},
+								"field": map[string]any{
+									"type":        "string",
+									"description": "Field of study or major",
+								},
+								"date_range": map[string]any{
+									"type":        "string",
+									"description": "Graduation date or attendance range",
+								},
+							},
+							"required":             []string{"institution", "degree"},
+							"additionalProperties": false,
+						},
+					},
+					"certifications": map[string]any{
+						"type":        "array",
+						"description": "Professional certifications, licenses, or awards extracted from the resume",
+						"items":       map[string]any{"type": "string"},
+					},
+				},
+				"required":             []string{"summary", "skills", "experiences", "educations"},
+				"additionalProperties": false,
+			},
+		},
+		"required":             []string{"extraction_confidence_score", "extraction_summary", "extracted_candidate"},
+		"additionalProperties": false,
+	}
+}
+
+// ATSExtractionResponseSchemaJSON returns the indented JSON representation of ATSExtractionResponseSchema().
+func ATSExtractionResponseSchemaJSON() (string, error) {
+	b, err := json.MarshalIndent(ATSExtractionResponseSchema(), "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ATSMatchingResponseSchema returns the canonical JSON Schema for Stage 2 ATS job matching evaluation.
+func ATSMatchingResponseSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"job_matching_score": map[string]any{
+				"type":        "number",
+				"description": "Perceived matching score from 0 to 1 (where 1.0 is 100%) evaluating how well the extracted candidate information matches the job description",
+			},
+			"matching_summary": map[string]any{
+				"type":        "string",
+				"description": "Concise explanation of how the extracted candidate profile aligns with the target job description requirements",
+			},
+		},
+		"required":             []string{"job_matching_score", "matching_summary"},
+		"additionalProperties": false,
+	}
+}
+
+// ATSMatchingResponseSchemaJSON returns the indented JSON representation of ATSMatchingResponseSchema().
+func ATSMatchingResponseSchemaJSON() (string, error) {
+	b, err := json.MarshalIndent(ATSMatchingResponseSchema(), "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+

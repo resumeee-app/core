@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/llm"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/llm"
 )
 
 // safeProcessPDFJob executes a PDF parse task with panic recovery to prevent worker goroutines from terminating

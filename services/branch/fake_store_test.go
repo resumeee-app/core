@@ -9,9 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/privacy"
-	"resumeee/internal/renderer"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/services/renderer"
 )
 
 type fakeBranchStore struct {

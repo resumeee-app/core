@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/privacy"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
 // ServiceAdapter adapts an LLM Registry into the worker.LLMService and branch domain service interfaces,

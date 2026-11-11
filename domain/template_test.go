@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 func TestDomainTemplateSeam(t *testing.T) {

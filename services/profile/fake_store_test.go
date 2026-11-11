@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 type fakeProfileStore struct {

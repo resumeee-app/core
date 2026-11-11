@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"resumeee/internal/llm"
+	"github.com/resumeee-app/resumeee-core/llm"
 )
 
 // recursivelyCheckDescriptions ensures every property node in a JSON schema has a non-empty description.

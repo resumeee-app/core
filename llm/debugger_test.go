@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"resumeee/internal/llm"
+	"github.com/resumeee-app/resumeee-core/llm"
 )
 
 func TestSanitizeTenantID(t *testing.T) {
@@ -453,7 +453,7 @@ func (m *mockCustomSession) WriteResponse(meta llm.ResponseDebugMeta) error {
 func TestOptions_WithPromptDebuggerAndDebugPrompts(t *testing.T) {
 	t.Run("WithPromptDebugger overrides debugger", func(t *testing.T) {
 		mock := &mockCustomDebugger{}
-		provider := llm.NewOpenAIProvider("test-key", llm.WithPromptDebugger(mock))
+		provider := llm.NewClientProvider(nil, llm.WithPromptDebugger(mock))
 		if provider == nil {
 			t.Fatal("expected non-nil provider")
 		}
@@ -461,7 +461,7 @@ func TestOptions_WithPromptDebuggerAndDebugPrompts(t *testing.T) {
 
 	t.Run("WithDebugPrompts true enables debugger", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		provider := llm.NewOpenAIProvider("test-key", llm.WithDebugPrompts(true, tmpDir))
+		provider := llm.NewClientProvider(nil, llm.WithDebugPrompts(true, tmpDir))
 		if provider == nil {
 			t.Fatal("expected non-nil provider")
 		}
@@ -469,7 +469,7 @@ func TestOptions_WithPromptDebuggerAndDebugPrompts(t *testing.T) {
 
 	t.Run("WithDebugPrompts false disables debugger", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		provider := llm.NewOpenAIProvider("test-key",
+		provider := llm.NewClientProvider(nil,
 			llm.WithDebugDir(tmpDir),
 			llm.WithDebugPrompts(false, ""),
 		)

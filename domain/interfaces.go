@@ -145,6 +145,33 @@ type GenerationResponse struct {
 	Usage           TokenUsage      `json:"usage"`
 }
 
+// LLMCompletionRequest represents a transport-level completion request sent to an LLM provider.
+// All prompt compilation and schema definition is performed by resumeee-core prior to invocation.
+type LLMCompletionRequest struct {
+	Model          string
+	SystemPrompt   string
+	UserPrompt     string
+	ResponseSchema map[string]any
+	ReasoningLevel string
+}
+
+// LLMCompletionResponse represents the raw text/JSON completion and token usage returned by an LLM provider.
+type LLMCompletionResponse struct {
+	Text       string
+	RawBody    string
+	StatusCode int
+	Usage      TokenUsage
+}
+
+// LLMClient abstracts pure transport communication with an external LLM vendor API.
+// Implementations must only handle wire serialization, HTTP transport, and status error mapping.
+type LLMClient interface {
+	Name() string
+	DefaultModel() string
+	Models() []ModelOption
+	Complete(ctx context.Context, req LLMCompletionRequest) (*LLMCompletionResponse, error)
+}
+
 // LLMProvider abstracts interactions with generative AI model providers.
 type LLMProvider interface {
 	Name() string
@@ -283,4 +310,61 @@ type QuotaService interface {
 	Release(ctx context.Context, reservationID string, errMsg string) error
 	GetStatus(ctx context.Context, userID string) (*TenantQuota, error)
 }
+
+// Store aggregates all domain repository interfaces into a unified persistence bundle.
+type Store interface {
+	Profile() ProfileRepository
+	Branch() BranchRepository
+	Preset() PresetRepository
+	Template() TemplateRepository
+	User() UserRepository
+	Quota() QuotaRepository
+	PDFJob() PDFParseJobRepository
+	Close() error
+}
+
+// StoreBundle provides a concrete container for domain repository instances and lifecycle hooks.
+type StoreBundle struct {
+	ProfileRepo  ProfileRepository
+	BranchRepo   BranchRepository
+	PresetRepo   PresetRepository
+	TemplateRepo TemplateRepository
+	PDFJobRepo   PDFParseJobRepository
+	QuotaRepo    QuotaRepository
+	UserRepo     UserRepository
+	Closer       func() error
+}
+
+// Profile returns the underlying ProfileRepository.
+func (b *StoreBundle) Profile() ProfileRepository { return b.ProfileRepo }
+
+// Branch returns the underlying BranchRepository.
+func (b *StoreBundle) Branch() BranchRepository { return b.BranchRepo }
+
+// Preset returns the underlying PresetRepository.
+func (b *StoreBundle) Preset() PresetRepository { return b.PresetRepo }
+
+// Template returns the underlying TemplateRepository.
+func (b *StoreBundle) Template() TemplateRepository { return b.TemplateRepo }
+
+// PDFJob returns the underlying PDFParseJobRepository.
+func (b *StoreBundle) PDFJob() PDFParseJobRepository { return b.PDFJobRepo }
+
+// Quota returns the underlying QuotaRepository.
+func (b *StoreBundle) Quota() QuotaRepository { return b.QuotaRepo }
+
+// User returns the underlying UserRepository.
+func (b *StoreBundle) User() UserRepository { return b.UserRepo }
+
+// Close executes the configured Closer hook if present.
+func (b *StoreBundle) Close() error {
+	if b.Closer != nil {
+		return b.Closer()
+	}
+	return nil
+}
+
+// StoreFactory defines a constructor function that opens and initializes a Store instance.
+type StoreFactory func(ctx context.Context) (Store, error)
+
 

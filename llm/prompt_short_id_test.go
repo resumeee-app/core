@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/llm"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/llm"
 )
 
 // TestBuildPrompt_EntitiesUseShortIDs asserts that serialized main_profile_data contains

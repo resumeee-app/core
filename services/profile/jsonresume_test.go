@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/profile"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/services/profile"
 )
 
 func setupTestService(t *testing.T) (profile.Service, domain.ProfileRepository, domain.BranchRepository) {

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/renderer"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/services/renderer"
 )
 
 type emptyStringer struct{}

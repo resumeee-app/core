@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/llm"
-	"resumeee/internal/privacy"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/llm"
+	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
 func TestPromptTemplates_EmbeddedFilesExist(t *testing.T) {

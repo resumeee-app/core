@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 const defaultSchemaURL = "https://raw.githubusercontent.com/jsonresume/resume-schema/v1.0.0/schema.json"

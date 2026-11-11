@@ -11,12 +11,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/profile"
-	"resumeee/internal/renderer"
-	"resumeee/internal/repository/memory"
-	"resumeee/internal/validator"
-	"resumeee/internal/worker"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/services/profile"
+	"github.com/resumeee-app/resumeee-core/services/renderer"
+	"github.com/resumeee-app/resumeee-core/memory"
+	"github.com/resumeee-app/resumeee-core/validator"
+	"github.com/resumeee-app/resumeee-core/services/worker"
 )
 
 type mockLLM struct {

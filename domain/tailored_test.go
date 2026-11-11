@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 func TestGapReport_JSONHarmonization(t *testing.T) {

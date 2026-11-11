@@ -1,6 +1,6 @@
 package renderer
 
-import "resumeee/internal/domain"
+import "github.com/resumeee-app/resumeee-core/domain"
 
 const (
 	// TemplateStandardCleanID is the canonical ID for the built-in Standard Clean template set.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 // TestDomainPurity_ZeroGORMImports verifies that internal/domain contains zero imports of gorm.io/gorm.

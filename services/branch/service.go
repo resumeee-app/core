@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/renderer"
-	"resumeee/internal/validator"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/services/renderer"
+	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 // Service defines domain operations for branches, async generation, batch synchronization, and version lifecycle.

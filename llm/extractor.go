@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/profile"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/services/profile"
 )
 
 // ResumeExtractor abstracts LLM-driven unstructured text extraction into standard JSONResume.

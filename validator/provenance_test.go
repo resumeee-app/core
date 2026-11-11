@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/validator"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 func sampleSnapshot() *domain.MainProfileSnapshot {

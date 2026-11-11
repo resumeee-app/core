@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 // ValidationResult contains the sanitized tailored content and structured warnings.

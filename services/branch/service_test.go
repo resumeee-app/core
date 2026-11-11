@@ -12,11 +12,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"resumeee/internal/branch"
-	"resumeee/internal/domain"
-	"resumeee/internal/privacy"
-	"resumeee/internal/renderer"
-	"resumeee/internal/validator"
+	"github.com/resumeee-app/resumeee-core/services/branch"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/services/renderer"
+	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 type stubEnqueuer struct {

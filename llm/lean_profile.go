@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 // LeanProfile represents a sanitized profile header containing only candidate headline and professional summary.

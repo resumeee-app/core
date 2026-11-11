@@ -8,8 +8,8 @@ import (
 	"strings"
 	"text/template"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/privacy"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
 //go:embed templates/*

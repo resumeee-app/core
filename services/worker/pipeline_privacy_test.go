@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/worker"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/services/worker"
 )
 
 func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {

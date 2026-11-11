@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 // Service defines high-level profile management, career graph operations, and JSON Resume interoperability.

@@ -3,9 +3,9 @@ package worker
 import (
 	"context"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/profile"
-	"resumeee/internal/validator"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/services/profile"
+	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 // GenerationJob encapsulates the parameters of an asynchronous resume generation task.

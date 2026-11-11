@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 // ErrPoolClosed indicates the pool is stopped and cannot accept new jobs.

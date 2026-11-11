@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/llm"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/llm"
 )
 
 func TestResumeExtractor_Table(t *testing.T) {

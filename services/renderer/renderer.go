@@ -13,7 +13,7 @@ import (
 	"sync"
 	texttemplate "text/template"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 var (

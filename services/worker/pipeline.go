@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 // processJob coordinates end-to-end execution of a background resume generation pipeline job.

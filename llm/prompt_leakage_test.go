@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/llm"
-	"resumeee/internal/renderer"
-	"resumeee/internal/validator"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/llm"
+	"github.com/resumeee-app/resumeee-core/services/renderer"
+	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 // makeLeakageTestRequest constructs a generation request containing extensive internal multi-tenancy,

@@ -3,7 +3,7 @@ package llm_test
 import (
 	"testing"
 
-	"resumeee/internal/llm"
+	"github.com/resumeee-app/resumeee-core/llm"
 )
 
 // assertNoInternalPropertiesRecursively traverses a JSON Schema map and asserts that

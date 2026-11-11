@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 // llmTrace coordinates in-flight debugging and timing metadata between request dispatch and response receipt.

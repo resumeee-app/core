@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 func TestDate_NewAndFromTime(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/renderer"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/services/renderer"
 )
 
 func TestRender_UnobfuscatedAuthenticContactDetails(t *testing.T) {

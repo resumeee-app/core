@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 func TestCareerGraphSnapshotAlias(t *testing.T) {

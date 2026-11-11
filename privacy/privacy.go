@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
 
 // Canonical deterministic PII placeholder constants.

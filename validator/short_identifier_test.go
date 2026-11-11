@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"resumeee/internal/domain"
-	"resumeee/internal/validator"
+	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 // snapshotWithShortIDs constructs a sample MainProfileSnapshot populated with both canonical UUIDs

@@ -6,9 +6,11 @@ import (
 	"strings"
 	"sync"
 
-	"resumeee/internal/config"
-	"resumeee/internal/domain"
+	"github.com/resumeee-app/resumeee-core/domain"
 )
+
+// DefaultLLMDebugDir is the default directory for writing prompt debug artifacts.
+const DefaultLLMDebugDir = "data/llm"
 
 // Registry manages configured LLM providers and resolves provider/model selection
 // according to the 4-tier resolution hierarchy.
@@ -17,66 +19,33 @@ type Registry struct {
 	providers       map[string]domain.LLMProvider
 	defaultProvider string
 	defaultModel    string
+	explicitDefault bool
 	debugger        PromptDebugger
+	opts            []Option
 }
 
-// NewRegistry initializes an LLM registry based on 12-factor environment configuration.
-func NewRegistry(cfg *config.Config, opts ...Option) *Registry {
-	r := &Registry{
+// NewRegistry constructs an injectable LLM provider Registry.
+// Providers are registered via RegisterClient or Register.
+func NewRegistry(opts ...Option) *Registry {
+	baseOpts := applyOptions(opts, "", "")
+	return &Registry{
 		providers: make(map[string]domain.LLMProvider),
+		debugger:  baseOpts.promptDebugger,
+		opts:      opts,
 	}
-
-	if cfg == nil {
-		return r
-	}
-
-	effectiveOpts := opts
-	if cfg.LLMTimeout > 0 {
-		effectiveOpts = append(append([]Option{}, effectiveOpts...), WithTimeout(cfg.LLMTimeout))
-	}
-	if cfg.LLMDebugPrompts {
-		dir := cfg.LLMDebugDir
-		if strings.TrimSpace(dir) == "" {
-			dir = config.DefaultLLMDebugDir
-		}
-		baseOpts := applyOptions(opts, "", "")
-		debugger := NewFilePromptDebugger(dir, baseOpts.logger)
-		r.debugger = debugger
-		effectiveOpts = append(effectiveOpts, WithPromptDebugger(debugger))
-	}
-
-	if cfg.GeminiAPIKey != "" {
-		r.Register(NewGeminiProvider(cfg.GeminiAPIKey, effectiveOpts...))
-	}
-	if cfg.OpenAIAPIKey != "" {
-		r.Register(NewOpenAIProvider(cfg.OpenAIAPIKey, effectiveOpts...))
-	}
-	if cfg.AnthropicAPIKey != "" {
-		r.Register(NewAnthropicProvider(cfg.AnthropicAPIKey, effectiveOpts...))
-	}
-	if cfg.OpenAICompatBaseURL != "" {
-		r.Register(NewCompatProvider(cfg.OpenAICompatBaseURL, cfg.OpenAICompatAPIKey, effectiveOpts...))
-	}
-
-	// Establish system default provider hierarchy
-	if _, ok := r.providers[ProviderGemini]; ok {
-		r.defaultProvider = ProviderGemini
-		r.defaultModel = defaultGeminiModel
-	} else if _, ok := r.providers[ProviderOpenAI]; ok {
-		r.defaultProvider = ProviderOpenAI
-		r.defaultModel = defaultOpenAIModel
-	} else if _, ok := r.providers[ProviderAnthropic]; ok {
-		r.defaultProvider = ProviderAnthropic
-		r.defaultModel = defaultAnthropicModel
-	} else if _, ok := r.providers[ProviderCompat]; ok {
-		r.defaultProvider = ProviderCompat
-		r.defaultModel = defaultCompatModel
-	}
-
-	return r
 }
 
-// Register adds an LLM provider to the registry.
+// RegisterClient wraps a transport-only domain.LLMClient with prompt compilation and observability,
+// and registers it in the Registry.
+func (r *Registry) RegisterClient(client domain.LLMClient, extraOpts ...Option) {
+	if client == nil {
+		return
+	}
+	combinedOpts := append(append([]Option{}, r.opts...), extraOpts...)
+	r.Register(NewClientProvider(client, combinedOpts...))
+}
+
+// Register adds an LLMProvider to the registry and updates the system default provider hierarchy.
 func (r *Registry) Register(provider domain.LLMProvider) {
 	if provider == nil {
 		return
@@ -87,9 +56,37 @@ func (r *Registry) Register(provider domain.LLMProvider) {
 	name := strings.ToLower(strings.TrimSpace(provider.Name()))
 	r.providers[name] = provider
 
+	if !r.explicitDefault {
+		r.recomputeDefaultLocked()
+	}
+}
+
+func (r *Registry) recomputeDefaultLocked() {
+	priority := []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderCompat, ProviderCompatAlt}
+	for _, pName := range priority {
+		if prov, ok := r.providers[pName]; ok {
+			r.defaultProvider = pName
+			if pName == ProviderCompatAlt {
+				r.defaultProvider = ProviderCompat
+			}
+			if mcp, ok := prov.(ModelCatalogProvider); ok && strings.TrimSpace(mcp.DefaultModel()) != "" {
+				r.defaultModel = mcp.DefaultModel()
+			} else {
+				r.defaultModel = defaultModelForProvider(r.defaultProvider)
+			}
+			return
+		}
+	}
 	if r.defaultProvider == "" {
-		r.defaultProvider = name
-		r.defaultModel = defaultModelForProvider(name)
+		for name, prov := range r.providers {
+			r.defaultProvider = name
+			if mcp, ok := prov.(ModelCatalogProvider); ok && strings.TrimSpace(mcp.DefaultModel()) != "" {
+				r.defaultModel = mcp.DefaultModel()
+			} else {
+				r.defaultModel = defaultModelForProvider(name)
+			}
+			return
+		}
 	}
 }
 
@@ -158,6 +155,7 @@ func (r *Registry) SetDefault(provider, model string) {
 	defer r.mu.Unlock()
 	r.defaultProvider = strings.ToLower(strings.TrimSpace(provider))
 	r.defaultModel = strings.TrimSpace(model)
+	r.explicitDefault = true
 }
 
 // Resolve resolves the active LLMProvider and model according to the precedence ladder:
@@ -206,6 +204,8 @@ func (r *Registry) Resolve(req domain.GenerationRequest, _ *domain.Preset, profi
 		modelName = strings.TrimSpace(profile.DefaultModel)
 	} else if r.DefaultModel() != "" && r.DefaultProvider() == provider.Name() {
 		modelName = r.DefaultModel()
+	} else if mcp, ok := provider.(ModelCatalogProvider); ok && strings.TrimSpace(mcp.DefaultModel()) != "" {
+		modelName = mcp.DefaultModel()
 	} else {
 		modelName = defaultModelForProvider(provider.Name())
 	}
@@ -238,7 +238,6 @@ func (r *Registry) AvailableModels() []domain.ModelOption {
 
 	var models []domain.ModelOption
 
-	// Providers sorted alphabetically: anthropic, compat, gemini, openai
 	providers := make([]string, 0, len(r.providers))
 	seen := make(map[string]bool)
 	for name := range r.providers {
@@ -254,6 +253,22 @@ func (r *Registry) AvailableModels() []domain.ModelOption {
 	sort.Strings(providers)
 
 	for _, p := range providers {
+		prov, ok := r.providers[p]
+		if !ok && p == ProviderCompat {
+			prov = r.providers[ProviderCompatAlt]
+		}
+		if mcp, ok := prov.(ModelCatalogProvider); ok {
+			if customCatalog := mcp.Models(); len(customCatalog) > 0 {
+				defMod := mcp.DefaultModel()
+				for _, item := range customCatalog {
+					cp := item
+					cp.IsDefault = (r.defaultProvider == p && (r.defaultModel == cp.Model || (r.defaultModel == "" && cp.Model == defMod)))
+					models = append(models, cp)
+				}
+				continue
+			}
+		}
+
 		switch p {
 		case ProviderAnthropic:
 			catalog := []struct {

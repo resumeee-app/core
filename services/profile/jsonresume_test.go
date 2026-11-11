@@ -11,12 +11,11 @@ import (
 
 	"resumeee/internal/domain"
 	"resumeee/internal/profile"
-	"resumeee/internal/repository/memory"
 )
 
 func setupTestService(t *testing.T) (profile.Service, domain.ProfileRepository, domain.BranchRepository) {
 	t.Helper()
-	store := memory.New()
+	store := newFakeProfileStore()
 	svc := profile.NewService(store, store)
 	return svc, store, store
 }

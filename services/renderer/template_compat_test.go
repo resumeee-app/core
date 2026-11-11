@@ -14,7 +14,7 @@ import (
 )
 
 func TestATSCompatibleTemplate_ValidationAndExecution(t *testing.T) {
-	templatePath := filepath.Join("..", "..", "docs", "research", "best_ats_compatible_template.html")
+	templatePath := filepath.Join("testdata", "best_ats_compatible_template.html")
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
 		t.Fatalf("failed to read best_ats_compatible_template.html: %v", err)

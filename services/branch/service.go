@@ -13,10 +13,8 @@ import (
 	"github.com/google/uuid"
 
 	"resumeee/internal/domain"
-	"resumeee/internal/llm"
 	"resumeee/internal/renderer"
 	"resumeee/internal/validator"
-	"resumeee/internal/worker"
 )
 
 // Service defines domain operations for branches, async generation, batch synchronization, and version lifecycle.
@@ -45,10 +43,11 @@ type Config struct {
 	PresetRepo        domain.PresetRepository
 	TemplateRepo      domain.TemplateRepository
 	QuotaRepo         domain.QuotaRepository
-	JobEnqueuer       worker.JobEnqueuer
+	JobEnqueuer       domain.JobEnqueuer
 	Validator         validator.ProvenanceValidator
 	Renderer          domain.TemplateRenderer
-	LLMService        worker.LLMService
+	LLMService        domain.LLMService
+	PromptCompiler    domain.PromptCompiler
 	Logger            *slog.Logger
 	DailyRequestLimit int
 	MonthlyTokenLimit int
@@ -60,10 +59,11 @@ type service struct {
 	presetRepo        domain.PresetRepository
 	templateRepo      domain.TemplateRepository
 	quotaRepo         domain.QuotaRepository
-	jobEnqueuer       worker.JobEnqueuer
+	jobEnqueuer       domain.JobEnqueuer
 	validator         validator.ProvenanceValidator
 	renderer          domain.TemplateRenderer
-	llmService        worker.LLMService
+	llmService        domain.LLMService
+	promptCompiler    domain.PromptCompiler
 	logger            *slog.Logger
 	dailyRequestLimit int
 	monthlyTokenLimit int
@@ -92,6 +92,7 @@ func NewService(cfg Config) Service {
 		validator:         cfg.Validator,
 		renderer:          cfg.Renderer,
 		llmService:        cfg.LLMService,
+		promptCompiler:    cfg.PromptCompiler,
 		logger:            cfg.Logger,
 		dailyRequestLimit: dailyLimit,
 		monthlyTokenLimit: monthlyLimit,
@@ -440,7 +441,7 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 	}
 
 	if s.jobEnqueuer != nil {
-		job := worker.GenerationJob{
+		job := domain.GenerationJob{
 			UserID:        userID,
 			BranchID:      branch.ID,
 			VersionID:     ver.ID,
@@ -547,7 +548,7 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 		}
 
 		if s.jobEnqueuer != nil {
-			job := worker.GenerationJob{
+			job := domain.GenerationJob{
 				UserID:        userID,
 				BranchID:      b.ID,
 				VersionID:     ver.ID,
@@ -962,15 +963,16 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 		PriorVersion:       priorContent,
 	}
 
-	payload, err := llm.BuildPrompt(req)
+	if s.promptCompiler == nil {
+		return nil, fmt.Errorf("%w: prompt compiler not configured", domain.ErrValidation)
+	}
+
+	preview, err := s.promptCompiler.CompilePrompt(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile prompt preview: %w", err)
 	}
 
-	return &domain.PromptPreview{
-		SystemPrompt: payload.SystemPrompt,
-		UserPrompt:   payload.UserPrompt,
-	}, nil
+	return preview, nil
 }
 
 func formatTailoredContentAsText(tc *domain.TailoredContent) string {

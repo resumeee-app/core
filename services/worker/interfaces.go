@@ -9,17 +9,10 @@ import (
 )
 
 // GenerationJob encapsulates the parameters of an asynchronous resume generation task.
-type GenerationJob struct {
-	UserID        string `json:"user_id"`
-	BranchID      string `json:"branch_id"`
-	VersionID     string `json:"version_id"`
-	ReservationID string `json:"reservation_id,omitempty"`
-}
+type GenerationJob = domain.GenerationJob
 
 // JobEnqueuer defines the contract for enqueuing generation jobs into the worker pool.
-type JobEnqueuer interface {
-	Enqueue(job GenerationJob) error
-}
+type JobEnqueuer = domain.JobEnqueuer
 
 // PDFParseJobTask encapsulates the parameters of an asynchronous PDF resume parsing task.
 type PDFParseJobTask struct {
@@ -42,10 +35,7 @@ type ResumeExtractor interface {
 }
 
 // LLMService abstracts multi-provider prompt generation and structured response.
-type LLMService interface {
-	GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error)
-	GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error)
-}
+type LLMService = domain.LLMService
 
 // ProvenanceValidator audits tailored content against career snapshots and exclusion lists.
 type ProvenanceValidator interface {

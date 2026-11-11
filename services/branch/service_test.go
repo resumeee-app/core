@@ -16,15 +16,13 @@ import (
 	"resumeee/internal/domain"
 	"resumeee/internal/privacy"
 	"resumeee/internal/renderer"
-	"resumeee/internal/repository/memory"
 	"resumeee/internal/validator"
-	"resumeee/internal/worker"
 )
 
 type stubEnqueuer struct {
 	mu       sync.Mutex
 	capacity int
-	jobs     []worker.GenerationJob
+	jobs     []domain.GenerationJob
 	closed   bool
 }
 
@@ -32,7 +30,7 @@ func newStubEnqueuer(capacity int) *stubEnqueuer {
 	return &stubEnqueuer{capacity: capacity}
 }
 
-func (e *stubEnqueuer) Enqueue(job worker.GenerationJob) error {
+func (e *stubEnqueuer) Enqueue(job domain.GenerationJob) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -62,10 +60,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 
 	ctx := context.Background()
 	defaultUser := "default"
-	store, err := memory.NewSeeded(ctx, defaultUser)
-	if err != nil {
-		t.Fatalf("failed to seed: %v", err)
-	}
+	store := newSeededBranchStore(ctx, defaultUser)
 
 	profileRepo := store
 	presetRepo := store
@@ -76,13 +71,15 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 	enqueuer := newStubEnqueuer(enqueuerCap)
 
 	svc := branch.NewService(branch.Config{
-		BranchRepo:   branchRepo,
-		ProfileRepo:  profileRepo,
-		PresetRepo:   presetRepo,
-		TemplateRepo: templateRepo,
-		JobEnqueuer:  enqueuer,
-		Validator:    val,
-		Renderer:     rend,
+		BranchRepo:     branchRepo,
+		ProfileRepo:    profileRepo,
+		PresetRepo:     presetRepo,
+		TemplateRepo:   templateRepo,
+		QuotaRepo:      store,
+		JobEnqueuer:    enqueuer,
+		Validator:      val,
+		Renderer:       rend,
+		PromptCompiler: &fakePromptCompiler{},
 	})
 
 	b := &domain.Branch{
@@ -1276,6 +1273,34 @@ func TestService_GetPromptPreview_ZeroInternalLeakage(t *testing.T) {
 	}
 }
 
+func TestService_GetPromptPreview_UnconfiguredCompiler(t *testing.T) {
+	ctx := context.Background()
+	store := newSeededBranchStore(ctx, "user-no-compiler")
+	b := &domain.Branch{
+		ID:            "branch-no-comp",
+		UserID:        "user-no-compiler",
+		Name:          "Branch No Compiler",
+		TemplateSetID: renderer.TemplateStandardCleanID,
+	}
+	if err := store.CreateBranch(ctx, b); err != nil {
+		t.Fatalf("failed to create branch: %v", err)
+	}
+
+	svc := branch.NewService(branch.Config{
+		BranchRepo:     store,
+		ProfileRepo:    store,
+		PresetRepo:     store,
+		TemplateRepo:   store,
+		QuotaRepo:      store,
+		PromptCompiler: nil,
+	})
+
+	_, err := svc.GetPromptPreview(ctx, "user-no-compiler", b.ID, nil)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("expected ErrValidation when PromptCompiler is nil, got %v", err)
+	}
+}
+
 type spyQuotaRepo struct {
 	mu           sync.Mutex
 	reservations []struct {
@@ -1357,11 +1382,7 @@ func (s *spyQuotaRepo) ListUsageRecords(_ context.Context, _ string, _ int) ([]d
 func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 	ctx := context.Background()
 	defaultUser := "user-custom-quota"
-
-	store, err := memory.NewSeeded(ctx, defaultUser)
-	if err != nil {
-		t.Fatalf("failed to seed memory store: %v", err)
-	}
+	store := newSeededBranchStore(ctx, defaultUser)
 
 	b := &domain.Branch{
 		ID:                 "branch-quota-test",
@@ -1370,7 +1391,7 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 		TargetRequirements: "Go, Kubernetes, Terraform",
 		TemplateSetID:      renderer.TemplateStandardCleanID,
 	}
-	err = store.CreateBranch(ctx, b)
+	err := store.CreateBranch(ctx, b)
 	if err != nil {
 		t.Fatalf("failed to create branch: %v", err)
 	}

@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.FullName}} - Resume</title>
+
+  <!--
+    Schema.org JSON-LD Structured Metadata:
+    Enables zero-inference, deterministic machine parsing for direct HTML ingestors,
+    web scrapers, and automated ATS endpoints that process raw HTML exports.
+  -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Person",
+    "name": {{.FullName}}
+    {{if .Headline}}, "jobTitle": {{.Headline}}{{end}}
+    {{if .Email}}, "email": {{.Email}}{{end}}
+    {{if .Phone}}, "telephone": {{.Phone}}{{end}}
+    {{if .Website}}, "url": {{.Website}}{{end}}
+    {{if .Location.City}}, "address": {
+      "@type": "PostalAddress",
+      "addressLocality": {{.Location.City}}
+      {{if .Location.Region}}, "addressRegion": {{.Location.Region}}{{end}}
+      {{if .Location.CountryCode}}, "addressCountry": {{.Location.CountryCode}}{{end}}
+    }{{end}}
+    {{if .Profiles}}, "sameAs": [
+      {{range $i, $p := .Profiles}}{{if $i}}, {{end}}{{$p.URL}}{{end}}
+    ]{{end}}
+    {{if .SkillGroups}}, "knowsAbout": [
+      {{range $i, $sg := .SkillGroups}}{{range $j, $s := $sg.Skills}}{{if or $i $j}}, {{end}}{{$s}}{{end}}{{end}}
+    ]{{end}}
+  }
+  </script>
+
+  <style>
+    /*
+      CSS Reset & Universal Box Sizing:
+      Guarantees deterministic element dimensions across all rendering engines.
+    */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    /*
+      Base Typography & Document Canvas:
+      - Uses universal system font stacks to ensure 100% reliable PostScript / OpenType
+        glyph mapping in PDF generation without web-font subsetting CMap corruption.
+      - Enforces strict single-column, linear normal flow (display: block) to prevent
+        the 'two-column trap', gutter bridging, and interleaved text streams in ATS extractors.
+    */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 10pt;
+      line-height: 1.45;
+      color: #111827;
+      background-color: #ffffff;
+      padding: 24px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .resume {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #ffffff;
+    }
+
+    /*
+      Candidate Header & Contact Information:
+      - Exactly one <h1> element for the candidate name.
+      - Contact info wrapped in semantic <address> with standard protocol links.
+    */
+    .header {
+      border-bottom: 2px solid #1e3a8a;
+      padding-bottom: 12px;
+      margin-bottom: 18px;
+    }
+
+    h1.candidate-name {
+      font-size: 24pt;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.5px;
+      line-height: 1.15;
+      margin-bottom: 4px;
+    }
+
+    .headline {
+      font-size: 12pt;
+      font-weight: 500;
+      color: #334155;
+      margin-bottom: 6px;
+    }
+
+    address.contact-info {
+      font-style: normal;
+      font-size: 9.5pt;
+      color: #475569;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 8px;
+      margin-top: 4px;
+    }
+
+    address.contact-info a {
+      color: #1e3a8a;
+      text-decoration: none;
+    }
+
+    address.contact-info .separator {
+      color: #94a3b8;
+      user-select: none;
+    }
+
+    /*
+      Canonical Section Headings:
+      - Strictly standard <h2> titles for 100% regex/NER detection in ATS engines.
+      - Clear visual border separator without breaking linear flow.
+    */
+    section.resume-section {
+      margin-bottom: 16px;
+    }
+
+    h2.section-title {
+      font-size: 12pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #1e3a8a;
+      border-bottom: 1px solid #cbd5e1;
+      padding-bottom: 3px;
+      margin: 16px 0 10px 0;
+    }
+
+    /*
+      Entry & Article Structure:
+      - Each role, project, or degree encapsulated in <article class="entry-item">.
+      - Metadata positioned in single-column flex-row with tabular-numeric dates.
+    */
+    article.entry-item {
+      margin-bottom: 12px;
+    }
+
+    .entry-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 3px;
+    }
+
+    h3.entry-title {
+      font-size: 10.5pt;
+      font-weight: 600;
+      color: #0f172a;
+      margin: 0;
+    }
+
+    .entry-meta {
+      font-size: 9.5pt;
+      color: #475569;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .date-range {
+      font-variant-numeric: tabular-nums;
+    }
+
+    p.summary-text,
+    p.project-summary {
+      font-size: 9.5pt;
+      color: #334155;
+      margin: 4px 0 6px 0;
+    }
+
+    /*
+      Bullet Lists:
+      - Standard <ul> and <li> elements to preserve list semantics in extractors.
+      - Clean disc bullets avoiding non-standard unicode characters that corrupt CMaps.
+    */
+    ul.bullet-list {
+      margin: 4px 0 6px 18px;
+      padding: 0;
+      list-style-type: disc;
+    }
+
+    ul.bullet-list li {
+      margin-bottom: 3px;
+      font-size: 9.5pt;
+      color: #1e293b;
+    }
+
+    /*
+      Skills Taxonomy:
+      - Categorized skills with bold category keys and comma-separated skill tokens.
+    */
+    .skills-group {
+      margin-bottom: 6px;
+      font-size: 9.5pt;
+      line-height: 1.4;
+    }
+
+    .skills-category {
+      font-weight: 600;
+      color: #0f172a;
+    }
+
+    .skills-list {
+      color: #334155;
+    }
+
+    /*
+      Print Optimization Stylesheet (@media print & @page):
+      - Explicit 0.5in margins suppress browser-injected URL/header/footer clutter.
+      - Page-break controls prevent sliced roles or orphaned headings in multi-page PDFs.
+      - Enforces high-contrast black text on pure white canvas.
+    */
+    @page {
+      size: letter portrait;
+      margin: 0.5in;
+    }
+
+    @media print {
+      body {
+        padding: 0;
+        background: #ffffff !important;
+        color: #000000 !important;
+      }
+
+      .resume {
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+      }
+
+      h1, h2, h3 {
+        break-after: avoid;
+        page-break-after: avoid;
+        color: #000000 !important;
+      }
+
+      article.entry-item,
+      .skills-group,
+      ul.bullet-list li {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+
+      p, li {
+        orphans: 3;
+        widows: 3;
+      }
+
+      address.contact-info a {
+        color: #000000 !important;
+        text-decoration: none !important;
+      }
+
+      .no-print {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+<main class="resume" id="resume">
+  <header class="header">
+    <h1 class="candidate-name">{{.FullName}}</h1>
+    {{if .Headline}}<div class="headline">{{.Headline}}</div>{{end}}
+    <address class="contact-info">
+      {{if .Email}}<span><a href="mailto:{{.Email}}">{{.Email}}</a></span>{{end}}
+      {{if .Phone}}<span class="separator">•</span><span><a href="tel:{{.Phone}}">{{.Phone}}</a></span>{{end}}
+      {{if .Location.City}}<span class="separator">•</span><span class="location">{{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}{{if .Location.CountryCode}}, {{.Location.CountryCode}}{{end}}</span>{{end}}
+      {{if .Website}}<span class="separator">•</span><span><a href="{{.Website}}">{{.Website}}</a></span>{{end}}
+      {{range .Profiles}}
+      <span class="separator">•</span><span><a href="{{.URL}}">{{.Network}}: {{.Username}}</a></span>
+      {{end}}
+    </address>
+  </header>
+
+  {{if .Summary}}
+  <section class="resume-section" id="summary">
+    <h2 class="section-title">Professional Summary</h2>
+    <p class="summary-text">{{.Summary}}</p>
+  </section>
+  {{end}}
+
+  {{if .SkillGroups}}
+  <section class="resume-section" id="skills">
+    <h2 class="section-title">Technical Skills</h2>
+    {{range .SkillGroups}}
+    <div class="skills-group">
+      <strong class="skills-category">{{.Category}}:</strong>
+      <span class="skills-list">{{join .Skills ", "}}</span>
+    </div>
+    {{end}}
+  </section>
+  {{end}}
+
+  {{if .Experiences}}
+  <section class="resume-section" id="experience">
+    <h2 class="section-title">Professional Experience</h2>
+    {{range .Experiences}}
+    <article class="entry-item experience-item">
+      <div class="entry-header">
+        <h3 class="entry-title">{{.RoleTitle}} — {{.Company}}</h3>
+        <div class="entry-meta">
+          <span class="date-range">{{formatDateRange .StartDate .EndDate "Present"}}</span>
+          {{if .Location.City}}<span class="entry-location"> | {{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}</span>{{end}}
+        </div>
+      </div>
+      {{if .Bullets}}
+      <ul class="bullet-list">
+        {{range .Bullets}}
+        <li>{{.Text}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+
+  {{if .Projects}}
+  <section class="resume-section" id="projects">
+    <h2 class="section-title">Key Projects</h2>
+    {{range .Projects}}
+    <article class="entry-item project-item">
+      <div class="entry-header">
+        <h3 class="entry-title">{{.Name}}{{if .Role}} ({{.Role}}){{end}}</h3>
+        {{if .URL}}<div class="entry-meta"><a href="{{.URL}}">{{.URL}}</a></div>{{end}}
+      </div>
+      {{if .Summary}}<p class="project-summary">{{.Summary}}</p>{{end}}
+      {{if .Bullets}}
+      <ul class="bullet-list">
+        {{range .Bullets}}
+        <li>{{.Text}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+
+  {{if .Education}}
+  <section class="resume-section" id="education">
+    <h2 class="section-title">Education</h2>
+    {{range .Education}}
+    <article class="entry-item education-item">
+      <div class="entry-header">
+        <h3 class="entry-title">{{.Degree}}{{if .Field}} in {{.Field}}{{end}} — {{.Institution}}</h3>
+        <div class="entry-meta">
+          <span class="date-range">{{formatDateRange .StartDate .EndDate "Present"}}</span>
+          {{if .Score}}<span class="entry-score"> | {{.Score}}</span>{{end}}
+        </div>
+      </div>
+      {{if .Bullets}}
+      <ul class="bullet-list">
+        {{range .Bullets}}
+        <li>{{.Text}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+
+  {{if .Certifications}}
+  <section class="resume-section" id="certifications">
+    <h2 class="section-title">Certifications</h2>
+    <ul class="bullet-list certifications-list">
+      {{range .Certifications}}
+      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{.Date}}){{end}}</li>
+      {{end}}
+    </ul>
+  </section>
+  {{end}}
+</main>
+</body>
+</html>

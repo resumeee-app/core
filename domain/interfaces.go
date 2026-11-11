@@ -151,6 +151,30 @@ type LLMProvider interface {
 	GenerateTailoredResume(ctx context.Context, req GenerationRequest) (*GenerationResponse, error)
 }
 
+// GenerationJob encapsulates the parameters of an asynchronous resume generation task.
+type GenerationJob struct {
+	UserID        string `json:"user_id"`
+	BranchID      string `json:"branch_id"`
+	VersionID     string `json:"version_id"`
+	ReservationID string `json:"reservation_id,omitempty"`
+}
+
+// JobEnqueuer defines the contract for enqueuing generation jobs into the worker pool.
+type JobEnqueuer interface {
+	Enqueue(job GenerationJob) error
+}
+
+// LLMService abstracts multi-provider prompt generation and structured response.
+type LLMService interface {
+	GenerateTailoredResume(ctx context.Context, req GenerationRequest) (*GenerationResponse, error)
+	GenerateGapAnalysis(ctx context.Context, req GenerationRequest) (*GapReport, error)
+}
+
+// PromptCompiler abstracts compilation of structured generation prompts for preview.
+type PromptCompiler interface {
+	CompilePrompt(req GenerationRequest) (*PromptPreview, error)
+}
+
 // OutputFormat designates the targeted rendering medium.
 type OutputFormat string
 

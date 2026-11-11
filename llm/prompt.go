@@ -43,6 +43,26 @@ type PromptPayload struct {
 	UserPrompt   string
 }
 
+// PromptCompiler implements domain.PromptCompiler using BuildPrompt.
+type PromptCompiler struct{}
+
+// NewPromptCompiler constructs a new PromptCompiler.
+func NewPromptCompiler() *PromptCompiler {
+	return &PromptCompiler{}
+}
+
+// CompilePrompt builds the prompt payload and returns a domain.PromptPreview.
+func (c *PromptCompiler) CompilePrompt(req domain.GenerationRequest) (*domain.PromptPreview, error) {
+	payload, err := BuildPrompt(req)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.PromptPreview{
+		SystemPrompt: payload.SystemPrompt,
+		UserPrompt:   payload.UserPrompt,
+	}, nil
+}
+
 type tailorPromptContext struct {
 	GlobalRules        string
 	PresetInstructions string

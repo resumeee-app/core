@@ -214,7 +214,7 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 			},
 		}
 		extractor := llm.NewResumeExtractor(completer)
-		ue, ok := extractor.(llm.UsageResumeExtractor)
+		ue, ok := extractor.(core.UsageResumeExtractor)
 		if !ok {
 			t.Fatalf("expected extractor to implement UsageResumeExtractor")
 		}
@@ -236,7 +236,7 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 			return minimalJSON, nil
 		})
 		extractor := llm.NewResumeExtractor(completer)
-		ue, ok := extractor.(llm.UsageResumeExtractor)
+		ue, ok := extractor.(core.UsageResumeExtractor)
 		if !ok {
 			t.Fatalf("expected extractor to implement UsageResumeExtractor")
 		}

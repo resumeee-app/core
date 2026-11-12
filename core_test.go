@@ -421,8 +421,8 @@ func TestDomainErrors(t *testing.T) {
 
 func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	// 1. Assert TailoringStrategy.IsBuiltIn()
-	builtinStrat := core.TailoringStrategy{ID: "builtin-1-page-swe"}
-	customStrat := core.TailoringStrategy{ID: "strat-custom-1"}
+	builtinStrat := core.Preset{ID: "builtin-1-page-swe"}
+	customStrat := core.Preset{ID: "strat-custom-1"}
 	if !builtinStrat.IsBuiltIn() {
 		t.Errorf("expected builtin-1-page-swe to be built-in")
 	}
@@ -431,7 +431,7 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	}
 
 	// 2. Assert SuggestedThemeID serializes to null in JSON when omitted
-	stratNoTheme := core.TailoringStrategy{
+	stratNoTheme := core.Preset{
 		ID:                 "strat-1",
 		UserID:             "user-1",
 		Name:               "1-Page SWE",
@@ -447,7 +447,7 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	}
 
 	themeID := "builtin-standard-clean"
-	stratWithTheme := core.TailoringStrategy{
+	stratWithTheme := core.Preset{
 		ID:                 "strat-2",
 		UserID:             "user-1",
 		Name:               "1-Page SWE",
@@ -463,7 +463,7 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	}
 
 	// 3. Assert TargetResume directly owns TemplateSetID
-	targetResume := core.TargetResume{
+	targetResume := core.Branch{
 		ID:            "resume-1",
 		UserID:        "user-1",
 		Name:          "Stripe - Staff Backend",
@@ -501,7 +501,7 @@ func TestMultiTenancyDomainModels(t *testing.T) {
 	}
 
 	// 3. ResumeVersion with UserID
-	version := core.ResumeVersion{
+	version := core.BranchVersion{
 		ID:            "ver-1",
 		UserID:        "user-abc",
 		ResumeID:      "resume-1",

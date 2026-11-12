@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/seed"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 )
 
@@ -65,7 +66,7 @@ func TestBuiltinTemplates_SemanticLandmarksAndPrintStyles(t *testing.T) {
 	engine := renderer.New()
 	profile, content := mockFullProfileAndContent()
 
-	templates := renderer.DefaultTemplateSets()
+	templates := seed.DefaultTemplateSets()
 	if len(templates) < 2 {
 		t.Fatalf("expected at least 2 default templates, got %d", len(templates))
 	}
@@ -143,9 +144,9 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 	profile, content := mockFullProfileAndContent()
 
 	t.Run("ATS Minimal Plain Text & Clean HTML", func(t *testing.T) {
-		tmpl := renderer.ATSMinimalTemplate()
-		if tmpl.ID != renderer.TemplateATSMinimalTxtID {
-			t.Errorf("expected template ID %q, got %q", renderer.TemplateATSMinimalTxtID, tmpl.ID)
+		tmpl := seed.ATSMinimalTemplate()
+		if tmpl.ID != core.TemplateATSMinimalTxtID {
+			t.Errorf("expected template ID %q, got %q", core.TemplateATSMinimalTxtID, tmpl.ID)
 		}
 
 		out, err := engine.Render(ctx, &tmpl, profile, content)
@@ -230,9 +231,9 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 	})
 
 	t.Run("ATS Modern Tech", func(t *testing.T) {
-		tmpl := renderer.ATSHybridTechTemplate()
-		if tmpl.ID != renderer.TemplateATSHybridTechID {
-			t.Errorf("expected template ID %q, got %q", renderer.TemplateATSHybridTechID, tmpl.ID)
+		tmpl := seed.ATSHybridTechTemplate()
+		if tmpl.ID != core.TemplateATSHybridTechID {
+			t.Errorf("expected template ID %q, got %q", core.TemplateATSHybridTechID, tmpl.ID)
 		}
 
 		out, err := engine.Render(ctx, &tmpl, profile, content)
@@ -302,9 +303,9 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 	})
 
 	t.Run("ATS Executive Clean", func(t *testing.T) {
-		tmpl := renderer.ATSExecutiveCleanTemplate()
-		if tmpl.ID != renderer.TemplateATSExecutiveCleanID {
-			t.Errorf("expected template ID %q, got %q", renderer.TemplateATSExecutiveCleanID, tmpl.ID)
+		tmpl := seed.ATSExecutiveCleanTemplate()
+		if tmpl.ID != core.TemplateATSExecutiveCleanID {
+			t.Errorf("expected template ID %q, got %q", core.TemplateATSExecutiveCleanID, tmpl.ID)
 		}
 
 		out, err := engine.Render(ctx, &tmpl, profile, content)
@@ -385,9 +386,9 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 		}
 
 		for _, tmpl := range []core.TemplateSet{
-			renderer.ATSMinimalTemplate(),
-			renderer.ATSHybridTechTemplate(),
-			renderer.ATSExecutiveCleanTemplate(),
+			seed.ATSMinimalTemplate(),
+			seed.ATSHybridTechTemplate(),
+			seed.ATSExecutiveCleanTemplate(),
 		} {
 			out, err := engine.Render(ctx, &tmpl, partialProf, nil)
 			if err != nil {
@@ -422,9 +423,9 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 		}
 
 		for _, tmpl := range []core.TemplateSet{
-			renderer.ATSMinimalTemplate(),
-			renderer.ATSHybridTechTemplate(),
-			renderer.ATSExecutiveCleanTemplate(),
+			seed.ATSMinimalTemplate(),
+			seed.ATSHybridTechTemplate(),
+			seed.ATSExecutiveCleanTemplate(),
 		} {
 			out, err := engine.Render(ctx, &tmpl, prof, tailored)
 			if err != nil {
@@ -458,9 +459,9 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 		}
 
 		for _, tmpl := range []core.TemplateSet{
-			renderer.ATSMinimalTemplate(),
-			renderer.ATSHybridTechTemplate(),
-			renderer.ATSExecutiveCleanTemplate(),
+			seed.ATSMinimalTemplate(),
+			seed.ATSHybridTechTemplate(),
+			seed.ATSExecutiveCleanTemplate(),
 		} {
 			out, err := engine.Render(ctx, &tmpl, prof, tailored)
 			if err != nil {
@@ -477,7 +478,7 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 	})
 
 	t.Run("DefaultTemplateSets Count and Invariants", func(t *testing.T) {
-		templates := renderer.DefaultTemplateSets()
+		templates := seed.DefaultTemplateSets()
 		if len(templates) != 5 {
 			t.Fatalf("expected exactly 5 built-in templates, got %d", len(templates))
 		}
@@ -494,11 +495,11 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 		}
 
 		expectedIDs := []string{
-			renderer.TemplateStandardCleanID,
-			renderer.TemplateDetailedImmigrationCVID,
-			renderer.TemplateATSMinimalTxtID,
-			renderer.TemplateATSHybridTechID,
-			renderer.TemplateATSExecutiveCleanID,
+			core.TemplateStandardCleanID,
+			core.TemplateDetailedImmigrationCVID,
+			core.TemplateATSMinimalTxtID,
+			core.TemplateATSHybridTechID,
+			core.TemplateATSExecutiveCleanID,
 		}
 		for _, id := range expectedIDs {
 			if !ids[id] {

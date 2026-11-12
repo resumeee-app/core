@@ -85,9 +85,6 @@ type RenderContext struct {
 	Meta    map[string]any
 }
 
-// TemplateContext is an alias to RenderContext for unified naming across domain contracts.
-type TemplateContext = RenderContext
-
 // AllSkills returns a deduplicated, flattened slice of non-empty skills across all skill groups.
 func (rc *RenderContext) AllSkills() []string {
 	if rc == nil {

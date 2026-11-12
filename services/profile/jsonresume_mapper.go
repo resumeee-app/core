@@ -23,13 +23,13 @@ const defaultSchemaURL = "https://raw.githubusercontent.com/jsonresume/resume-sc
 //
 // Returns:
 //   - Pointer to MainProfileSnapshot with generated IDs and short IDs, or core.ErrValidation.
-func ToSnapshot(resume *JSONResume, userID string, existingProfile *core.Profile, revision int64) (*core.MainProfileSnapshot, error) {
+func ToSnapshot(resume *core.JSONResume, userID string, existingProfile *core.Profile, revision int64) (*core.MainProfileSnapshot, error) {
 	return ToSnapshotWithGlobalSkills(resume, userID, existingProfile, revision, nil)
 }
 
 // ToSnapshotWithGlobalSkills converts a validated JSON Resume AST into a full MainProfileSnapshot,
 // resolving candidate skills against the global skills catalog before creating custom tenant skills.
-func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfile *core.Profile, revision int64, globalSkills []core.Skill) (*core.MainProfileSnapshot, error) {
+func ToSnapshotWithGlobalSkills(resume *core.JSONResume, userID string, existingProfile *core.Profile, revision int64, globalSkills []core.Skill) (*core.MainProfileSnapshot, error) {
 	if resume == nil {
 		return nil, core.ErrValidation
 	}
@@ -394,7 +394,7 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 
 // FromSnapshot converts a MainProfileSnapshot back into a valid JSONResume document,
 // restoring unmapped sections and child highlights.
-func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
+func FromSnapshot(snapshot *core.MainProfileSnapshot) (*core.JSONResume, error) {
 	if snapshot == nil {
 		return nil, core.ErrValidation
 	}
@@ -402,18 +402,18 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 	schemaURL := defaultSchemaURL
 
 	// 1. Basics
-	profiles := make([]JSONResumeProfile, len(snapshot.Profile.Profiles))
+	profiles := make([]core.JSONResumeProfile, len(snapshot.Profile.Profiles))
 	for i, p := range snapshot.Profile.Profiles {
-		profiles[i] = JSONResumeProfile(p)
+		profiles[i] = core.JSONResumeProfile(p)
 	}
 
-	basics := JSONResumeBasics{
+	basics := core.JSONResumeBasics{
 		Name:    snapshot.Profile.FullName,
 		Label:   snapshot.Profile.Headline,
 		Email:   snapshot.Profile.Email,
 		Phone:   snapshot.Profile.Phone,
 		Summary: snapshot.Profile.Summary,
-		Location: JSONResumeLocation{
+		Location: core.JSONResumeLocation{
 			Address:     snapshot.Profile.Location.Address,
 			PostalCode:  snapshot.Profile.Location.PostalCode,
 			City:        snapshot.Profile.Location.City,
@@ -445,7 +445,7 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 		}
 	}
 
-	workList := make([]JSONResumeWork, len(snapshot.Experiences))
+	workList := make([]core.JSONResumeWork, len(snapshot.Experiences))
 	for i, exp := range snapshot.Experiences {
 		endDate := ""
 		if exp.EndDate != nil && !exp.EndDate.IsZero() && !exp.IsCurrent {
@@ -472,7 +472,7 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 			}
 		}
 
-		workList[i] = JSONResumeWork{
+		workList[i] = core.JSONResumeWork{
 			Name:       exp.Company,
 			Company:    exp.Company,
 			Position:   exp.RoleTitle,
@@ -486,7 +486,7 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 	}
 
 	// 3. Projects
-	projList := make([]JSONResumeProject, len(snapshot.Projects))
+	projList := make([]core.JSONResumeProject, len(snapshot.Projects))
 	for i, proj := range snapshot.Projects {
 		startDate := ""
 		if proj.StartDate != nil && !proj.StartDate.IsZero() {
@@ -525,7 +525,7 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 			roles = []string{proj.Role}
 		}
 
-		projList[i] = JSONResumeProject{
+		projList[i] = core.JSONResumeProject{
 			Name:        proj.Name,
 			Description: proj.Summary,
 			Highlights:  highlights,
@@ -540,7 +540,7 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 	}
 
 	// 4. Education
-	eduList := make([]JSONResumeEducation, len(snapshot.Education))
+	eduList := make([]core.JSONResumeEducation, len(snapshot.Education))
 	for i, edu := range snapshot.Education {
 		startDate := ""
 		if edu.StartDate != nil && !edu.StartDate.IsZero() {
@@ -559,7 +559,7 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 			courses = extractStringSlice(edu.Metadata["courses"])
 		}
 
-		eduList[i] = JSONResumeEducation{
+		eduList[i] = core.JSONResumeEducation{
 			Institution: edu.Institution,
 			URL:         urlStr,
 			Area:        edu.Field,
@@ -572,13 +572,13 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 	}
 
 	// 5. Certifications
-	certList := make([]JSONResumeCertificate, len(snapshot.Certifications))
+	certList := make([]core.JSONResumeCertificate, len(snapshot.Certifications))
 	for i, cert := range snapshot.Certifications {
 		dateStr := ""
 		if cert.Date != nil && !cert.Date.IsZero() {
 			dateStr = cert.Date.String()
 		}
-		certList[i] = JSONResumeCertificate{
+		certList[i] = core.JSONResumeCertificate{
 			Name:   cert.Name,
 			Date:   dateStr,
 			Issuer: cert.Issuer,
@@ -588,16 +588,16 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 
 	// 6. Skills: export all consolidated skills from the snapshot
 	allSnapshotSkills := snapshot.AllSkills()
-	skillList := make([]JSONResumeSkill, len(allSnapshotSkills))
+	skillList := make([]core.JSONResumeSkill, len(allSnapshotSkills))
 	for i, skill := range allSnapshotSkills {
-		skillList[i] = JSONResumeSkill{
+		skillList[i] = core.JSONResumeSkill{
 			Name:     skill.Name,
 			Level:    skill.Proficiency,
 			Keywords: skill.Keywords,
 		}
 	}
 
-	res := &JSONResume{
+	res := &core.JSONResume{
 		Schema:       schemaURL,
 		Basics:       basics,
 		Work:         workList,
@@ -613,15 +613,15 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 			data, err := json.Marshal(rawUnmapped)
 			if err == nil {
 				var aux struct {
-					Schema        string                     `json:"$schema"`
-					Volunteer     []JSONResumeVolunteer      `json:"volunteer"`
-					Awards        []JSONResumeAward          `json:"awards"`
-					Publications  []JSONResumePublication    `json:"publications"`
-					Languages     []JSONResumeLanguage       `json:"languages"`
-					Interests     []JSONResumeInterest       `json:"interests"`
-					References    []JSONResumeReference      `json:"references"`
-					Meta          *JSONResumeMeta            `json:"meta"`
-					ExtraUnmapped map[string]json.RawMessage `json:"extra_unmapped"`
+					Schema        string                       `json:"$schema"`
+					Volunteer     []core.JSONResumeVolunteer   `json:"volunteer"`
+					Awards        []core.JSONResumeAward       `json:"awards"`
+					Publications  []core.JSONResumePublication `json:"publications"`
+					Languages     []core.JSONResumeLanguage    `json:"languages"`
+					Interests     []core.JSONResumeInterest    `json:"interests"`
+					References    []core.JSONResumeReference   `json:"references"`
+					Meta          *core.JSONResumeMeta         `json:"meta"`
+					ExtraUnmapped map[string]json.RawMessage   `json:"extra_unmapped"`
 				}
 				if err := json.Unmarshal(data, &aux); err == nil {
 					if aux.Schema != "" {
@@ -660,27 +660,27 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 }
 
 // FromTailored converts a BranchVersion's TailoredContent and base Profile into a valid JSONResume export.
-func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONResume, error) {
+func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*core.JSONResume, error) {
 	if tailored == nil {
 		return nil, core.ErrValidation
 	}
 
 	schemaURL := defaultSchemaURL
-	var basics JSONResumeBasics
+	var basics core.JSONResumeBasics
 
 	if profile != nil {
-		profiles := make([]JSONResumeProfile, len(profile.Profiles))
+		profiles := make([]core.JSONResumeProfile, len(profile.Profiles))
 		for i, p := range profile.Profiles {
-			profiles[i] = JSONResumeProfile(p)
+			profiles[i] = core.JSONResumeProfile(p)
 		}
 
-		basics = JSONResumeBasics{
+		basics = core.JSONResumeBasics{
 			Name:    profile.FullName,
 			Label:   profile.Headline,
 			Email:   profile.Email,
 			Phone:   profile.Phone,
 			Summary: profile.Summary,
-			Location: JSONResumeLocation{
+			Location: core.JSONResumeLocation{
 				Address:     profile.Location.Address,
 				PostalCode:  profile.Location.PostalCode,
 				City:        profile.Location.City,
@@ -706,7 +706,7 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 	}
 
 	// 1. Work from TailoredExperiences
-	workList := make([]JSONResumeWork, len(tailored.Experiences))
+	workList := make([]core.JSONResumeWork, len(tailored.Experiences))
 	for i, exp := range tailored.Experiences {
 		endDate := ""
 		if exp.EndDate != nil && !exp.EndDate.IsZero() {
@@ -722,7 +722,7 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 			loc = exp.CompanyLocation.City
 		}
 
-		workList[i] = JSONResumeWork{
+		workList[i] = core.JSONResumeWork{
 			Name:       exp.Company,
 			Company:    exp.Company,
 			Position:   exp.RoleTitle,
@@ -735,7 +735,7 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 	}
 
 	// 2. Projects from TailoredProjects
-	projList := make([]JSONResumeProject, len(tailored.Projects))
+	projList := make([]core.JSONResumeProject, len(tailored.Projects))
 	for i, proj := range tailored.Projects {
 		startDate := ""
 		if proj.StartDate != nil && !proj.StartDate.IsZero() {
@@ -754,7 +754,7 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 			roles = []string{proj.Role}
 		}
 
-		projList[i] = JSONResumeProject{
+		projList[i] = core.JSONResumeProject{
 			Name:        proj.Name,
 			Description: proj.Summary,
 			Highlights:  highlights,
@@ -766,7 +766,7 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 	}
 
 	// 3. Education from TailoredEducation
-	eduList := make([]JSONResumeEducation, len(tailored.Education))
+	eduList := make([]core.JSONResumeEducation, len(tailored.Education))
 	for i, edu := range tailored.Education {
 		startDate := ""
 		if edu.StartDate != nil && !edu.StartDate.IsZero() {
@@ -776,7 +776,7 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 		if edu.EndDate != nil && !edu.EndDate.IsZero() {
 			endDate = edu.EndDate.String()
 		}
-		eduList[i] = JSONResumeEducation{
+		eduList[i] = core.JSONResumeEducation{
 			Institution: edu.Institution,
 			StudyType:   edu.Degree,
 			Area:        edu.Field,
@@ -787,13 +787,13 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 	}
 
 	// 4. Certifications from TailoredCert
-	certList := make([]JSONResumeCertificate, len(tailored.Certifications))
+	certList := make([]core.JSONResumeCertificate, len(tailored.Certifications))
 	for i, cert := range tailored.Certifications {
 		dateStr := ""
 		if cert.Date != nil && !cert.Date.IsZero() {
 			dateStr = cert.Date.String()
 		}
-		certList[i] = JSONResumeCertificate{
+		certList[i] = core.JSONResumeCertificate{
 			Name:   cert.Name,
 			Issuer: cert.Issuer,
 			Date:   dateStr,
@@ -802,15 +802,15 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 	}
 
 	// 5. Skills from TailoredSkillGroups
-	skillList := make([]JSONResumeSkill, len(tailored.SkillGroups))
+	skillList := make([]core.JSONResumeSkill, len(tailored.SkillGroups))
 	for i, sg := range tailored.SkillGroups {
-		skillList[i] = JSONResumeSkill{
+		skillList[i] = core.JSONResumeSkill{
 			Name:     sg.Category,
 			Keywords: sg.Skills,
 		}
 	}
 
-	res := &JSONResume{
+	res := &core.JSONResume{
 		Schema:       schemaURL,
 		Basics:       basics,
 		Work:         workList,
@@ -826,15 +826,15 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 			data, err := json.Marshal(rawUnmapped)
 			if err == nil {
 				var aux struct {
-					Schema        string                     `json:"$schema"`
-					Volunteer     []JSONResumeVolunteer      `json:"volunteer"`
-					Awards        []JSONResumeAward          `json:"awards"`
-					Publications  []JSONResumePublication    `json:"publications"`
-					Languages     []JSONResumeLanguage       `json:"languages"`
-					Interests     []JSONResumeInterest       `json:"interests"`
-					References    []JSONResumeReference      `json:"references"`
-					Meta          *JSONResumeMeta            `json:"meta"`
-					ExtraUnmapped map[string]json.RawMessage `json:"extra_unmapped"`
+					Schema        string                       `json:"$schema"`
+					Volunteer     []core.JSONResumeVolunteer   `json:"volunteer"`
+					Awards        []core.JSONResumeAward       `json:"awards"`
+					Publications  []core.JSONResumePublication `json:"publications"`
+					Languages     []core.JSONResumeLanguage    `json:"languages"`
+					Interests     []core.JSONResumeInterest    `json:"interests"`
+					References    []core.JSONResumeReference   `json:"references"`
+					Meta          *core.JSONResumeMeta         `json:"meta"`
+					ExtraUnmapped map[string]json.RawMessage   `json:"extra_unmapped"`
 				}
 				if err := json.Unmarshal(data, &aux); err == nil {
 					if aux.Schema != "" {

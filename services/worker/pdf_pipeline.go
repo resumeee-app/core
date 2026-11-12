@@ -11,7 +11,7 @@ import (
 
 // safeProcessPDFJob executes a PDF parse task with panic recovery to prevent worker goroutines from terminating
 // and to guarantee that the offending job is transitioned to a failed state.
-func (p *Pool) safeProcessPDFJob(ctx context.Context, task PDFParseJobTask) {
+func (p *Pool) safeProcessPDFJob(ctx context.Context, task core.PDFParseJobTask) {
 	defer func() {
 		if r := recover(); r != nil {
 			if p.logger != nil {
@@ -28,7 +28,7 @@ func (p *Pool) safeProcessPDFJob(ctx context.Context, task PDFParseJobTask) {
 }
 
 // processPDFJob coordinates the asynchronous LLM parsing of raw extracted resume text into structured JSONResume.
-func (p *Pool) processPDFJob(ctx context.Context, task PDFParseJobTask) {
+func (p *Pool) processPDFJob(ctx context.Context, task core.PDFParseJobTask) {
 	if p.pdfJobRepo == nil {
 		return
 	}

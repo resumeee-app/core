@@ -6,10 +6,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// CareerGraphSnapshot is a semantic domain alias for MainProfileSnapshot,
-// highlighting its graph-level aggregations and skill associations.
-type CareerGraphSnapshot = MainProfileSnapshot
-
 // SkillUsage documents bidirectional skill references across the career graph snapshot,
 // detailing which experiences, projects, or facts associate with the skill directly or effectively.
 type SkillUsage struct {

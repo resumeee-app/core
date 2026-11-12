@@ -16,26 +16,6 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// JSONResume and its sub-types are type aliases to the canonical core JSON Resume v1.0.0 schema types.
-type (
-	JSONResume            = core.JSONResume
-	JSONResumeBasics      = core.JSONResumeBasics
-	JSONResumeLocation    = core.JSONResumeLocation
-	JSONResumeProfile     = core.JSONResumeProfile
-	JSONResumeWork        = core.JSONResumeWork
-	JSONResumeVolunteer   = core.JSONResumeVolunteer
-	JSONResumeEducation   = core.JSONResumeEducation
-	JSONResumeAward       = core.JSONResumeAward
-	JSONResumeCertificate = core.JSONResumeCertificate
-	JSONResumePublication = core.JSONResumePublication
-	JSONResumeSkill       = core.JSONResumeSkill
-	JSONResumeLanguage    = core.JSONResumeLanguage
-	JSONResumeInterest    = core.JSONResumeInterest
-	JSONResumeReference   = core.JSONResumeReference
-	JSONResumeProject     = core.JSONResumeProject
-	JSONResumeMeta        = core.JSONResumeMeta
-)
-
 // Service defines high-level profile management, career graph operations, and JSON Resume interoperability.
 type Service interface {
 	GetProfile(ctx context.Context, userID string) (*core.Profile, error)
@@ -80,7 +60,7 @@ func (s *profileService) ImportJSONResume(ctx context.Context, userID string, pa
 		return nil, fmt.Errorf("%w: empty JSON payload", core.ErrValidation)
 	}
 
-	var resume JSONResume
+	var resume core.JSONResume
 	if err := json.Unmarshal(payload, &resume); err != nil {
 		return nil, fmt.Errorf("%w: malformed JSON Resume: %v", core.ErrValidation, err)
 	}
@@ -113,7 +93,7 @@ func (s *profileService) ImportJSONResume(ctx context.Context, userID string, pa
 }
 
 // ExportJSONResume exports either the main profile snapshot or a specific branch version into JSON Resume format.
-func (s *profileService) ExportJSONResume(ctx context.Context, userID string, versionID *string) (*JSONResume, error) {
+func (s *profileService) ExportJSONResume(ctx context.Context, userID string, versionID *string) (*core.JSONResume, error) {
 	if versionID == nil || *versionID == "" {
 		snapshot, err := s.profileRepo.GetSnapshot(ctx, userID)
 		if err != nil {
@@ -151,10 +131,10 @@ func (s *profileService) ExportJSONResume(ctx context.Context, userID string, ve
 	return s.ExportFromTailored(prof, targetVersion.TailoredContent)
 }
 
-func (s *profileService) ExportFromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
+func (s *profileService) ExportFromSnapshot(snapshot *core.MainProfileSnapshot) (*core.JSONResume, error) {
 	return FromSnapshot(snapshot)
 }
 
-func (s *profileService) ExportFromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONResume, error) {
+func (s *profileService) ExportFromTailored(profile *core.Profile, tailored *core.TailoredContent) (*core.JSONResume, error) {
 	return FromTailored(profile, tailored)
 }

@@ -86,7 +86,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 		ID:            "branch-" + uuid.New().String(),
 		UserID:        defaultUser,
 		Name:          "Senior Cloud Architect",
-		TemplateSetID: renderer.TemplateStandardCleanID,
+		TemplateSetID: core.TemplateStandardCleanID,
 	}
 	created, err := svc.CreateBranch(ctx, b)
 	if err != nil {
@@ -99,7 +99,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 		BranchID:          created.ID,
 		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 	}
 	if err := branchRepo.CreateVersion(ctx, v1); err != nil {
@@ -288,7 +288,7 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 		ID:            "branch-2-" + uuid.New().String(),
 		UserID:        env.defaultUser,
 		Name:          "Frontend Architect",
-		TemplateSetID: renderer.TemplateStandardCleanID,
+		TemplateSetID: core.TemplateStandardCleanID,
 	}
 	_, err := env.svc.CreateBranch(ctx, b2)
 	if err != nil {
@@ -378,7 +378,7 @@ func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  rev2,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
@@ -458,7 +458,7 @@ func TestService_UpdateBranchSyncsGapReportOnActiveVersionSwitch(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 		GapReport: &core.GapReport{
 			OverallMatchSummary: "V2 improved match report",
@@ -521,7 +521,7 @@ func TestService_GetAndListBranchesFallbackResolution(t *testing.T) {
 		ID:            "branch-service-fallback-" + uuid.New().String(),
 		UserID:        env.defaultUser,
 		Name:          "Data Platform Architect",
-		TemplateSetID: renderer.TemplateStandardCleanID,
+		TemplateSetID: core.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateBranch(ctx, b); err != nil {
 		t.Fatalf("create branch: %v", err)
@@ -532,7 +532,7 @@ func TestService_GetAndListBranchesFallbackResolution(t *testing.T) {
 		BranchID:          b.ID,
 		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 		GapReport: &core.GapReport{
 			OverallMatchSummary: "Fallback summary from version",
@@ -602,7 +602,7 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 		ID:            "branch-other-" + uuid.New().String(),
 		UserID:        env.defaultUser,
 		Name:          "Other Branch",
-		TemplateSetID: renderer.TemplateStandardCleanID,
+		TemplateSetID: core.TemplateStandardCleanID,
 	}
 	created2, err := env.svc.CreateBranch(ctx, b2)
 	if err != nil {
@@ -614,7 +614,7 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 		BranchID:          created2.ID,
 		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vOther); err != nil {
@@ -656,7 +656,7 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vPending); err != nil {
@@ -747,14 +747,14 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 			oldActiveVer = *b.ActiveVersionID
 		}
 
-		b.TemplateSetID = renderer.TemplateDetailedImmigrationCVID
+		b.TemplateSetID = core.TemplateDetailedImmigrationCVID
 		updated, err := env.svc.UpdateBranch(ctx, b)
 		if err != nil {
 			t.Fatalf("failed to update default branch template: %v", err)
 		}
 
-		if updated.TemplateSetID != renderer.TemplateDetailedImmigrationCVID {
-			t.Errorf("expected template %s, got %s", renderer.TemplateDetailedImmigrationCVID, updated.TemplateSetID)
+		if updated.TemplateSetID != core.TemplateDetailedImmigrationCVID {
+			t.Errorf("expected template %s, got %s", core.TemplateDetailedImmigrationCVID, updated.TemplateSetID)
 		}
 		if updated.ActiveVersionID == nil || *updated.ActiveVersionID == oldActiveVer {
 			t.Errorf("expected new active version rendered after template update")
@@ -764,7 +764,7 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get new active version: %v", err)
 		}
-		if newVer.TemplateSetIDUsed != renderer.TemplateDetailedImmigrationCVID {
+		if newVer.TemplateSetIDUsed != core.TemplateDetailedImmigrationCVID {
 			t.Errorf("expected version to use new template, got %s", newVer.TemplateSetIDUsed)
 		}
 	})
@@ -1047,7 +1047,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 			Name:               "New Branch Without Versions",
 			TargetRole:         "Backend Engineer",
 			TargetRequirements: "Go, Kubernetes",
-			TemplateSetID:      renderer.TemplateStandardCleanID,
+			TemplateSetID:      core.TemplateStandardCleanID,
 		}
 		created, err := env.svc.CreateBranch(ctx, b)
 		if err != nil {
@@ -1280,7 +1280,7 @@ func TestService_GetPromptPreview_UnconfiguredCompiler(t *testing.T) {
 		ID:            "branch-no-comp",
 		UserID:        "user-no-compiler",
 		Name:          "Branch No Compiler",
-		TemplateSetID: renderer.TemplateStandardCleanID,
+		TemplateSetID: core.TemplateStandardCleanID,
 	}
 	if err := store.CreateBranch(ctx, b); err != nil {
 		t.Fatalf("failed to create branch: %v", err)
@@ -1389,7 +1389,7 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 		UserID:             defaultUser,
 		Name:               "DevOps Lead",
 		TargetRequirements: "Go, Kubernetes, Terraform",
-		TemplateSetID:      renderer.TemplateStandardCleanID,
+		TemplateSetID:      core.TemplateStandardCleanID,
 	}
 	err := store.CreateBranch(ctx, b)
 	if err != nil {
@@ -1623,7 +1623,7 @@ func TestService_SimulateATS(t *testing.T) {
 			Name:               "No JD Branch",
 			TargetRole:         "Backend Engineer",
 			TargetRequirements: "   ",
-			TemplateSetID:      renderer.TemplateStandardCleanID,
+			TemplateSetID:      core.TemplateStandardCleanID,
 		}
 		if _, err := env.svc.CreateBranch(ctx, noJDBranch); err != nil {
 			t.Fatalf("CreateBranch failed: %v", err)
@@ -1875,7 +1875,7 @@ func TestService_SimulateATS(t *testing.T) {
 			BranchID:          env.branchID,
 			MainRevisionUsed:  2,
 			Status:            core.VersionStatusCompleted,
-			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+			TemplateSetIDUsed: core.TemplateStandardCleanID,
 			MarkdownOutput:    "# Cached Markdown Only",
 			HTMLOutput:        "",
 			TailoredContent: &core.TailoredContent{

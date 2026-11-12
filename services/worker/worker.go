@@ -20,34 +20,6 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// GenerationJob encapsulates the parameters of an asynchronous resume generation task.
-type GenerationJob = core.GenerationJob
-
-// JobEnqueuer defines the contract for enqueuing generation jobs into the worker pool.
-type JobEnqueuer = core.JobEnqueuer
-
-// PDFParseJobTask encapsulates the parameters of an asynchronous PDF resume parsing task.
-type PDFParseJobTask = core.PDFParseJobTask
-
-// PDFJobEnqueuer defines the contract for enqueuing PDF parse tasks into the worker pool.
-type PDFJobEnqueuer = core.PDFJobEnqueuer
-
-// ResumeExtractor defines the contract for structured resume data extraction from raw text via an LLM.
-type ResumeExtractor = core.ResumeExtractor
-
-// LLMService abstracts multi-provider prompt generation and structured response.
-type LLMService = core.LLMService
-
-// ProvenanceValidator audits tailored content against career snapshots and exclusion lists.
-type ProvenanceValidator interface {
-	Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*core.ValidationResult, error)
-}
-
-// TemplateRenderer executes multi-format Go templates.
-type TemplateRenderer interface {
-	Render(ctx context.Context, tmpl *core.TemplateSet, profile *core.Profile, content *core.TailoredContent) (*core.RenderOutput, error)
-}
-
 // ErrPoolClosed indicates the pool is stopped and cannot accept new jobs.
 var ErrPoolClosed = errors.New("worker pool closed")
 
@@ -65,8 +37,8 @@ type PoolConfig struct {
 	ResumeExtractor        core.ResumeExtractor
 	LLMTimeout             time.Duration
 	LLMService             core.LLMService
-	Validator              ProvenanceValidator
-	Renderer               TemplateRenderer
+	Validator              core.ProvenanceValidator
+	Renderer               core.TemplateRenderer
 	Logger                 *slog.Logger
 }
 
@@ -108,8 +80,8 @@ type Pool struct {
 	resumeExtractor core.ResumeExtractor
 	llmTimeout      time.Duration
 	llmService      core.LLMService
-	validator       ProvenanceValidator
-	renderer        TemplateRenderer
+	validator       core.ProvenanceValidator
+	renderer        core.TemplateRenderer
 }
 
 func normalizeTenantID(userID string) string {
@@ -192,7 +164,7 @@ func (p *Pool) Start(ctx context.Context) {
 }
 
 // Enqueue submits a generation job to the pool, returning core.ErrQueueFull if saturated.
-func (p *Pool) Enqueue(job GenerationJob) error {
+func (p *Pool) Enqueue(job core.GenerationJob) error {
 	tenantID := normalizeTenantID(job.UserID)
 	item := pendingJob{
 		isPDF:    false,
@@ -211,7 +183,7 @@ func (p *Pool) Enqueue(job GenerationJob) error {
 }
 
 // EnqueuePDFJob submits an asynchronous PDF parse task to the pool, returning core.ErrQueueFull if saturated.
-func (p *Pool) EnqueuePDFJob(task PDFParseJobTask) error {
+func (p *Pool) EnqueuePDFJob(task core.PDFParseJobTask) error {
 	tenantID := normalizeTenantID(task.UserID)
 	item := pendingJob{
 		isPDF:    true,
@@ -410,7 +382,7 @@ func (p *Pool) runJob(ctx context.Context, item pendingJob) {
 
 // safeProcessJob executes a generation job with panic recovery to prevent worker goroutines from terminating
 // and to guarantee that the offending job is transitioned to a failed state.
-func (p *Pool) safeProcessJob(ctx context.Context, job GenerationJob) {
+func (p *Pool) safeProcessJob(ctx context.Context, job core.GenerationJob) {
 	defer func() {
 		if r := recover(); r != nil {
 			errStr := fmt.Sprintf("panic recovered in worker: %v", r)

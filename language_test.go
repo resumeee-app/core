@@ -131,7 +131,7 @@ func TestValidateLanguage_Unsupported(t *testing.T) {
 }
 
 func TestTailoringStrategy_DefaultLanguageOnSave(t *testing.T) {
-	strat := core.TailoringStrategy{
+	strat := core.Preset{
 		Name: "Custom Strategy",
 	}
 	if err := strat.Normalize(); err != nil {
@@ -143,17 +143,17 @@ func TestTailoringStrategy_DefaultLanguageOnSave(t *testing.T) {
 }
 
 func TestTailoringStrategy_EffectiveLanguage(t *testing.T) {
-	var nilStrat *core.TailoringStrategy
+	var nilStrat *core.Preset
 	if got := nilStrat.EffectiveLanguage(); got != core.DefaultLanguage {
 		t.Fatalf("expected nil strategy to have effective language %q, got: %q", core.DefaultLanguage, got)
 	}
 
-	emptyStrat := &core.TailoringStrategy{Language: "   "}
+	emptyStrat := &core.Preset{Language: "   "}
 	if got := emptyStrat.EffectiveLanguage(); got != core.DefaultLanguage {
 		t.Fatalf("expected empty language strategy to have effective language %q, got: %q", core.DefaultLanguage, got)
 	}
 
-	strat := &core.TailoringStrategy{Language: "Spanish"}
+	strat := &core.Preset{Language: "Spanish"}
 	if got := strat.EffectiveLanguage(); got != "Spanish" {
 		t.Fatalf("expected Spanish, got: %q", got)
 	}

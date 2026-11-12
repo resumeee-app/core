@@ -11,7 +11,7 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/privacy"
-	"github.com/resumeee-app/resumeee-core/services/renderer"
+	"github.com/resumeee-app/resumeee-core/seed"
 )
 
 type fakeBranchStore struct {
@@ -48,7 +48,7 @@ func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchSt
 	}
 
 	// 2. Seed Built-In Templates
-	for _, tmpl := range renderer.DefaultTemplateSets() {
+	for _, tmpl := range seed.DefaultTemplateSets() {
 		cp := tmpl
 		s.templates[tmpl.ID] = &cp
 	}
@@ -68,7 +68,7 @@ func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchSt
 		UserID:                 defaultUserID,
 		Name:                   core.DefaultBranchName,
 		IsDefault:              true,
-		TemplateSetID:          renderer.TemplateStandardCleanID,
+		TemplateSetID:          core.TemplateStandardCleanID,
 		LastSyncedMainRevision: 1,
 		CreatedAt:              time.Now().UTC(),
 		UpdatedAt:              time.Now().UTC(),

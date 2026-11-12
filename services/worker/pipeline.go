@@ -10,7 +10,7 @@ import (
 )
 
 // processJob coordinates end-to-end execution of a background resume generation pipeline job.
-func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
+func (p *Pool) processJob(ctx context.Context, job core.GenerationJob) {
 	if p.branchRepo == nil {
 		return
 	}

@@ -198,7 +198,7 @@ func sampleOfficialJSONResume() string {
 
 func TestJSONResume_SchemaValidationAndParsing(t *testing.T) {
 	t.Run("successfully unmarshals official schema sample", func(t *testing.T) {
-		var resume profile.JSONResume
+		var resume core.JSONResume
 		raw := sampleOfficialJSONResume()
 		if err := json.Unmarshal([]byte(raw), &resume); err != nil {
 			t.Fatalf("failed to unmarshal JSON Resume: %v", err)
@@ -253,7 +253,7 @@ func TestJSONResume_SchemaValidationAndParsing(t *testing.T) {
 			"basics": {"name": "Synonym Tester"},
 			"work": [{"company": "Hooli", "position": "VP"}]
 		}`
-		var resume profile.JSONResume
+		var resume core.JSONResume
 		if err := json.Unmarshal([]byte(payload), &resume); err != nil {
 			t.Fatalf("failed to unmarshal: %v", err)
 		}
@@ -280,7 +280,7 @@ func TestJSONResume_SchemaValidationAndParsing(t *testing.T) {
 
 func TestJSONResume_EntityAndPolymorphicFactMapping(t *testing.T) {
 	raw := sampleOfficialJSONResume()
-	var resume profile.JSONResume
+	var resume core.JSONResume
 	if err := json.Unmarshal([]byte(raw), &resume); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -385,10 +385,10 @@ func TestJSONResume_EntityAndPolymorphicFactMapping(t *testing.T) {
 	testMatcherSkills := []core.Skill{
 		{ID: "sk-go", Name: "Go", Keywords: []string{"Golang"}},
 	}
-	snapWithGo, err := profile.ToSnapshot(&profile.JSONResume{
-		Basics: profile.JSONResumeBasics{Name: "Boundary Tester"},
-		Skills: []profile.JSONResumeSkill{{Name: "Go", Keywords: []string{"Golang"}}},
-		Work: []profile.JSONResumeWork{
+	snapWithGo, err := profile.ToSnapshot(&core.JSONResume{
+		Basics: core.JSONResumeBasics{Name: "Boundary Tester"},
+		Skills: []core.JSONResumeSkill{{Name: "Go", Keywords: []string{"Golang"}}},
+		Work: []core.JSONResumeWork{
 			{
 				Name: "TestCorp",
 				Highlights: []string{
@@ -420,7 +420,7 @@ func TestJSONResume_EntityAndPolymorphicFactMapping(t *testing.T) {
 
 func TestJSONResume_LosslessRoundTrip(t *testing.T) {
 	rawInput := sampleOfficialJSONResume()
-	var originalResume profile.JSONResume
+	var originalResume core.JSONResume
 	if err := json.Unmarshal([]byte(rawInput), &originalResume); err != nil {
 		t.Fatalf("failed to unmarshal original JSON Resume: %v", err)
 	}
@@ -549,7 +549,7 @@ func TestJSONResume_LosslessRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to marshal exported JSON Resume: %v", err)
 	}
-	var reParsed profile.JSONResume
+	var reParsed core.JSONResume
 	if err := json.Unmarshal(exportedJSON, &reParsed); err != nil {
 		t.Fatalf("failed to re-unmarshal exported JSON: %v", err)
 	}
@@ -973,7 +973,7 @@ func TestJSONResume_EndDatePresentHandling(t *testing.T) {
 		]
 	}`)
 
-	var parsed profile.JSONResume
+	var parsed core.JSONResume
 	if err := json.Unmarshal(rawImport, &parsed); err != nil {
 		t.Fatalf("json.Unmarshal failed: %v", err)
 	}

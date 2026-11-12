@@ -117,7 +117,7 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 		t.Fatalf("failed to create version: %v", err)
 	}
 
-	if err := pool.Enqueue(worker.GenerationJob{
+	if err := pool.Enqueue(core.GenerationJob{
 		UserID:    env.defaultUser,
 		BranchID:  env.branchID,
 		VersionID: ver.ID,

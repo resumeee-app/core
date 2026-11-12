@@ -11,7 +11,7 @@ import (
 	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
-// ServiceAdapter adapts an LLM Registry into the worker.LLMService and branch domain service interfaces,
+// ServiceAdapter adapts an LLM Registry into the core.LLMService and branch domain service interfaces,
 // providing unified LLM tailoring and decoupled qualification gap analysis capabilities across server and CLI binaries.
 type ServiceAdapter struct {
 	registry *Registry

@@ -26,7 +26,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/services/renderer"
 )
 
 // Service defines domain operations for branches, async generation, batch synchronization, and version lifecycle.
@@ -669,7 +668,7 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 
 	tmplID := branch.TemplateSetID
 	if tmplID == "" {
-		tmplID = renderer.TemplateStandardCleanID
+		tmplID = core.TemplateStandardCleanID
 		branch.TemplateSetID = tmplID
 	}
 

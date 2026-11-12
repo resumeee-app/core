@@ -9,12 +9,6 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// ResumeExtractor abstracts LLM-driven unstructured text extraction into standard JSONResume.
-type ResumeExtractor = core.ResumeExtractor
-
-// UsageResumeExtractor extends ResumeExtractor with token usage reporting.
-type UsageResumeExtractor = core.UsageResumeExtractor
-
 // Completer abstracts text-based completion for LLM extraction tasks.
 type Completer interface {
 	Complete(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, error)

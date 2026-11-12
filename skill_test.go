@@ -8,7 +8,7 @@ import (
 )
 
 func TestCareerGraphSnapshotAlias(t *testing.T) {
-	cgs := core.CareerGraphSnapshot{
+	cgs := core.MainProfileSnapshot{
 		MainRevision: 42,
 		Skills: []core.Skill{
 			{ID: "sk-alias", Name: "Go"},

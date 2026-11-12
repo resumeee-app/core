@@ -324,12 +324,12 @@ const (
 	PresetImmigrationFullHistoryCVID = "builtin-immigration-full-history-cv"
 )
 
-// TailoringStrategy defines reusable prompt engineering directives, reasoning depth,
+// Preset defines reusable prompt engineering directives, reasoning depth,
 // and density rules for LLM resume tailoring.
 //
-// Invariant: A TailoringStrategy defines how content is synthesized and prioritized;
+// Invariant: A Preset defines how content is synthesized and prioritized;
 // it has zero mandatory coupling to visual templates or CSS layouts.
-type TailoringStrategy struct {
+type Preset struct {
 	ID                 string `json:"id" gorm:"primaryKey;type:text"`
 	UserID             string `json:"user_id" gorm:"index;not null"`
 	Name               string `json:"name" gorm:"not null"` // e.g., "1-Page SWE", "Executive Leadership"
@@ -349,12 +349,12 @@ type TailoringStrategy struct {
 }
 
 // TableName overrides the GORM table name to tailoring_strategies.
-func (TailoringStrategy) TableName() string {
+func (Preset) TableName() string {
 	return "tailoring_strategies"
 }
 
 // EffectiveLanguage returns the configured target language for tailoring, falling back to DefaultLanguage.
-func (s *TailoringStrategy) EffectiveLanguage() string {
+func (s *Preset) EffectiveLanguage() string {
 	if s == nil || strings.TrimSpace(s.Language) == "" {
 		return DefaultLanguage
 	}
@@ -362,7 +362,7 @@ func (s *TailoringStrategy) EffectiveLanguage() string {
 }
 
 // Normalize synchronizes language defaults and template/theme aliases.
-func (s *TailoringStrategy) Normalize() error {
+func (s *Preset) Normalize() error {
 	if s == nil {
 		return nil
 	}
@@ -379,19 +379,16 @@ func (s *TailoringStrategy) Normalize() error {
 	return nil
 }
 
-// IsBuiltIn returns true if the strategy is a system-provided built-in strategy.
-// Built-in strategies are immutable and protected against update or deletion.
-func (s TailoringStrategy) IsBuiltIn() bool {
+// IsBuiltIn returns true if the preset is a system-provided built-in preset.
+// Built-in presets are immutable and protected against update or deletion.
+func (s Preset) IsBuiltIn() bool {
 	return strings.HasPrefix(s.ID, "builtin-") || s.UserID == SystemUserID
 }
 
-// TemplateSetName returns an empty string on core.TailoringStrategy, allowing view models to override it.
-func (s TailoringStrategy) TemplateSetName() string {
+// TemplateSetName returns an empty string on core.Preset, allowing view models to override it.
+func (s Preset) TemplateSetName() string {
 	return ""
 }
-
-// Preset is an alias to TailoringStrategy for backwards compatibility.
-type Preset = TailoringStrategy
 
 // TemplateSet bundles HTML, Markdown, and Plain Text Go templates stored in the database.
 type TemplateSet struct {
@@ -421,8 +418,8 @@ func DefaultBranchID(userID string) string {
 	return "branch-default-" + userID
 }
 
-// TargetResume (Branch) represents a targeted resume variant tailored for a specific opportunity.
-type TargetResume struct {
+// Branch represents a targeted resume variant tailored for a specific opportunity.
+type Branch struct {
 	ID                     string     `json:"id" gorm:"primaryKey;type:text"`
 	UserID                 string     `json:"user_id" gorm:"index;not null"`
 	Name                   string     `json:"name" gorm:"not null"` // e.g., "Stripe - Staff Backend Engineer"
@@ -450,12 +447,12 @@ type TargetResume struct {
 }
 
 // TableName overrides the GORM table name to target_resumes.
-func (TargetResume) TableName() string {
+func (Branch) TableName() string {
 	return "target_resumes"
 }
 
 // syncAliases harmonizes TailoringStrategyID <-> PresetID and CustomDirectives <-> BranchInstructions.
-func (b *TargetResume) syncAliases() {
+func (b *Branch) syncAliases() {
 	if b.TailoringStrategyID == nil && b.PresetID != nil {
 		b.TailoringStrategyID = b.PresetID
 	}
@@ -471,7 +468,7 @@ func (b *TargetResume) syncAliases() {
 }
 
 // Normalize synchronizes aliases prior to persistence.
-func (b *TargetResume) Normalize() error {
+func (b *Branch) Normalize() error {
 	if b == nil {
 		return nil
 	}
@@ -481,24 +478,21 @@ func (b *TargetResume) Normalize() error {
 
 // CanTailor returns true if the branch/resume can be tailored via LLM or manual bullet edits.
 // Default branches directly render the main profile and cannot be tailored.
-func (b *TargetResume) CanTailor() bool {
+func (b *Branch) CanTailor() bool {
 	return !b.IsDefault
 }
 
 // IsStaleRevision returns true if the last synced main revision is behind the given main revision.
-func (b *TargetResume) IsStaleRevision(currentMainRevision int64) bool {
+func (b *Branch) IsStaleRevision(currentMainRevision int64) bool {
 	return b.LastSyncedMainRevision < currentMainRevision
 }
 
-// PresetName returns an empty string on core.TargetResume, allowing view models to override it.
-func (b TargetResume) PresetName() string {
+// PresetName returns an empty string on core.Branch, allowing view models to override it.
+func (b Branch) PresetName() string {
 	return ""
 }
 
-// Branch is an alias to TargetResume.
-type Branch = TargetResume
-
-// VersionStatus represents the lifecycle state of a ResumeVersion / BranchVersion.
+// VersionStatus represents the lifecycle state of a BranchVersion.
 type VersionStatus string
 
 const (
@@ -509,8 +503,8 @@ const (
 	VersionStatusFailed                VersionStatus = "failed"
 )
 
-// ResumeVersion (BranchVersion) is an immutable snapshot tracking its generation lifecycle and outputs.
-type ResumeVersion struct {
+// BranchVersion is an immutable snapshot tracking its generation lifecycle and outputs.
+type BranchVersion struct {
 	ID                 string           `json:"id" gorm:"primaryKey;type:text"`
 	UserID             string           `json:"user_id" gorm:"index;not null"`
 	ResumeID           string           `json:"resume_id" gorm:"uniqueIndex:idx_resume_version,priority:1;column:resume_id;not null"`
@@ -537,12 +531,12 @@ type ResumeVersion struct {
 }
 
 // TableName overrides the GORM table name to resume_versions.
-func (ResumeVersion) TableName() string {
+func (BranchVersion) TableName() string {
 	return "resume_versions"
 }
 
 // syncAliases harmonizes resume_id and branch_id.
-func (v *ResumeVersion) syncAliases() {
+func (v *BranchVersion) syncAliases() {
 	if v.ResumeID == "" && v.BranchID != "" {
 		v.ResumeID = v.BranchID
 	}
@@ -552,16 +546,13 @@ func (v *ResumeVersion) syncAliases() {
 }
 
 // Normalize synchronizes resume and branch aliases prior to persistence.
-func (v *ResumeVersion) Normalize() error {
+func (v *BranchVersion) Normalize() error {
 	if v == nil {
 		return nil
 	}
 	v.syncAliases()
 	return nil
 }
-
-// BranchVersion is an alias to ResumeVersion.
-type BranchVersion = ResumeVersion
 
 // MainProfileSnapshot is an aggregate capture of the entire career graph at a specific MainRevision.
 type MainProfileSnapshot struct {

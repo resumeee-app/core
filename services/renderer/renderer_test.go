@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/seed"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 )
 
@@ -115,7 +116,7 @@ func TestRenderer_MultiFormatRender(t *testing.T) {
 	engine := renderer.New()
 	profile, content := mockFullProfileAndContent()
 
-	tmpl := renderer.StandardCleanTemplate()
+	tmpl := seed.StandardCleanTemplate()
 	out, err := engine.Render(ctx, &tmpl, profile, content)
 	if err != nil {
 		t.Fatalf("Render failed unexpectedly: %v", err)
@@ -186,7 +187,7 @@ func TestRenderer_SecurityAutoEscaping(t *testing.T) {
 		},
 	}
 
-	tmpl := renderer.StandardCleanTemplate()
+	tmpl := seed.StandardCleanTemplate()
 	out, err := engine.Render(ctx, &tmpl, maliciousProfile, maliciousContent)
 	if err != nil {
 		t.Fatalf("Render returned unexpected error on hostile input: %v", err)
@@ -676,7 +677,7 @@ func TestRenderer_DefaultTemplates(t *testing.T) {
 	engine := renderer.New()
 	profile, content := mockFullProfileAndContent()
 
-	templates := renderer.DefaultTemplateSets()
+	templates := seed.DefaultTemplateSets()
 	if len(templates) < 2 {
 		t.Fatalf("expected at least 2 default templates, got %d", len(templates))
 	}
@@ -722,7 +723,7 @@ func TestRenderer_DetailedImmigrationCVFields(t *testing.T) {
 	engine := renderer.New()
 	profile, content := mockFullProfileAndContent()
 
-	tmpl := renderer.DetailedImmigrationCVTemplate()
+	tmpl := seed.DetailedImmigrationCVTemplate()
 	out, err := engine.Render(ctx, &tmpl, profile, content)
 	if err != nil {
 		t.Fatalf("failed to render Detailed Immigration CV: %v", err)
@@ -811,7 +812,7 @@ func TestRenderer_ThreadSafety(t *testing.T) {
 	ctx := context.Background()
 	engine := renderer.New()
 	profile, content := mockFullProfileAndContent()
-	tmpl := renderer.StandardCleanTemplate()
+	tmpl := seed.StandardCleanTemplate()
 
 	var wg sync.WaitGroup
 	workers := 50

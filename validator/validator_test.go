@@ -843,7 +843,7 @@ func TestValidateStrict_Behavior(t *testing.T) {
 }
 
 func TestValidatorInterfaceAndNew(t *testing.T) {
-	var _ validator.ProvenanceValidator = validator.New()
+	var _ core.ProvenanceValidator = validator.New()
 
 	v := validator.New()
 	snapshot := sampleSnapshot()

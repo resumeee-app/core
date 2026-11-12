@@ -13,13 +13,7 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// ValidationResult contains the sanitized tailored content and structured warnings.
-type ValidationResult = core.ValidationResult
-
-// ProvenanceValidator audits and sanitizes TailoredContent against MainProfileSnapshot and Branch rules.
-type ProvenanceValidator = core.ProvenanceValidator
-
-// Validator implements the ProvenanceValidator interface.
+// Validator implements the core.ProvenanceValidator interface.
 type Validator struct{}
 
 // New creates a new instance of Validator.
@@ -28,7 +22,7 @@ func New() *Validator {
 }
 
 // Validate is a package-level convenience function delegating to Validator.
-func Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*ValidationResult, error) {
+func Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*core.ValidationResult, error) {
 	return New().Validate(content, snapshot, branch)
 }
 
@@ -84,7 +78,7 @@ func registerFacts(factRegistry map[string]factMetadata, facts []core.Fact, owne
 // Returns:
 //   - ValidationResult containing SanitizedContent, list of Warnings, and IsValid boolean flag.
 //   - Error if content or snapshot is nil.
-func (v *Validator) Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*ValidationResult, error) {
+func (v *Validator) Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*core.ValidationResult, error) {
 	if content == nil {
 		return nil, fmt.Errorf("%w: content cannot be nil", core.ErrValidation)
 	}
@@ -481,7 +475,7 @@ func (v *Validator) Validate(content *core.TailoredContent, snapshot *core.MainP
 		}
 	}
 
-	return &ValidationResult{
+	return &core.ValidationResult{
 		SanitizedContent: sanitized,
 		Warnings:         warnings,
 	}, nil

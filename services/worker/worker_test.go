@@ -13,7 +13,6 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/memory"
-	"github.com/resumeee-app/resumeee-core/services/profile"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 	"github.com/resumeee-app/resumeee-core/services/worker"
 	"github.com/resumeee-app/resumeee-core/validator"
@@ -156,7 +155,7 @@ func setupTestWorkerEnv(t *testing.T) *testWorkerEnv {
 		ID:            "branch-" + uuid.New().String(),
 		UserID:        defaultUser,
 		Name:          "Backend Staff Engineer",
-		TemplateSetID: renderer.TemplateStandardCleanID,
+		TemplateSetID: core.TemplateStandardCleanID,
 	}
 	if err := branchRepo.CreateBranch(ctx, &branch); err != nil {
 		t.Fatalf("failed to create branch: %v", err)
@@ -207,14 +206,14 @@ func TestPool_ParallelExecution(t *testing.T) {
 			BranchID:          env.branchID,
 			Status:            core.VersionStatusPending,
 			MainRevisionUsed:  1,
-			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+			TemplateSetIDUsed: core.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
 		}
 		versionIDs[i] = ver.ID
 
-		job := worker.GenerationJob{
+		job := core.GenerationJob{
 			UserID:    env.defaultUser,
 			BranchID:  env.branchID,
 			VersionID: ver.ID,
@@ -273,7 +272,7 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to create version: %v", err)
@@ -308,7 +307,7 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 	}()
 
 	// 1st job: dequeued by worker and blocked inside LLM
-	j1 := worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: v1.ID}
+	j1 := core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: v1.ID}
 	if err := pool.Enqueue(j1); err != nil {
 		t.Fatalf("failed to enqueue job 1: %v", err)
 	}
@@ -327,19 +326,19 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 	}
 
 	// 2nd job: fills slot 1 of queue
-	j2 := worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-slot-1"}
+	j2 := core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-slot-1"}
 	if err := pool.Enqueue(j2); err != nil {
 		t.Fatalf("failed to enqueue job 2: %v", err)
 	}
 
 	// 3rd job: fills slot 2 of queue
-	j3 := worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-slot-2"}
+	j3 := core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-slot-2"}
 	if err := pool.Enqueue(j3); err != nil {
 		t.Fatalf("failed to enqueue job 3: %v", err)
 	}
 
 	// 4th job: queue is full, must return core.ErrQueueFull immediately without blocking
-	j4 := worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-overflow"}
+	j4 := core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-overflow"}
 	err := pool.Enqueue(j4)
 	if !errors.Is(err, core.ErrQueueFull) {
 		t.Fatalf("expected core.ErrQueueFull, got %v", err)
@@ -397,14 +396,14 @@ func TestPool_GracefulShutdownAndDrain(t *testing.T) {
 			BranchID:          env.branchID,
 			Status:            core.VersionStatusPending,
 			MainRevisionUsed:  1,
-			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+			TemplateSetIDUsed: core.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
 		}
 		versionIDs[i] = ver.ID
 
-		job := worker.GenerationJob{
+		job := core.GenerationJob{
 			UserID:    env.defaultUser,
 			BranchID:  env.branchID,
 			VersionID: ver.ID,
@@ -439,7 +438,7 @@ func TestPool_GracefulShutdownAndDrain(t *testing.T) {
 	}
 
 	// Enqueue after Stop should be rejected
-	err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-post-stop"})
+	err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-post-stop"})
 	if !errors.Is(err, core.ErrQueueFull) {
 		t.Errorf("expected core.ErrQueueFull after pool stop, got %v", err)
 	}
@@ -456,7 +455,7 @@ func TestPool_StartupCrashRecovery(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vPending); err != nil {
 		t.Fatalf("failed to create pending version: %v", err)
@@ -467,7 +466,7 @@ func TestPool_StartupCrashRecovery(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusProcessing,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vProcessing); err != nil {
 		t.Fatalf("failed to create processing version: %v", err)
@@ -525,13 +524,13 @@ func TestPool_LLMErrorTransition(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 		t.Fatalf("failed to create version: %v", err)
 	}
 
-	if err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: ver.ID}); err != nil {
+	if err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: ver.ID}); err != nil {
 		t.Fatalf("failed to enqueue: %v", err)
 	}
 
@@ -603,13 +602,13 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 		t.Fatalf("failed to create version: %v", err)
 	}
 
-	if err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: ver.ID}); err != nil {
+	if err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: ver.ID}); err != nil {
 		t.Fatalf("failed to enqueue: %v", err)
 	}
 
@@ -722,13 +721,13 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, verPanic); err != nil {
 		t.Fatalf("failed to create panic version: %v", err)
 	}
 
-	if err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verPanic.ID}); err != nil {
+	if err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verPanic.ID}); err != nil {
 		t.Fatalf("failed to enqueue panic job: %v", err)
 	}
 
@@ -762,13 +761,13 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, verSuccess); err != nil {
 		t.Fatalf("failed to create success version: %v", err)
 	}
 
-	if err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verSuccess.ID}); err != nil {
+	if err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verSuccess.ID}); err != nil {
 		t.Fatalf("failed to enqueue second job: %v", err)
 	}
 
@@ -797,16 +796,16 @@ type mockResumeExtractor struct {
 	delay      time.Duration
 	fail       bool
 	failErrMsg string
-	result     *profile.JSONResume
+	result     *core.JSONResume
 	usage      core.TokenUsage
 }
 
-func (m *mockResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+func (m *mockResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, error) {
 	res, _, err := m.ExtractResumeWithUsage(ctx, text, provider, model)
 	return res, err
 }
 
-func (m *mockResumeExtractor) ExtractResumeWithUsage(ctx context.Context, text, provider, model string) (*profile.JSONResume, core.TokenUsage, error) {
+func (m *mockResumeExtractor) ExtractResumeWithUsage(ctx context.Context, text, provider, model string) (*core.JSONResume, core.TokenUsage, error) {
 	m.mu.Lock()
 	delay := m.delay
 	fail := m.fail
@@ -828,8 +827,8 @@ func (m *mockResumeExtractor) ExtractResumeWithUsage(ctx context.Context, text, 
 	if result != nil {
 		return result, usage, nil
 	}
-	return &profile.JSONResume{
-		Basics: profile.JSONResumeBasics{
+	return &core.JSONResume{
+		Basics: core.JSONResumeBasics{
 			Name:  "Test Candidate",
 			Email: "candidate@test.com",
 		},
@@ -840,8 +839,8 @@ func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
 	pdfRepo := memory.New()
 	mockExt := &mockResumeExtractor{
 		delay: 10 * time.Millisecond,
-		result: &profile.JSONResume{
-			Basics: profile.JSONResumeBasics{
+		result: &core.JSONResume{
+			Basics: core.JSONResumeBasics{
 				Name: "Grace Hopper",
 			},
 		},
@@ -873,7 +872,7 @@ func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
 		t.Fatalf("failed to create job: %v", err)
 	}
 
-	task := worker.PDFParseJobTask{
+	task := core.PDFParseJobTask{
 		JobID:    jobID,
 		UserID:   "user-1",
 		RawText:  "Admiral Grace Hopper resume text",
@@ -949,7 +948,7 @@ func TestWorkerPool_PDFParseJob_Failure(t *testing.T) {
 		t.Fatalf("failed to create job: %v", err)
 	}
 
-	task := worker.PDFParseJobTask{
+	task := core.PDFParseJobTask{
 		JobID:   jobID,
 		UserID:  "user-1",
 		RawText: "Some text",
@@ -1009,13 +1008,13 @@ func TestWorkerPool_TailoringPipeline_LLMTimeout(t *testing.T) {
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
-		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, &ver); err != nil {
 		t.Fatalf("failed to create version: %v", err)
 	}
 
-	if err := pool.Enqueue(worker.GenerationJob{
+	if err := pool.Enqueue(core.GenerationJob{
 		UserID:    env.defaultUser,
 		BranchID:  env.branchID,
 		VersionID: verID,
@@ -1068,7 +1067,7 @@ func TestPool_PerTenantConcurrencyCap(t *testing.T) {
 	)
 
 	mockExt := &callbackResumeExtractor{
-		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+		fn: func(ctx context.Context, text, provider, model string) (*core.JSONResume, error) {
 			activeCount.Lock()
 			current++
 			if current > peak {
@@ -1082,7 +1081,7 @@ func TestPool_PerTenantConcurrencyCap(t *testing.T) {
 			current--
 			activeCount.Unlock()
 
-			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: "Alpha"}}, nil
+			return &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Alpha"}}, nil
 		},
 	}
 
@@ -1116,7 +1115,7 @@ func TestPool_PerTenantConcurrencyCap(t *testing.T) {
 		if err := pdfRepo.CreateJob(ctx, job); err != nil {
 			t.Fatalf("failed to create pdf job %d: %v", i, err)
 		}
-		if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: jobID, UserID: tenantID}); err != nil {
+		if err := pool.EnqueuePDFJob(core.PDFParseJobTask{JobID: jobID, UserID: tenantID}); err != nil {
 			t.Fatalf("failed to enqueue job %d: %v", i, err)
 		}
 	}
@@ -1158,13 +1157,13 @@ func TestPool_NoisyNeighborFairShareAntiStarvation(t *testing.T) {
 	pdfRepo := memory.New()
 
 	mockExt := &callbackResumeExtractor{
-		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+		fn: func(ctx context.Context, text, provider, model string) (*core.JSONResume, error) {
 			if provider == "slow" {
 				time.Sleep(120 * time.Millisecond)
 			} else {
 				time.Sleep(10 * time.Millisecond)
 			}
-			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: text}}, nil
+			return &core.JSONResume{Basics: core.JSONResumeBasics{Name: text}}, nil
 		},
 	}
 
@@ -1199,7 +1198,7 @@ func TestPool_NoisyNeighborFairShareAntiStarvation(t *testing.T) {
 		if err := pdfRepo.CreateJob(ctx, j); err != nil {
 			t.Fatalf("failed to create tenant A job %d: %v", i, err)
 		}
-		if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: jobID, UserID: tenantA, Provider: "slow"}); err != nil {
+		if err := pool.EnqueuePDFJob(core.PDFParseJobTask{JobID: jobID, UserID: tenantA, Provider: "slow"}); err != nil {
 			t.Fatalf("failed to enqueue tenant A job %d: %v", i, err)
 		}
 	}
@@ -1220,7 +1219,7 @@ func TestPool_NoisyNeighborFairShareAntiStarvation(t *testing.T) {
 	if err := pdfRepo.CreateJob(ctx, jB); err != nil {
 		t.Fatalf("failed to create tenant B job: %v", err)
 	}
-	if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: tenantBJobID, UserID: tenantB, Provider: "fast"}); err != nil {
+	if err := pool.EnqueuePDFJob(core.PDFParseJobTask{JobID: tenantBJobID, UserID: tenantB, Provider: "fast"}); err != nil {
 		t.Fatalf("failed to enqueue tenant B job: %v", err)
 	}
 
@@ -1271,12 +1270,12 @@ func TestPool_MultiTenantRoundRobinOrdering(t *testing.T) {
 	)
 
 	mockExt := &callbackResumeExtractor{
-		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+		fn: func(ctx context.Context, text, provider, model string) (*core.JSONResume, error) {
 			mu.Lock()
 			dispatchHistory = append(dispatchHistory, text)
 			mu.Unlock()
 			time.Sleep(5 * time.Millisecond)
-			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: text}}, nil
+			return &core.JSONResume{Basics: core.JSONResumeBasics{Name: text}}, nil
 		},
 	}
 
@@ -1309,7 +1308,7 @@ func TestPool_MultiTenantRoundRobinOrdering(t *testing.T) {
 			if err := pdfRepo.CreateJob(ctx, job); err != nil {
 				t.Fatalf("create job failed: %v", err)
 			}
-			if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: jobID, UserID: tID, RawText: tID}); err != nil {
+			if err := pool.EnqueuePDFJob(core.PDFParseJobTask{JobID: jobID, UserID: tID, RawText: tID}); err != nil {
 				t.Fatalf("enqueue failed: %v", err)
 			}
 			totalJobs++
@@ -1358,7 +1357,7 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 	)
 
 	mockExt := &callbackResumeExtractor{
-		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+		fn: func(ctx context.Context, text, provider, model string) (*core.JSONResume, error) {
 			mu.Lock()
 			callCount++
 			currentCall := callCount
@@ -1367,7 +1366,7 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 			if currentCall == 1 {
 				panic("simulated fatal crash in model parsing")
 			}
-			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: "Recovered"}}, nil
+			return &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Recovered"}}, nil
 		},
 	}
 
@@ -1400,7 +1399,7 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 	if err := pdfRepo.CreateJob(ctx, j1); err != nil {
 		t.Fatalf("failed to create job 1: %v", err)
 	}
-	if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: job1ID, UserID: tenantID}); err != nil {
+	if err := pool.EnqueuePDFJob(core.PDFParseJobTask{JobID: job1ID, UserID: tenantID}); err != nil {
 		t.Fatalf("failed to enqueue job 1: %v", err)
 	}
 
@@ -1432,7 +1431,7 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 	if err := pdfRepo.CreateJob(ctx, j2); err != nil {
 		t.Fatalf("failed to create job 2: %v", err)
 	}
-	if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: job2ID, UserID: tenantID}); err != nil {
+	if err := pool.EnqueuePDFJob(core.PDFParseJobTask{JobID: job2ID, UserID: tenantID}); err != nil {
 		t.Fatalf("failed to enqueue job 2: %v", err)
 	}
 
@@ -1457,14 +1456,14 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 }
 
 type callbackResumeExtractor struct {
-	fn func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error)
+	fn func(ctx context.Context, text, provider, model string) (*core.JSONResume, error)
 }
 
-func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, error) {
 	if c.fn != nil {
 		return c.fn(ctx, text, provider, model)
 	}
-	return &profile.JSONResume{}, nil
+	return &core.JSONResume{}, nil
 }
 
 type callbackLLM struct {
@@ -1546,12 +1545,12 @@ func TestPool_GenerationJob_PerTenantConcurrencyCap(t *testing.T) {
 			BranchID:          env.branchID,
 			Status:            core.VersionStatusPending,
 			MainRevisionUsed:  1,
-			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+			TemplateSetIDUsed: core.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
 		}
-		if err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: vID}); err != nil {
+		if err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: vID}); err != nil {
 			t.Fatalf("failed to enqueue generation job %d: %v", i, err)
 		}
 	}
@@ -1626,11 +1625,11 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 	}
 
 	extractor := &callbackResumeExtractor{
-		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+		fn: func(ctx context.Context, text, provider, model string) (*core.JSONResume, error) {
 			trackStart()
 			time.Sleep(30 * time.Millisecond)
 			trackEnd()
-			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: "Mixed pdf"}}, nil
+			return &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Mixed pdf"}}, nil
 		},
 	}
 
@@ -1670,12 +1669,12 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 			BranchID:          env.branchID,
 			Status:            core.VersionStatusPending,
 			MainRevisionUsed:  1,
-			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+			TemplateSetIDUsed: core.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
 		}
-		if err := pool.Enqueue(worker.GenerationJob{UserID: tenantID, BranchID: env.branchID, VersionID: vID}); err != nil {
+		if err := pool.Enqueue(core.GenerationJob{UserID: tenantID, BranchID: env.branchID, VersionID: vID}); err != nil {
 			t.Fatalf("failed to enqueue gen job %d: %v", i, err)
 		}
 	}
@@ -1693,7 +1692,7 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 		if err := pdfRepo.CreateJob(ctx, pj); err != nil {
 			t.Fatalf("failed to create pdf job %d: %v", i, err)
 		}
-		if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: pID, UserID: tenantID}); err != nil {
+		if err := pool.EnqueuePDFJob(core.PDFParseJobTask{JobID: pID, UserID: tenantID}); err != nil {
 			t.Fatalf("failed to enqueue pdf task %d: %v", i, err)
 		}
 	}
@@ -1758,9 +1757,9 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 	}
 
 	extractor := &callbackResumeExtractor{
-		fn: func(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
+		fn: func(ctx context.Context, text, provider, model string) (*core.JSONResume, error) {
 			time.Sleep(10 * time.Millisecond)
-			return &profile.JSONResume{Basics: profile.JSONResumeBasics{Name: "Fast pdf"}}, nil
+			return &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Fast pdf"}}, nil
 		},
 	}
 
@@ -1796,12 +1795,12 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 			BranchID:          env.branchID,
 			Status:            core.VersionStatusPending,
 			MainRevisionUsed:  1,
-			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
+			TemplateSetIDUsed: core.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
 		}
-		if err := pool.Enqueue(worker.GenerationJob{UserID: tenantA, BranchID: env.branchID, VersionID: vID}); err != nil {
+		if err := pool.Enqueue(core.GenerationJob{UserID: tenantA, BranchID: env.branchID, VersionID: vID}); err != nil {
 			t.Fatalf("failed to enqueue gen job %d: %v", i, err)
 		}
 	}
@@ -1820,7 +1819,7 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 	if err := pdfRepo.CreateJob(ctx, pj); err != nil {
 		t.Fatalf("failed to create pdf job: %v", err)
 	}
-	if err := pool.EnqueuePDFJob(worker.PDFParseJobTask{JobID: fastJobID, UserID: tenantB}); err != nil {
+	if err := pool.EnqueuePDFJob(core.PDFParseJobTask{JobID: fastJobID, UserID: tenantB}); err != nil {
 		t.Fatalf("failed to enqueue fast pdf job: %v", err)
 	}
 
@@ -1865,8 +1864,8 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 
 	mockExt := &mockResumeExtractor{
 		delay: 5 * time.Millisecond,
-		result: &profile.JSONResume{
-			Basics: profile.JSONResumeBasics{
+		result: &core.JSONResume{
+			Basics: core.JSONResumeBasics{
 				Name: "Usage Candidate",
 			},
 		},
@@ -1907,7 +1906,7 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 		t.Fatalf("failed to create job: %v", err)
 	}
 
-	task := worker.PDFParseJobTask{
+	task := core.PDFParseJobTask{
 		JobID:         jobID,
 		UserID:        "user-quota-worker",
 		RawText:       "Candidate resume content",
@@ -2018,7 +2017,7 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 			t.Fatalf("failed to create version: %v", err)
 		}
 
-		if err := pool.Enqueue(worker.GenerationJob{
+		if err := pool.Enqueue(core.GenerationJob{
 			VersionID: versionID,
 			BranchID:  branch.ID,
 			UserID:    env.defaultUser,
@@ -2104,7 +2103,7 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 			t.Fatalf("failed to create version: %v", err)
 		}
 
-		if err := pool.Enqueue(worker.GenerationJob{
+		if err := pool.Enqueue(core.GenerationJob{
 			VersionID: versionID,
 			BranchID:  branch.ID,
 			UserID:    env.defaultUser,

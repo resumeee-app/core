@@ -12,6 +12,64 @@ import (
 // DefaultLLMDebugDir is the default directory for writing prompt debug artifacts.
 const DefaultLLMDebugDir = "data/llm"
 
+// ProviderConfig holds credentials and endpoint configuration for initializing transport clients.
+type ProviderConfig struct {
+	DefaultProvider string
+	DefaultModel    string
+	GeminiAPIKey    string
+	GeminiModel     string
+	OpenAIAPIKey    string
+	OpenAIModel     string
+	AnthropicAPIKey string
+	AnthropicModel  string
+	CompatBaseURL   string
+	CompatAPIKey    string
+	CompatModel     string
+}
+
+// RegisterClients registers all configured transport clients into a Registry.
+func RegisterClients(reg *Registry, cfg ProviderConfig, clientOpts ...Option) {
+	if reg == nil {
+		return
+	}
+
+	if key := strings.TrimSpace(cfg.GeminiAPIKey); key != "" {
+		opts := append([]Option{}, clientOpts...)
+		if m := strings.TrimSpace(cfg.GeminiModel); m != "" {
+			opts = append(opts, WithDefaultModel(m))
+		}
+		reg.RegisterClient(NewGeminiProvider(key, opts...))
+	}
+
+	if key := strings.TrimSpace(cfg.OpenAIAPIKey); key != "" {
+		opts := append([]Option{}, clientOpts...)
+		if m := strings.TrimSpace(cfg.OpenAIModel); m != "" {
+			opts = append(opts, WithDefaultModel(m))
+		}
+		reg.RegisterClient(NewOpenAIProvider(key, opts...))
+	}
+
+	if key := strings.TrimSpace(cfg.AnthropicAPIKey); key != "" {
+		opts := append([]Option{}, clientOpts...)
+		if m := strings.TrimSpace(cfg.AnthropicModel); m != "" {
+			opts = append(opts, WithDefaultModel(m))
+		}
+		reg.RegisterClient(NewAnthropicProvider(key, opts...))
+	}
+
+	if baseURL := strings.TrimSpace(cfg.CompatBaseURL); baseURL != "" {
+		opts := append([]Option{}, clientOpts...)
+		if m := strings.TrimSpace(cfg.CompatModel); m != "" {
+			opts = append(opts, WithDefaultModel(m))
+		}
+		reg.RegisterClient(NewCompatProvider(baseURL, strings.TrimSpace(cfg.CompatAPIKey), opts...))
+	}
+
+	if def := strings.TrimSpace(cfg.DefaultProvider); def != "" {
+		reg.SetDefault(def, strings.TrimSpace(cfg.DefaultModel))
+	}
+}
+
 // Registry manages configured LLM providers and resolves provider/model selection
 // according to the 4-tier resolution hierarchy.
 type Registry struct {
@@ -25,7 +83,7 @@ type Registry struct {
 }
 
 // NewRegistry constructs an injectable LLM provider Registry.
-// Providers are registered via RegisterClient or Register.
+// Providers are registered via RegisterClient, RegisterClients, or Register.
 func NewRegistry(opts ...Option) *Registry {
 	baseOpts := applyOptions(opts, "", "")
 	return &Registry{
@@ -229,7 +287,22 @@ func defaultModelForProvider(name string) string {
 	}
 }
 
-// AvailableModels returns a list of configured models from active providers.
+func providerDisplayPrefix(name string) string {
+	switch strings.ToLower(name) {
+	case ProviderGemini:
+		return "Google Gemini"
+	case ProviderOpenAI:
+		return "OpenAI"
+	case ProviderAnthropic:
+		return "Anthropic"
+	case ProviderCompat, ProviderCompatAlt:
+		return "OpenAI Compatible"
+	default:
+		return name
+	}
+}
+
+// AvailableModels returns a list of configured default models from active providers.
 // Only providers registered in the registry (i.e. having active credentials) are included.
 // The list is safe for public exposure and contains zero credentials or secrets.
 func (r *Registry) AvailableModels() []domain.ModelOption {
@@ -269,88 +342,15 @@ func (r *Registry) AvailableModels() []domain.ModelOption {
 			}
 		}
 
-		switch p {
-		case ProviderAnthropic:
-			catalog := []struct {
-				model       string
-				displayName string
-			}{
-				{"claude-3-7-sonnet-20250219", "Anthropic — claude-3-7-sonnet-20250219"},
-				{"claude-3-5-sonnet-20241022", "Anthropic — claude-3-5-sonnet-20241022"},
-				{"claude-3-5-haiku-20241022", "Anthropic — claude-3-5-haiku-20241022"},
-			}
-			for _, item := range catalog {
-				isDefault := (r.defaultProvider == ProviderAnthropic && (r.defaultModel == item.model || (r.defaultModel == "" && item.model == defaultAnthropicModel)))
-				models = append(models, domain.ModelOption{
-					Provider:    ProviderAnthropic,
-					Model:       item.model,
-					DisplayName: item.displayName,
-					IsDefault:   isDefault,
-				})
-			}
-		case ProviderCompat:
-			isDefault := ((r.defaultProvider == ProviderCompat || r.defaultProvider == ProviderCompatAlt) && (r.defaultModel == defaultCompatModel || r.defaultModel == ""))
-			models = append(models, domain.ModelOption{
-				Provider:    ProviderCompat,
-				Model:       defaultCompatModel,
-				DisplayName: "OpenAI Compatible — default",
-				IsDefault:   isDefault,
-			})
-		case ProviderGemini:
-			catalog := []struct {
-				model       string
-				displayName string
-			}{
-				{"gemini-4-argon", "Google Gemini — gemini-4-argon"},
-				{"gemini-3.1-pro-preview", "Google Gemini — gemini-3.1-pro-preview"},
-				{"gemini-3.1-pro-preview-customtools", "Google Gemini — gemini-3.1-pro-preview-customtools"},
-				{"gemini-3.8-flash", "Google Gemini — gemini-3.8-flash"},
-				{"gemini-3.6-flash", "Google Gemini — gemini-3.6-flash"},
-				{"gemini-flash-latest", "Google Gemini — gemini-flash-latest"},
-				{"gemini-3.8-flash-lite", "Google Gemini — gemini-3.8-flash-lite"},
-				{"gemini-3.5-flash-lite", "Google Gemini — gemini-3.5-flash-lite"},
-				{"gemini-flash-lite-latest", "Google Gemini — gemini-flash-lite-latest"},
-				{"gemini-3.8-live", "Google Gemini — gemini-3.8-live"},
-				{"gemini-3.8-live-extended-thinking", "Google Gemini — gemini-3.8-live-extended-thinking"},
-				{"gemini-3.8-flash-tts", "Google Gemini — gemini-3.8-flash-tts"},
-				{"gemini-3.8-flash-lite-tts", "Google Gemini — gemini-3.8-flash-lite-tts"},
-				{"gemini-2.5-pro", "Google Gemini — gemini-2.5-pro"},
-				{"gemini-2.5-flash", "Google Gemini — gemini-2.5-flash"},
-				{"gemini-2.5-flash-lite", "Google Gemini — gemini-2.5-flash-lite"},
-				{"gemini-embedding-2", "Google Gemini — gemini-embedding-2"},
-				{"gemini-embedding-001", "Google Gemini — gemini-embedding-001"},
-				{"text-embedding-004", "Google Gemini — text-embedding-004"},
-				{"imagen-3.0-generate-002", "Google Gemini — imagen-3.0-generate-002"},
-			}
-			for _, item := range catalog {
-				isDefault := (r.defaultProvider == ProviderGemini && (r.defaultModel == item.model || (r.defaultModel == "" && item.model == defaultGeminiModel)))
-				models = append(models, domain.ModelOption{
-					Provider:    ProviderGemini,
-					Model:       item.model,
-					DisplayName: item.displayName,
-					IsDefault:   isDefault,
-				})
-			}
-		case ProviderOpenAI:
-			catalog := []struct {
-				model       string
-				displayName string
-			}{
-				{"gpt-4o", "OpenAI — gpt-4o"},
-				{"gpt-4o-mini", "OpenAI — gpt-4o-mini"},
-				{"o3-mini", "OpenAI — o3-mini"},
-				{"o1", "OpenAI — o1"},
-			}
-			for _, item := range catalog {
-				isDefault := (r.defaultProvider == ProviderOpenAI && (r.defaultModel == item.model || (r.defaultModel == "" && item.model == defaultOpenAIModel)))
-				models = append(models, domain.ModelOption{
-					Provider:    ProviderOpenAI,
-					Model:       item.model,
-					DisplayName: item.displayName,
-					IsDefault:   isDefault,
-				})
-			}
-		}
+		defMod := defaultModelForProvider(p)
+		isDefault := ((r.defaultProvider == p || (p == ProviderCompat && r.defaultProvider == ProviderCompatAlt)) &&
+			(r.defaultModel == defMod || r.defaultModel == ""))
+		models = append(models, domain.ModelOption{
+			Provider:    p,
+			Model:       defMod,
+			DisplayName: fmt.Sprintf("%s — %s", providerDisplayPrefix(p), defMod),
+			IsDefault:   isDefault,
+		})
 	}
 
 	if models == nil {
@@ -358,3 +358,11 @@ func (r *Registry) AvailableModels() []domain.ModelOption {
 	}
 	return models
 }
+
+// Compile-time interface assertions.
+var (
+	_ domain.LLMClient = (*GeminiProvider)(nil)
+	_ domain.LLMClient = (*OpenAIProvider)(nil)
+	_ domain.LLMClient = (*AnthropicProvider)(nil)
+	_ domain.LLMClient = (*CompatProvider)(nil)
+)

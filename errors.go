@@ -40,4 +40,3 @@ var (
 	// ErrUnauthorized is returned when an API request lacks valid authentication credentials.
 	ErrUnauthorized = errors.New("unauthorized")
 )
-

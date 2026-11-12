@@ -12,11 +12,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/memory"
 	"github.com/resumeee-app/resumeee-core/services/profile"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
-	"github.com/resumeee-app/resumeee-core/memory"
-	"github.com/resumeee-app/resumeee-core/validator"
 	"github.com/resumeee-app/resumeee-core/services/worker"
+	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 type mockLLM struct {
@@ -203,11 +203,11 @@ func TestPool_ParallelExecution(t *testing.T) {
 
 	for i := 0; i < numJobs; i++ {
 		ver := &core.BranchVersion{
-			ID:                 fmt.Sprintf("ver-parallel-%d", i),
-			BranchID:           env.branchID,
-			Status:             core.VersionStatusPending,
-			MainRevisionUsed: 1,
-			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+			ID:                fmt.Sprintf("ver-parallel-%d", i),
+			BranchID:          env.branchID,
+			Status:            core.VersionStatusPending,
+			MainRevisionUsed:  1,
+			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
@@ -269,11 +269,11 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 
 	// Seed version 1 so it successfully reaches GenerateTailoredResume and blocks
 	v1 := &core.BranchVersion{
-		ID:                 "ver-block-1",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusPending,
-		MainRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		ID:                "ver-block-1",
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusPending,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to create version: %v", err)
@@ -393,11 +393,11 @@ func TestPool_GracefulShutdownAndDrain(t *testing.T) {
 	versionIDs := make([]string, jobsCount)
 	for i := 0; i < jobsCount; i++ {
 		ver := &core.BranchVersion{
-			ID:                 fmt.Sprintf("ver-drain-%d", i),
-			BranchID:           env.branchID,
-			Status:             core.VersionStatusPending,
-			MainRevisionUsed: 1,
-			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+			ID:                fmt.Sprintf("ver-drain-%d", i),
+			BranchID:          env.branchID,
+			Status:            core.VersionStatusPending,
+			MainRevisionUsed:  1,
+			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
@@ -452,22 +452,22 @@ func TestPool_StartupCrashRecovery(t *testing.T) {
 
 	// Seed versions lingering in pending and processing states
 	vPending := &core.BranchVersion{
-		ID:                 "ver-lingering-pending",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusPending,
-		MainRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		ID:                "ver-lingering-pending",
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusPending,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vPending); err != nil {
 		t.Fatalf("failed to create pending version: %v", err)
 	}
 
 	vProcessing := &core.BranchVersion{
-		ID:                 "ver-lingering-processing",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusProcessing,
-		MainRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		ID:                "ver-lingering-processing",
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusProcessing,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vProcessing); err != nil {
 		t.Fatalf("failed to create processing version: %v", err)
@@ -521,11 +521,11 @@ func TestPool_LLMErrorTransition(t *testing.T) {
 	defer pool.Stop()
 
 	ver := &core.BranchVersion{
-		ID:                 "ver-llm-fail",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusPending,
-		MainRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		ID:                "ver-llm-fail",
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusPending,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 		t.Fatalf("failed to create version: %v", err)
@@ -599,11 +599,11 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 	defer pool.Stop()
 
 	ver := &core.BranchVersion{
-		ID:                 "ver-warn-1",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusPending,
-		MainRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		ID:                "ver-warn-1",
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusPending,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 		t.Fatalf("failed to create version: %v", err)
@@ -641,9 +641,9 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 
 	// Create pending version and processing version
 	v1 := &core.BranchVersion{
-		ID:                 "ver-stale-pending",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusPending,
+		ID:               "ver-stale-pending",
+		BranchID:         env.branchID,
+		Status:           core.VersionStatusPending,
 		MainRevisionUsed: 1,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v1); err != nil {
@@ -651,9 +651,9 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 	}
 
 	v2 := &core.BranchVersion{
-		ID:                 "ver-stale-processing",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusProcessing,
+		ID:               "ver-stale-processing",
+		BranchID:         env.branchID,
+		Status:           core.VersionStatusProcessing,
 		MainRevisionUsed: 1,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
@@ -718,11 +718,11 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 
 	// 1. Enqueue job that panics
 	verPanic := &core.BranchVersion{
-		ID:                 "ver-panic-1",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusPending,
-		MainRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		ID:                "ver-panic-1",
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusPending,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, verPanic); err != nil {
 		t.Fatalf("failed to create panic version: %v", err)
@@ -758,11 +758,11 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 	env.llm.mu.Unlock()
 
 	verSuccess := &core.BranchVersion{
-		ID:                 "ver-success-2",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusPending,
-		MainRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		ID:                "ver-success-2",
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusPending,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, verSuccess); err != nil {
 		t.Fatalf("failed to create success version: %v", err)
@@ -1005,11 +1005,11 @@ func TestWorkerPool_TailoringPipeline_LLMTimeout(t *testing.T) {
 
 	verID := "ver-timeout-check-1"
 	ver := core.BranchVersion{
-		ID:                 verID,
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusPending,
-		MainRevisionUsed: 1,
-		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+		ID:                verID,
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusPending,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, &ver); err != nil {
 		t.Fatalf("failed to create version: %v", err)
@@ -1542,11 +1542,11 @@ func TestPool_GenerationJob_PerTenantConcurrencyCap(t *testing.T) {
 		vID := fmt.Sprintf("ver-gen-cap-%d", i)
 		versionIDs[i] = vID
 		ver := &core.BranchVersion{
-			ID:                 vID,
-			BranchID:           env.branchID,
-			Status:             core.VersionStatusPending,
-			MainRevisionUsed: 1,
-			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+			ID:                vID,
+			BranchID:          env.branchID,
+			Status:            core.VersionStatusPending,
+			MainRevisionUsed:  1,
+			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
@@ -1666,11 +1666,11 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 		vID := fmt.Sprintf("ver-mixed-%d", i)
 		versionIDs[i] = vID
 		ver := &core.BranchVersion{
-			ID:                 vID,
-			BranchID:           env.branchID,
-			Status:             core.VersionStatusPending,
-			MainRevisionUsed: 1,
-			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+			ID:                vID,
+			BranchID:          env.branchID,
+			Status:            core.VersionStatusPending,
+			MainRevisionUsed:  1,
+			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
@@ -1792,11 +1792,11 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 		vID := fmt.Sprintf("ver-slow-gen-%d", i)
 		versionIDs[i] = vID
 		ver := &core.BranchVersion{
-			ID:                 vID,
-			BranchID:           env.branchID,
-			Status:             core.VersionStatusPending,
-			MainRevisionUsed: 1,
-			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
+			ID:                vID,
+			BranchID:          env.branchID,
+			Status:            core.VersionStatusPending,
+			MainRevisionUsed:  1,
+			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
 			t.Fatalf("failed to create version %d: %v", i, err)
@@ -1881,7 +1881,7 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 		Concurrency:     2,
 		QueueSize:       10,
 		PDFJobRepo:      store,
-		QuotaRepo:        store,
+		QuotaRepo:       store,
 		ResumeExtractor: mockExt,
 		LLMTimeout:      5 * time.Second,
 	})
@@ -2123,4 +2123,3 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		}
 	})
 }
-

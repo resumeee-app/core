@@ -122,7 +122,7 @@ type ATSSimulationResponse struct {
 // GenerationRequest contains full context required by an LLM provider to tailor a resume.
 type GenerationRequest struct {
 	Model              string
-	ReasoningLevel     string           // Reasoning effort constraint ("none", "low", "medium", "high")
+	ReasoningLevel     string // Reasoning effort constraint ("none", "low", "medium", "high")
 	MainProfile        *MainProfileSnapshot
 	GlobalRules        string           // Tier 1
 	PresetInstructions string           // Tier 2
@@ -377,6 +377,3 @@ type PDFTextExtractor interface {
 type ModelEnumerator interface {
 	AvailableModels() []ModelOption
 }
-
-
-

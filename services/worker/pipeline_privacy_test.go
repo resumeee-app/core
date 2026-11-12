@@ -106,12 +106,12 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 
 	// Create and enqueue version
 	ver := core.BranchVersion{
-		ID:                 "ver-privacy-test",
-		BranchID:           env.branchID,
-		Status:             core.VersionStatusPending,
-		MainRevisionUsed:   2,
-		TemplateSetIDUsed:  "builtin-standard-clean",
-		SourceType:         core.SourceTypeLLMGeneration,
+		ID:                "ver-privacy-test",
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusPending,
+		MainRevisionUsed:  2,
+		TemplateSetIDUsed: "builtin-standard-clean",
+		SourceType:        core.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, &ver); err != nil {
 		t.Fatalf("failed to create version: %v", err)

@@ -420,11 +420,11 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 		BranchID:          branch.ID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  mainRevision,
-		TemplateSetIDUsed:  branch.TemplateSetID,
-		ProviderUsed:       provider,
-		ModelUsed:          model,
-		SourceType:         core.SourceTypeLLMGeneration,
-		ParentVersionID:    branch.ActiveVersionID,
+		TemplateSetIDUsed: branch.TemplateSetID,
+		ProviderUsed:      provider,
+		ModelUsed:         model,
+		SourceType:        core.SourceTypeLLMGeneration,
+		ParentVersionID:   branch.ActiveVersionID,
 	}
 
 	if err := s.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -513,16 +513,16 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 		}
 
 		ver := &core.BranchVersion{
-			ID:               "ver-" + uuid.New().String(),
-			UserID:           userID,
-			BranchID:         b.ID,
-			Status:           core.VersionStatusPending,
-			MainRevisionUsed: mainRevision,
-			TemplateSetIDUsed:  b.TemplateSetID,
-			ProviderUsed:       provider,
-			ModelUsed:          model,
-			SourceType:         core.SourceTypeLLMGeneration,
-			ParentVersionID:    b.ActiveVersionID,
+			ID:                "ver-" + uuid.New().String(),
+			UserID:            userID,
+			BranchID:          b.ID,
+			Status:            core.VersionStatusPending,
+			MainRevisionUsed:  mainRevision,
+			TemplateSetIDUsed: b.TemplateSetID,
+			ProviderUsed:      provider,
+			ModelUsed:         model,
+			SourceType:        core.SourceTypeLLMGeneration,
+			ParentVersionID:   b.ActiveVersionID,
 		}
 
 		if err := s.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -612,22 +612,22 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 
 	// 3. Construct immutable sequential version vN+1
 	newVer := &core.BranchVersion{
-		ID:               "ver-" + uuid.New().String(),
-		UserID:           branch.UserID,
-		BranchID:         branch.ID,
-		Status:           core.VersionStatusCompleted,
-		MainRevisionUsed: snapshot.MainRevision,
-		TemplateSetIDUsed:  branch.TemplateSetID,
-		ProviderUsed:       "manual",
-		ModelUsed:          "manual",
-		SourceType:         core.SourceTypeManualEdit,
-		ParentVersionID:    &parentVer.ID,
-		TailoredContent:    &editedContent,
-		GapReport:          parentVer.GapReport,
-		HTMLOutput:         rendered.HTML,
-		MarkdownOutput:     rendered.Markdown,
-		PlainTextOutput:    rendered.PlainText,
-		CreatedAt:          time.Now().UTC(),
+		ID:                "ver-" + uuid.New().String(),
+		UserID:            branch.UserID,
+		BranchID:          branch.ID,
+		Status:            core.VersionStatusCompleted,
+		MainRevisionUsed:  snapshot.MainRevision,
+		TemplateSetIDUsed: branch.TemplateSetID,
+		ProviderUsed:      "manual",
+		ModelUsed:         "manual",
+		SourceType:        core.SourceTypeManualEdit,
+		ParentVersionID:   &parentVer.ID,
+		TailoredContent:   &editedContent,
+		GapReport:         parentVer.GapReport,
+		HTMLOutput:        rendered.HTML,
+		MarkdownOutput:    rendered.Markdown,
+		PlainTextOutput:   rendered.PlainText,
+		CreatedAt:         time.Now().UTC(),
 	}
 
 	if err := s.branchRepo.CreateVersion(ctx, newVer); err != nil {
@@ -1211,5 +1211,3 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 
 	return atsScore, nil
 }
-
-

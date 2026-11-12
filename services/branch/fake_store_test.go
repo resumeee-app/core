@@ -602,7 +602,7 @@ func (s *fakeBranchStore) GetProject(_ context.Context, _, _ string) (*core.Proj
 }
 func (s *fakeBranchStore) CreateProject(_ context.Context, _ *core.Project) error { return nil }
 func (s *fakeBranchStore) UpdateProject(_ context.Context, _ *core.Project) error { return nil }
-func (s *fakeBranchStore) DeleteProject(_ context.Context, _, _ string) error       { return nil }
+func (s *fakeBranchStore) DeleteProject(_ context.Context, _, _ string) error     { return nil }
 
 func (s *fakeBranchStore) ListEducation(_ context.Context, _ string) ([]core.Education, error) {
 	return nil, nil
@@ -612,7 +612,7 @@ func (s *fakeBranchStore) GetEducation(_ context.Context, _, _ string) (*core.Ed
 }
 func (s *fakeBranchStore) CreateEducation(_ context.Context, _ *core.Education) error { return nil }
 func (s *fakeBranchStore) UpdateEducation(_ context.Context, _ *core.Education) error { return nil }
-func (s *fakeBranchStore) DeleteEducation(_ context.Context, _, _ string) error         { return nil }
+func (s *fakeBranchStore) DeleteEducation(_ context.Context, _, _ string) error       { return nil }
 
 func (s *fakeBranchStore) ListCertifications(_ context.Context, _ string) ([]core.Certification, error) {
 	return nil, nil

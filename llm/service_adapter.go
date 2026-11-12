@@ -115,8 +115,8 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 }
 
 type atsExtractionLLMOutput struct {
-	ExtractionConfidenceScore float64                      `json:"extraction_confidence_score"`
-	ExtractionSummary         string                       `json:"extraction_summary"`
+	ExtractionConfidenceScore float64                    `json:"extraction_confidence_score"`
+	ExtractionSummary         string                     `json:"extraction_summary"`
 	ExtractedCandidate        core.ATSExtractedCandidate `json:"extracted_candidate"`
 }
 
@@ -236,4 +236,3 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulation
 		Usage: totalUsage,
 	}, nil
 }
-

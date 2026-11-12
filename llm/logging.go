@@ -110,4 +110,3 @@ func logLLMResponse(ctx context.Context, logger *slog.Logger, trace *llmTrace, s
 		}
 	}
 }
-

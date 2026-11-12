@@ -741,5 +741,3 @@ func SanitizeXMLFence(content, tagName string) string {
 	})
 	return fmt.Sprintf("<%s>\n%s\n</%s>", tagName, strings.TrimSpace(safe), tagName)
 }
-
-

@@ -1084,4 +1084,3 @@ func TestValidate_Immutability_SnapshotPreserved(t *testing.T) {
 		t.Errorf("snapshot cert Date was mutated: got %s, want 2022-05-01", snapshot.Certifications[0].Date)
 	}
 }
-

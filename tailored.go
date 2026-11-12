@@ -432,5 +432,3 @@ func CalculateDeterministicATSScore(resumeText, formatUsed, jobDescription strin
 	res.Normalize()
 	return res
 }
-
-

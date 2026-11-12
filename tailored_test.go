@@ -390,6 +390,3 @@ func TestCalculateDeterministicATSScore(t *testing.T) {
 		t.Errorf("expected FormatUsed 'markdown', got %q", score.FormatUsed)
 	}
 }
-
-
-

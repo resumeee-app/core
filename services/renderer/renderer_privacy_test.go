@@ -11,9 +11,9 @@ import (
 
 func TestRender_UnobfuscatedAuthenticContactDetails(t *testing.T) {
 	tmpl := &core.TemplateSet{
-		ID:               "test-tmpl",
-		Name:             "Test Template",
-		HTMLTemplate:     `<h1>{{.FullName}}</h1><p>{{.Email}} | {{.Phone}} | {{.Website}}</p><p>{{.Summary}}</p>{{range .Experiences}}<p>{{.DutiesSummary}}</p>{{range .Bullets}}<li>{{.Text}}</li>{{end}}{{end}}`,
+		ID:           "test-tmpl",
+		Name:         "Test Template",
+		HTMLTemplate: `<h1>{{.FullName}}</h1><p>{{.Email}} | {{.Phone}} | {{.Website}}</p><p>{{.Summary}}</p>{{range .Experiences}}<p>{{.DutiesSummary}}</p>{{range .Bullets}}<li>{{.Text}}</li>{{end}}{{end}}`,
 		MarkdownTemplate: `# {{.FullName}}
 {{.Email}} | {{.Phone}} | {{.Website}}
 {{.Summary}}

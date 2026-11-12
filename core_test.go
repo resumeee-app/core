@@ -111,11 +111,11 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 			Type:  core.ContactTypeEmail,
 			Value: "hr@acmeworks.example.com",
 		},
-		HoursPerWeek:   &hours,
-		Facts:          []core.Fact{fact},
-		Skills:         []core.Skill{skill},
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		HoursPerWeek: &hours,
+		Facts:        []core.Fact{fact},
+		Skills:       []core.Skill{skill},
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	proj := core.Project{
@@ -244,15 +244,15 @@ func TestPresetsAndBranches(t *testing.T) {
 
 	presetID := preset.ID
 	branch := core.Branch{
-		ID:                       "branch-1",
-		UserID:                   "user-1",
-		Name:                     "Stripe Backend",
-		TargetRole:               "Staff Backend Engineer",
-		TargetCompany:            "Stripe",
-		TargetRequirements:       "Go, distributed systems, high throughput",
-		BranchInstructions:       "Emphasize financial ledger experience.",
-		PresetID:                 &presetID,
-		TemplateSetID:            tmpl.ID,
+		ID:                     "branch-1",
+		UserID:                 "user-1",
+		Name:                   "Stripe Backend",
+		TargetRole:             "Staff Backend Engineer",
+		TargetCompany:          "Stripe",
+		TargetRequirements:     "Go, distributed systems, high throughput",
+		BranchInstructions:     "Emphasize financial ledger experience.",
+		PresetID:               &presetID,
+		TemplateSetID:          tmpl.ID,
 		PinnedEntityIDs:        []string{"exp-1"},
 		ExcludedEntityIDs:      []string{"proj-old"},
 		LastSyncedMainRevision: 1,
@@ -268,19 +268,19 @@ func TestPresetsAndBranches(t *testing.T) {
 	}
 
 	version := core.BranchVersion{
-		ID:               "ver-1",
-		BranchID:         branch.ID,
-		VersionNumber:    1,
-		Status:           core.VersionStatusCompleted,
-		MainRevisionUsed: 1,
-		TemplateSetIDUsed:  tmpl.ID,
-		ProviderUsed:       "gemini",
-		ModelUsed:          "gemini-2.5-pro",
-		SourceType:         core.SourceTypeLLMGeneration,
-		HTMLOutput:         "<html>...</html>",
-		MarkdownOutput:     "# ...",
-		PlainTextOutput:    "...",
-		CreatedAt:          now,
+		ID:                "ver-1",
+		BranchID:          branch.ID,
+		VersionNumber:     1,
+		Status:            core.VersionStatusCompleted,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: tmpl.ID,
+		ProviderUsed:      "gemini",
+		ModelUsed:         "gemini-2.5-pro",
+		SourceType:        core.SourceTypeLLMGeneration,
+		HTMLOutput:        "<html>...</html>",
+		MarkdownOutput:    "# ...",
+		PlainTextOutput:   "...",
+		CreatedAt:         now,
 	}
 
 	data, err := json.Marshal(version)
@@ -379,15 +379,15 @@ func TestTailoredContentAndProvenance(t *testing.T) {
 func TestMainProfileSnapshot(t *testing.T) {
 	profile := core.Profile{ID: "prof-1", UserID: "user-1", FullName: "Jane Doe", MainRevision: 3}
 	snapshot := core.MainProfileSnapshot{
-		Profile:      profile,
-		MainRevision: 3,
-		Skills:       []core.Skill{{ID: "s-1", Name: "Go"}},
-		Experiences:  []core.WorkExperience{{ID: "e-1", Company: "Acme"}},
-		Projects:     []core.Project{{ID: "p-1", Name: "Resumeee"}},
-		Education:    []core.Education{{ID: "ed-1", Institution: "MIT"}},
+		Profile:        profile,
+		MainRevision:   3,
+		Skills:         []core.Skill{{ID: "s-1", Name: "Go"}},
+		Experiences:    []core.WorkExperience{{ID: "e-1", Company: "Acme"}},
+		Projects:       []core.Project{{ID: "p-1", Name: "Resumeee"}},
+		Education:      []core.Education{{ID: "ed-1", Institution: "MIT"}},
 		Certifications: []core.Certification{{ID: "c-1", Name: "AWS"}},
-		Facts:        []core.Fact{{ID: "f-1", Statement: "Did something great"}},
-		ExportedAt:   time.Now(),
+		Facts:          []core.Fact{{ID: "f-1", Statement: "Did something great"}},
+		ExportedAt:     time.Now(),
 	}
 
 	if snapshot.MainRevision != 3 {
@@ -728,5 +728,3 @@ func TestDomain_TenantQuota_Methods(t *testing.T) {
 		}
 	})
 }
-
-

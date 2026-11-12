@@ -1177,5 +1177,3 @@ func ATSMatchingResponseSchemaJSON() (string, error) {
 	}
 	return string(b), nil
 }
-
-

@@ -33,51 +33,51 @@ type LeanFact struct {
 
 // LeanExperience captures professional work history without internal timestamps, tenant attributes, or non-tailoring administrative metadata.
 type LeanExperience struct {
-	ID             string                `json:"id"`
-	Company        string                `json:"company"`
-	RoleTitle      string                `json:"role_title"`
+	ID             string              `json:"id"`
+	Company        string              `json:"company"`
+	RoleTitle      string              `json:"role_title"`
 	EmploymentType core.EmploymentType `json:"employment_type,omitempty"`
 	StartDate      core.Date           `json:"start_date"`
 	EndDate        *core.Date          `json:"end_date,omitempty"`
-	IsCurrent      bool                  `json:"is_current,omitempty"`
-	DutiesSummary  string                `json:"duties_summary,omitempty"`
-	Facts          []LeanFact            `json:"facts,omitempty"`
-	Skills         []LeanSkill           `json:"skills,omitempty"`
+	IsCurrent      bool                `json:"is_current,omitempty"`
+	DutiesSummary  string              `json:"duties_summary,omitempty"`
+	Facts          []LeanFact          `json:"facts,omitempty"`
+	Skills         []LeanSkill         `json:"skills,omitempty"`
 }
 
 // LeanProject captures project deliverables without database metadata or tenant IDs.
 type LeanProject struct {
-	ID        string       `json:"id"`
-	Name      string       `json:"name"`
-	Role      string       `json:"role,omitempty"`
-	URL       string       `json:"url,omitempty"`
-	StartDate *core.Date `json:"start_date,omitempty"`
-	EndDate   *core.Date `json:"end_date,omitempty"`
-	Summary   string       `json:"summary,omitempty"`
-	Facts     []LeanFact   `json:"facts,omitempty"`
-	Skills    []LeanSkill  `json:"skills,omitempty"`
+	ID        string      `json:"id"`
+	Name      string      `json:"name"`
+	Role      string      `json:"role,omitempty"`
+	URL       string      `json:"url,omitempty"`
+	StartDate *core.Date  `json:"start_date,omitempty"`
+	EndDate   *core.Date  `json:"end_date,omitempty"`
+	Summary   string      `json:"summary,omitempty"`
+	Facts     []LeanFact  `json:"facts,omitempty"`
+	Skills    []LeanSkill `json:"skills,omitempty"`
 }
 
 // LeanEducation captures academic history without internal IDs, timestamps, or location metadata.
 type LeanEducation struct {
-	ID          string       `json:"id"`
-	Institution string       `json:"institution"`
-	Degree      string       `json:"degree,omitempty"`
-	Field       string       `json:"field,omitempty"`
+	ID          string     `json:"id"`
+	Institution string     `json:"institution"`
+	Degree      string     `json:"degree,omitempty"`
+	Field       string     `json:"field,omitempty"`
 	StartDate   *core.Date `json:"start_date,omitempty"`
 	EndDate     *core.Date `json:"end_date,omitempty"`
-	Score       string       `json:"score,omitempty"`
-	Facts       []LeanFact   `json:"facts,omitempty"`
+	Score       string     `json:"score,omitempty"`
+	Facts       []LeanFact `json:"facts,omitempty"`
 }
 
 // LeanCertification captures credentials with short identifier for provenance.
 type LeanCertification struct {
-	ID      string       `json:"id"`
-	Name    string       `json:"name"`
-	Issuer  string       `json:"issuer,omitempty"`
+	ID      string     `json:"id"`
+	Name    string     `json:"name"`
+	Issuer  string     `json:"issuer,omitempty"`
 	Date    *core.Date `json:"date,omitempty"`
-	URL     string       `json:"url,omitempty"`
-	Summary string       `json:"summary,omitempty"`
+	URL     string     `json:"url,omitempty"`
+	Summary string     `json:"summary,omitempty"`
 }
 
 // LeanMainProfile represents the projected, minimal main profile structure for LLM prompts.

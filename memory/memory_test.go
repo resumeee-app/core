@@ -1285,5 +1285,3 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 		}
 	})
 }
-
-

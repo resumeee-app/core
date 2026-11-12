@@ -13,3 +13,16 @@ Pure Go domain core for **Resumeee** (`github.com/resumeee-app/resumeee-core`), 
 - `services/renderer/` — Multi-format resume rendering (Markdown, HTML, Plain Text, LaTeX).
 - `services/worker/` — Asynchronous generation worker pool and retry/recovery coordinator.
 - `memory/` — Thread-safe in-memory `core.Store` implementation and default presets seed data.
+
+## Quality Gates
+
+```bash
+# Format check (gofmt)
+test -z "$(gofmt -l .)"
+
+# Unit & race detection tests (includes TestGoFmtCompliance)
+go test -race -v ./...
+
+# Static analysis & gofmt linter
+golangci-lint run ./...
+```

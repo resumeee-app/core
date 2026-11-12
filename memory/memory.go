@@ -1680,5 +1680,3 @@ func (s *Store) UpsertUser(_ context.Context, user *core.User) error {
 	s.users[user.ID] = existing
 	return nil
 }
-
-

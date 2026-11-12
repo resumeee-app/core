@@ -124,9 +124,9 @@ type fakeTransportClient struct {
 	completeFn   func(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error)
 }
 
-func (f *fakeTransportClient) Name() string                  { return f.name }
-func (f *fakeTransportClient) DefaultModel() string          { return f.defaultModel }
-func (f *fakeTransportClient) Models() []core.ModelOption  { return f.models }
+func (f *fakeTransportClient) Name() string               { return f.name }
+func (f *fakeTransportClient) DefaultModel() string       { return f.defaultModel }
+func (f *fakeTransportClient) Models() []core.ModelOption { return f.models }
 func (f *fakeTransportClient) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	if f.completeFn != nil {
 		return f.completeFn(ctx, req)

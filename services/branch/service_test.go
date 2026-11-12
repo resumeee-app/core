@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/resumeee-app/resumeee-core/services/branch"
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/services/branch"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 	"github.com/resumeee-app/resumeee-core/validator"
 )
@@ -42,16 +42,16 @@ func (e *stubEnqueuer) Enqueue(job core.GenerationJob) error {
 }
 
 type testBranchEnv struct {
-	db          any
-	svc         branch.Service
-	branchRepo  core.BranchRepository
-	profileRepo core.ProfileRepository
-	enqueuer    *stubEnqueuer
-	defaultUser string
-	branchID    string
-	v1ID        string
-	validFactID string
-	validExpID  string
+	db           any
+	svc          branch.Service
+	branchRepo   core.BranchRepository
+	profileRepo  core.ProfileRepository
+	enqueuer     *stubEnqueuer
+	defaultUser  string
+	branchID     string
+	v1ID         string
+	validFactID  string
+	validExpID   string
 	validSkillID string
 }
 
@@ -374,12 +374,12 @@ func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 
 	// Create and complete v2 at MainRevisionUsed = rev2
 	v2 := &core.BranchVersion{
-		ID:               "ver-v2-test",
-		BranchID:         env.branchID,
-		Status:           core.VersionStatusCompleted,
-		MainRevisionUsed: rev2,
+		ID:                "ver-v2-test",
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusCompleted,
+		MainRevisionUsed:  rev2,
 		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
-		SourceType:       core.SourceTypeLLMGeneration,
+		SourceType:        core.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
 		t.Fatalf("create v2: %v", err)
@@ -975,12 +975,12 @@ func TestService_AnalyzeGaps(t *testing.T) {
 
 		// Rebuild svc with stubLLM
 		svcWithLLM := branch.NewService(branch.Config{
-			BranchRepo:   env.branchRepo,
-			ProfileRepo:  env.profileRepo,
-			JobEnqueuer:  env.enqueuer,
-			Validator:    validator.New(),
-			Renderer:     renderer.NewTemplateRenderer(),
-			LLMService:   stubLLM,
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			JobEnqueuer: env.enqueuer,
+			Validator:   validator.New(),
+			Renderer:    renderer.NewTemplateRenderer(),
+			LLMService:  stubLLM,
 		})
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
@@ -2020,8 +2020,3 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 	})
 }
-
-
-
-
-

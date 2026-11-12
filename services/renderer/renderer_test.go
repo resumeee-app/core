@@ -1035,5 +1035,3 @@ func TestRenderer_AllEntityFieldsAccessible(t *testing.T) {
 		t.Errorf("Markdown output missing certification summary")
 	}
 }
-
-

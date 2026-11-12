@@ -337,13 +337,12 @@ func TestBuildPrompt_InvalidAndRTLTargetLanguage_Rejected(t *testing.T) {
 	})
 }
 
-
 func TestPromptTemplates_EmbeddedJSONSchemas(t *testing.T) {
 	tests := []struct {
-		name          string
-		templateFile  string
-		schemaGetter  func() map[string]any
-		expectedProp  string
+		name         string
+		templateFile string
+		schemaGetter func() map[string]any
+		expectedProp string
 	}{
 		{
 			name:         "tailor system prompt contains GenerationResponseSchema",
@@ -515,5 +514,3 @@ func TestBuildPrompt_NilPriorVersion_NoCodeFence(t *testing.T) {
 		t.Errorf("expected nil prior version fallback text 'None (Initial generation)', got:\n%s", priorBlock)
 	}
 }
-
-

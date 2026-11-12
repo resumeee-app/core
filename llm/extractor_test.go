@@ -271,4 +271,3 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 		}
 	})
 }
-

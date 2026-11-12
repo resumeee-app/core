@@ -160,8 +160,8 @@ func makeLeakageTestRequest() core.GenerationRequest {
 					UpdatedAt: updated,
 				},
 			},
-			MainRevision:  42,
-			ExportedAt:    now,
+			MainRevision: 42,
+			ExportedAt:   now,
 		},
 		BranchContext: core.Branch{
 			TargetRole:         "Staff Systems Architect",

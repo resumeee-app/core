@@ -159,4 +159,3 @@ func TestLeanMainProfileSchema_StripsNonTailoringFields(t *testing.T) {
 		t.Errorf("LeanMainProfileSchema.education leaked non-tailoring field 'location'")
 	}
 }
-

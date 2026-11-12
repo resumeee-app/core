@@ -580,5 +580,3 @@ func projectPriorVersion(prior *core.TailoredContent, idMap map[string]string) *
 
 	return projected
 }
-
-

@@ -316,22 +316,22 @@ const (
 // Invariant: A TailoringStrategy defines how content is synthesized and prioritized;
 // it has zero mandatory coupling to visual templates or CSS layouts.
 type TailoringStrategy struct {
-	ID                 string    `json:"id" gorm:"primaryKey;type:text"`
-	UserID             string    `json:"user_id" gorm:"index;not null"`
-	Name               string    `json:"name" gorm:"not null"` // e.g., "1-Page SWE", "Executive Leadership"
-	Description        string    `json:"description,omitempty"`
-	SystemInstructions string    `json:"system_instructions" gorm:"not null"` // Tier 2 LLM instructions
+	ID                 string `json:"id" gorm:"primaryKey;type:text"`
+	UserID             string `json:"user_id" gorm:"index;not null"`
+	Name               string `json:"name" gorm:"not null"` // e.g., "1-Page SWE", "Executive Leadership"
+	Description        string `json:"description,omitempty"`
+	SystemInstructions string `json:"system_instructions" gorm:"not null"` // Tier 2 LLM instructions
 
 	// SuggestedThemeID optionally provides a recommended visual layout in creation wizards.
 	// Nullable; when nil, the application defaults to the system standard theme.
-	SuggestedThemeID   *string   `json:"suggested_theme_id" gorm:"index"`
+	SuggestedThemeID *string `json:"suggested_theme_id" gorm:"index"`
 
 	// TemplateSetID is an alias retained for backwards compatibility with legacy UI/forms.
-	TemplateSetID      string    `json:"template_set_id,omitempty" gorm:"column:template_set_id"`
+	TemplateSetID string `json:"template_set_id,omitempty" gorm:"column:template_set_id"`
 
-	Language           string    `json:"language" gorm:"default:'English';not null"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	Language  string    `json:"language" gorm:"default:'English';not null"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // TableName overrides the GORM table name to tailoring_strategies.
@@ -409,30 +409,30 @@ func DefaultBranchID(userID string) string {
 
 // TargetResume (Branch) represents a targeted resume variant tailored for a specific opportunity.
 type TargetResume struct {
-	ID                       string     `json:"id" gorm:"primaryKey;type:text"`
-	UserID                   string     `json:"user_id" gorm:"index;not null"`
-	Name                     string     `json:"name" gorm:"not null"` // e.g., "Stripe - Staff Backend Engineer"
-	IsDefault                bool       `json:"is_default" gorm:"default:false;index"`
-	TargetRole               string     `json:"target_role,omitempty"`
-	TargetCompany            string     `json:"target_company,omitempty"`
-	TargetRequirements       string     `json:"target_requirements,omitempty"` // Job description text
-	CustomDirectives         string     `json:"custom_directives,omitempty"`   // Tier 3 custom prompt directives
-	BranchInstructions       string     `json:"branch_instructions,omitempty" gorm:"column:branch_instructions"` // Compatibility alias
-	TailoringStrategyID      *string    `json:"tailoring_strategy_id,omitempty" gorm:"index"`
-	PresetID                 *string    `json:"preset_id,omitempty" gorm:"column:preset_id;index"` // Compatibility alias
-	TemplateSetID            string     `json:"template_set_id" gorm:"index;not null"`
-	ProviderOverride         string     `json:"provider_override,omitempty"`
-	ModelOverride            string     `json:"model_override,omitempty"`
-	ReasoningLevel           string     `json:"reasoning_level,omitempty" gorm:"column:reasoning_level"`
-	PinnedEntityIDs          []string   `json:"pinned_entity_ids,omitempty" gorm:"serializer:json"`
-	ExcludedEntityIDs        []string   `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"`
-	ActiveVersionID          *string    `json:"active_version_id,omitempty" gorm:"index"`
-	GapReport                *GapReport `json:"gap_report,omitempty" gorm:"serializer:json"`
-	ATSScore                 *ATSScore  `json:"ats_score,omitempty" gorm:"serializer:json"`
+	ID                     string     `json:"id" gorm:"primaryKey;type:text"`
+	UserID                 string     `json:"user_id" gorm:"index;not null"`
+	Name                   string     `json:"name" gorm:"not null"` // e.g., "Stripe - Staff Backend Engineer"
+	IsDefault              bool       `json:"is_default" gorm:"default:false;index"`
+	TargetRole             string     `json:"target_role,omitempty"`
+	TargetCompany          string     `json:"target_company,omitempty"`
+	TargetRequirements     string     `json:"target_requirements,omitempty"`                                   // Job description text
+	CustomDirectives       string     `json:"custom_directives,omitempty"`                                     // Tier 3 custom prompt directives
+	BranchInstructions     string     `json:"branch_instructions,omitempty" gorm:"column:branch_instructions"` // Compatibility alias
+	TailoringStrategyID    *string    `json:"tailoring_strategy_id,omitempty" gorm:"index"`
+	PresetID               *string    `json:"preset_id,omitempty" gorm:"column:preset_id;index"` // Compatibility alias
+	TemplateSetID          string     `json:"template_set_id" gorm:"index;not null"`
+	ProviderOverride       string     `json:"provider_override,omitempty"`
+	ModelOverride          string     `json:"model_override,omitempty"`
+	ReasoningLevel         string     `json:"reasoning_level,omitempty" gorm:"column:reasoning_level"`
+	PinnedEntityIDs        []string   `json:"pinned_entity_ids,omitempty" gorm:"serializer:json"`
+	ExcludedEntityIDs      []string   `json:"excluded_entity_ids,omitempty" gorm:"serializer:json"`
+	ActiveVersionID        *string    `json:"active_version_id,omitempty" gorm:"index"`
+	GapReport              *GapReport `json:"gap_report,omitempty" gorm:"serializer:json"`
+	ATSScore               *ATSScore  `json:"ats_score,omitempty" gorm:"serializer:json"`
 	LastSyncedMainRevision int64      `json:"last_synced_main_revision"`
 	IsStale                bool       `json:"is_stale" gorm:"-"` // Computed: LastSyncedMainRevision < Profile.MainRevision
-	CreatedAt                time.Time  `json:"created_at"`
-	UpdatedAt                time.Time  `json:"updated_at"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 // TableName overrides the GORM table name to target_resumes.
@@ -748,5 +748,3 @@ type LLMUsageRecord struct {
 func (LLMUsageRecord) TableName() string {
 	return "llm_usage_records"
 }
-
-

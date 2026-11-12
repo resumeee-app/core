@@ -110,7 +110,7 @@ func (s *fakeProfileStore) GetSkill(_ context.Context, _, _ string) (*core.Skill
 }
 func (s *fakeProfileStore) CreateSkill(_ context.Context, _ *core.Skill) error { return nil }
 func (s *fakeProfileStore) UpdateSkill(_ context.Context, _ *core.Skill) error { return nil }
-func (s *fakeProfileStore) DeleteSkill(_ context.Context, _, _ string) error    { return nil }
+func (s *fakeProfileStore) DeleteSkill(_ context.Context, _, _ string) error   { return nil }
 
 func (s *fakeProfileStore) ListExperiences(_ context.Context, _ string) ([]core.WorkExperience, error) {
 	return nil, nil
@@ -134,7 +134,7 @@ func (s *fakeProfileStore) GetProject(_ context.Context, _, _ string) (*core.Pro
 }
 func (s *fakeProfileStore) CreateProject(_ context.Context, _ *core.Project) error { return nil }
 func (s *fakeProfileStore) UpdateProject(_ context.Context, _ *core.Project) error { return nil }
-func (s *fakeProfileStore) DeleteProject(_ context.Context, _, _ string) error       { return nil }
+func (s *fakeProfileStore) DeleteProject(_ context.Context, _, _ string) error     { return nil }
 
 func (s *fakeProfileStore) ListEducation(_ context.Context, _ string) ([]core.Education, error) {
 	return nil, nil
@@ -144,7 +144,7 @@ func (s *fakeProfileStore) GetEducation(_ context.Context, _, _ string) (*core.E
 }
 func (s *fakeProfileStore) CreateEducation(_ context.Context, _ *core.Education) error { return nil }
 func (s *fakeProfileStore) UpdateEducation(_ context.Context, _ *core.Education) error { return nil }
-func (s *fakeProfileStore) DeleteEducation(_ context.Context, _, _ string) error         { return nil }
+func (s *fakeProfileStore) DeleteEducation(_ context.Context, _, _ string) error       { return nil }
 
 func (s *fakeProfileStore) ListCertifications(_ context.Context, _ string) ([]core.Certification, error) {
 	return nil, nil
@@ -168,7 +168,7 @@ func (s *fakeProfileStore) GetFact(_ context.Context, _, _ string) (*core.Fact, 
 }
 func (s *fakeProfileStore) CreateFact(_ context.Context, _ *core.Fact) error { return nil }
 func (s *fakeProfileStore) UpdateFact(_ context.Context, _ *core.Fact) error { return nil }
-func (s *fakeProfileStore) DeleteFact(_ context.Context, _, _ string) error    { return nil }
+func (s *fakeProfileStore) DeleteFact(_ context.Context, _, _ string) error  { return nil }
 
 // BranchRepository methods
 

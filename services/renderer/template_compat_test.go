@@ -507,4 +507,3 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 		}
 	})
 }
-

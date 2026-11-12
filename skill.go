@@ -343,4 +343,3 @@ func ParseSkillsInput(skillIDs []string) []Skill {
 	}
 	return skills
 }
-

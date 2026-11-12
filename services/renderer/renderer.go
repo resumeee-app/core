@@ -562,4 +562,3 @@ func ResolveVersionOutputs(
 		PlainText: txtOut,
 	}
 }
-

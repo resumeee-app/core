@@ -1131,5 +1131,3 @@ func TestFilePromptDebugger_DecodesAndFormatsPromptsAndResponses(t *testing.T) {
 		}
 	})
 }
-
-

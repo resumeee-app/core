@@ -21,12 +21,16 @@ func setupTestStore(t *testing.T) *memory.Store {
 // TestMemoryStore_Interfaces verifies that memory.Store satisfies domain and repository interfaces.
 func TestMemoryStore_Interfaces(t *testing.T) {
 	store := setupTestStore(t)
-	var _ core.Store = store
-	var _ core.ProfileRepository = store
-	var _ core.BranchRepository = store
-	var _ core.TemplateRepository = store
-	var _ core.PresetRepository = store
-	var _ core.PDFParseJobRepository = store
+
+	// Compile-time interface assertions verifying that memory.Store directly satisfies core.Store and all individual repository interfaces.
+	var (
+		_ core.Store                 = store
+		_ core.ProfileRepository     = store
+		_ core.BranchRepository      = store
+		_ core.TemplateRepository    = store
+		_ core.PresetRepository      = store
+		_ core.PDFParseJobRepository = store
+	)
 
 	if store.Profile() == nil || store.Branch() == nil || store.Preset() == nil || store.Template() == nil || store.PDFJob() == nil {
 		t.Fatal("expected non-nil repositories from store getters")

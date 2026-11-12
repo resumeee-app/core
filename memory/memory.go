@@ -120,6 +120,7 @@ func (s *Store) StoreBundle() *core.StoreBundle {
 	}
 }
 
+// Compile-time assertion ensuring Store implements the full core.Store contract.
 var _ core.Store = (*Store)(nil)
 
 func (s *Store) incrementRevisionLocked(userID string) int64 {

@@ -52,9 +52,12 @@ func TestDomainPurity_ZeroGORMImports(t *testing.T) {
 
 // TestNormalizableInterface verifies that domain entities implement core.Normalizable.
 func TestNormalizableInterface(t *testing.T) {
-	var _ core.Normalizable = (*core.Preset)(nil)
-	var _ core.Normalizable = (*core.Branch)(nil)
-	var _ core.Normalizable = (*core.BranchVersion)(nil)
+	// Compile-time interface assertions ensuring domain entities with alias fields implement core.Normalizable for pre-persistence normalization hooks.
+	var (
+		_ core.Normalizable = (*core.Preset)(nil)
+		_ core.Normalizable = (*core.Branch)(nil)
+		_ core.Normalizable = (*core.BranchVersion)(nil)
+	)
 }
 
 // TestTailoringStrategy_Normalize verifies pure Go normalization for TailoringStrategy.

@@ -264,5 +264,8 @@ func (s *fakeProfileStore) FailInterruptedVersions(_ context.Context, _ string) 
 	return nil
 }
 
-var _ core.ProfileRepository = (*fakeProfileStore)(nil)
-var _ core.BranchRepository = (*fakeProfileStore)(nil)
+// Compile-time interface assertions ensuring fakeProfileStore satisfies the repository contracts required by profile.Service tests.
+var (
+	_ core.ProfileRepository = (*fakeProfileStore)(nil)
+	_ core.BranchRepository  = (*fakeProfileStore)(nil)
+)

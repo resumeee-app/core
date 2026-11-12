@@ -843,6 +843,7 @@ func TestValidateStrict_Behavior(t *testing.T) {
 }
 
 func TestValidatorInterfaceAndNew(t *testing.T) {
+	// Compile-time assertion ensuring *validator.Validator returned by New() satisfies core.ProvenanceValidator.
 	var _ core.ProvenanceValidator = validator.New()
 
 	v := validator.New()

@@ -832,9 +832,12 @@ func (f *fakePromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.Pr
 	}, nil
 }
 
-var _ core.BranchRepository = (*fakeBranchStore)(nil)
-var _ core.ProfileRepository = (*fakeBranchStore)(nil)
-var _ core.PresetRepository = (*fakeBranchStore)(nil)
-var _ core.TemplateRepository = (*fakeBranchStore)(nil)
-var _ core.QuotaRepository = (*fakeBranchStore)(nil)
-var _ core.PromptCompiler = (*fakePromptCompiler)(nil)
+// Compile-time interface assertions ensuring test fakes satisfy the repository and prompt compiler contracts required by branch.Service.
+var (
+	_ core.BranchRepository   = (*fakeBranchStore)(nil)
+	_ core.ProfileRepository  = (*fakeBranchStore)(nil)
+	_ core.PresetRepository   = (*fakeBranchStore)(nil)
+	_ core.TemplateRepository = (*fakeBranchStore)(nil)
+	_ core.QuotaRepository    = (*fakeBranchStore)(nil)
+	_ core.PromptCompiler     = (*fakePromptCompiler)(nil)
+)

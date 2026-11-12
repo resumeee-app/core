@@ -365,7 +365,7 @@ func (r *Registry) AvailableModels() []core.ModelOption {
 	return models
 }
 
-// Compile-time interface assertions.
+// Compile-time interface assertions ensuring all concrete provider adapters satisfy core.LLMClient before registration in Registry.
 var (
 	_ core.LLMClient = (*GeminiProvider)(nil)
 	_ core.LLMClient = (*OpenAIProvider)(nil)

@@ -396,3 +396,170 @@ func (e *engine) RenderFormat(format domain.OutputFormat, tmplStr string, data a
 func (e *engine) Validate(tmpl *domain.TemplateSet) error {
 	return Validate(tmpl)
 }
+
+// DefaultSeededProfileName identifies the default placeholder name seeded upon database initialization.
+const DefaultSeededProfileName = "Default User"
+
+// HasCustomProfileData returns true if the profile contains non-empty custom user data rather than unconfigured defaults.
+func HasCustomProfileData(prof *domain.Profile, snap *domain.MainProfileSnapshot) bool {
+	if prof == nil {
+		return false
+	}
+	if prof.FullName != "" && prof.FullName != DefaultSeededProfileName {
+		return true
+	}
+	if snap != nil && (len(snap.Experiences) > 0 || len(snap.Skills) > 0 || len(snap.Projects) > 0 || len(snap.Education) > 0) {
+		return true
+	}
+	return false
+}
+
+// BuildPreviewRenderContext constructs a comprehensive execution context for template preview rendering.
+// Prefers actual user profile facts when present, merging with synthetic sample data for empty sections.
+func BuildPreviewRenderContext(ctx context.Context, profileRepo domain.ProfileRepository, userID string, tmpl *domain.TemplateSet) *RenderContext {
+	synth := SyntheticRenderContext()
+	if tmpl != nil && tmpl.CSSStyles != "" {
+		synth.CSSStyles = htmltemplate.CSS(tmpl.CSSStyles)
+	}
+
+	if profileRepo == nil {
+		return synth
+	}
+
+	prof, err := profileRepo.GetProfile(ctx, userID)
+	if err == nil && prof != nil {
+		snapshot, _ := profileRepo.GetSnapshot(ctx, userID)
+		if HasCustomProfileData(prof, snapshot) {
+			var tailored *domain.TailoredContent
+			if snapshot != nil {
+				tailored = domain.SnapshotToTailoredContent(snapshot)
+			}
+			userCtx := NewRenderContext(tmpl, prof, tailored)
+			if len(userCtx.Experiences) == 0 {
+				userCtx.Experiences = synth.Experiences
+			}
+			if len(userCtx.SkillGroups) == 0 {
+				userCtx.SkillGroups = synth.SkillGroups
+			}
+			if len(userCtx.Projects) == 0 {
+				userCtx.Projects = synth.Projects
+			}
+			if len(userCtx.Education) == 0 {
+				userCtx.Education = synth.Education
+			}
+			if len(userCtx.Certifications) == 0 {
+				userCtx.Certifications = synth.Certifications
+			}
+			if userCtx.Summary == "" {
+				userCtx.Summary = synth.Summary
+			}
+			return userCtx
+		}
+	}
+
+	return synth
+}
+
+// RenderAllFormats compiles and executes all template formats (HTML, Markdown, PlainText) using the provided context.
+func RenderAllFormats(r domain.TemplateRenderer, tmpl *domain.TemplateSet, renderCtx *RenderContext) (domain.RenderOutput, error) {
+	if tmpl == nil || r == nil {
+		return domain.RenderOutput{}, nil
+	}
+
+	var out domain.RenderOutput
+	if tmpl.HTMLTemplate != "" {
+		htmlOut, err := r.RenderFormat(domain.OutputFormatHTML, tmpl.HTMLTemplate, renderCtx)
+		if err != nil {
+			return domain.RenderOutput{}, fmt.Errorf("html template rendering failed: %w", err)
+		}
+		out.HTML = StripScriptTags(htmlOut)
+	}
+
+	if tmpl.MarkdownTemplate != "" {
+		mdOut, err := r.RenderFormat(domain.OutputFormatMarkdown, tmpl.MarkdownTemplate, renderCtx)
+		if err != nil {
+			return domain.RenderOutput{}, fmt.Errorf("markdown template rendering failed: %w", err)
+		}
+		out.Markdown = mdOut
+	}
+
+	if tmpl.TextTemplate != "" {
+		txtOut, err := r.RenderFormat(domain.OutputFormatPlainText, tmpl.TextTemplate, renderCtx)
+		if err != nil {
+			return domain.RenderOutput{}, fmt.Errorf("text template rendering failed: %w", err)
+		}
+		out.PlainText = txtOut
+	}
+
+	return out, nil
+}
+
+// ResolveVersionOutputs resolves or dynamically re-renders resume outputs incorporating targetTemplateID.
+func ResolveVersionOutputs(
+	ctx context.Context,
+	r domain.TemplateRenderer,
+	templateRepo domain.TemplateRepository,
+	profileRepo domain.ProfileRepository,
+	userID string,
+	b *domain.Branch,
+	ver *domain.BranchVersion,
+	targetTemplateID string,
+) domain.RenderOutput {
+	if ver == nil {
+		return domain.RenderOutput{}
+	}
+	htmlOut := ver.HTMLOutput
+	mdOut := ver.MarkdownOutput
+	txtOut := ver.PlainTextOutput
+
+	if targetTemplateID == "" && b != nil {
+		targetTemplateID = b.TemplateSetID
+	}
+	if targetTemplateID == "" {
+		targetTemplateID = ver.TemplateSetIDUsed
+	}
+
+	isDifferentTemplate := targetTemplateID != "" && targetTemplateID != ver.TemplateSetIDUsed
+	missingOutputs := htmlOut == "" || mdOut == "" || txtOut == ""
+	shouldRender := isDifferentTemplate || missingOutputs
+
+	if shouldRender && r != nil && templateRepo != nil && targetTemplateID != "" {
+		if tmpl, tErr := templateRepo.GetTemplate(ctx, userID, targetTemplateID); tErr == nil && tmpl != nil {
+			var prof *domain.Profile
+			if profileRepo != nil {
+				prof, _ = profileRepo.GetProfile(ctx, userID)
+			}
+			if ver.TailoredContent != nil {
+				if rendered, rErr := r.Render(ctx, tmpl, prof, ver.TailoredContent); rErr == nil && rendered != nil {
+					htmlOut = rendered.HTML
+					mdOut = rendered.Markdown
+					txtOut = rendered.PlainText
+				}
+			} else {
+				renderCtx := NewRenderContext(tmpl, prof, nil)
+				if htmlOut == "" && tmpl.HTMLTemplate != "" {
+					if hOut, rErr := r.RenderFormat(domain.OutputFormatHTML, tmpl.HTMLTemplate, renderCtx); rErr == nil {
+						htmlOut = hOut
+					}
+				}
+				if mdOut == "" && tmpl.MarkdownTemplate != "" {
+					if mOut, rErr := r.RenderFormat(domain.OutputFormatMarkdown, tmpl.MarkdownTemplate, renderCtx); rErr == nil {
+						mdOut = mOut
+					}
+				}
+				if txtOut == "" && tmpl.TextTemplate != "" {
+					if tOut, rErr := r.RenderFormat(domain.OutputFormatPlainText, tmpl.TextTemplate, renderCtx); rErr == nil {
+						txtOut = tOut
+					}
+				}
+			}
+		}
+	}
+
+	return domain.RenderOutput{
+		HTML:      htmlOut,
+		Markdown:  mdOut,
+		PlainText: txtOut,
+	}
+}
+

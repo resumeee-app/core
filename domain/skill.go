@@ -2,6 +2,8 @@ package domain
 
 import (
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // CareerGraphSnapshot is a semantic domain alias for MainProfileSnapshot,
@@ -317,3 +319,28 @@ func FindSkillByName(skills []Skill, name string) (Skill, bool) {
 	}
 	return Skill{}, false
 }
+
+// ParseSkillsInput converts raw skill identifier/name strings from user payloads into Skill instances.
+// Tokens matching UUID formats (with or without prefixes) route to Skill{ID: ...}.
+// Plain text names (e.g. "Kubernetes", "Go") route to Skill{Name: ...} for canonical resolution.
+func ParseSkillsInput(skillIDs []string) []Skill {
+	if len(skillIDs) == 0 {
+		return []Skill{}
+	}
+	skills := make([]Skill, 0, len(skillIDs))
+	for _, s := range skillIDs {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
+			continue
+		}
+		rawUUID := strings.TrimPrefix(trimmed, "skill-")
+		rawUUID = strings.TrimPrefix(rawUUID, "sk-")
+		if _, err := uuid.Parse(rawUUID); err == nil {
+			skills = append(skills, Skill{ID: trimmed})
+		} else {
+			skills = append(skills, Skill{Name: trimmed})
+		}
+	}
+	return skills
+}
+

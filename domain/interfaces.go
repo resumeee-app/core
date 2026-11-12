@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"io"
 	"strings"
 	"time"
 )
@@ -366,5 +367,16 @@ func (b *StoreBundle) Close() error {
 
 // StoreFactory defines a constructor function that opens and initializes a Store instance.
 type StoreFactory func(ctx context.Context) (Store, error)
+
+// PDFTextExtractor abstracts extracting textual content from PDF binary streams.
+type PDFTextExtractor interface {
+	ExtractText(ctx context.Context, r io.ReaderAt, size int64) (string, error)
+}
+
+// ModelEnumerator defines the interface for enumerating available configured LLM models.
+type ModelEnumerator interface {
+	AvailableModels() []ModelOption
+}
+
 
 

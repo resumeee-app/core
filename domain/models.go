@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -569,6 +570,117 @@ type ModelOption struct {
 	Model       string `json:"model"`
 	DisplayName string `json:"display_name"`
 	IsDefault   bool   `json:"is_default"`
+}
+
+// ValidateReasoningLevel verifies that the given reasoning effort level is empty or
+// matches one of the accepted enum values ("none", "low", "medium", "high").
+func ValidateReasoningLevel(level string) error {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "", "none", "low", "medium", "high":
+		return nil
+	default:
+		return fmt.Errorf("%w: reasoning_level must be one of: none, low, medium, high", ErrValidation)
+	}
+}
+
+// ValidateModelOverride verifies that the specified model override and optional provider override
+// correspond to an available LLM model option registered in the enumerator catalog.
+func ValidateModelOverride(enumerator ModelEnumerator, providerOverride, modelOverride string) error {
+	if enumerator == nil || modelOverride == "" {
+		return nil
+	}
+
+	available := enumerator.AvailableModels()
+	if len(available) == 0 {
+		return nil
+	}
+
+	var found bool
+	for _, m := range available {
+		if strings.EqualFold(m.Model, modelOverride) {
+			if providerOverride == "" || strings.EqualFold(m.Provider, providerOverride) {
+				found = true
+				break
+			}
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("%w: model_override is not available for the specified provider", ErrValidation)
+	}
+
+	return nil
+}
+
+// ResolveExtractionProviderAndModel determines the active LLM provider and model for resume parsing.
+// Explicit request values take precedence; omitted fields fall back to the authenticated user's main
+// profile defaults, verified against configured models when ModelEnumerator is present.
+func ResolveExtractionProviderAndModel(prof *Profile, enumerator ModelEnumerator, reqProvider, reqModel string) (string, string) {
+	provider := strings.TrimSpace(reqProvider)
+	model := strings.TrimSpace(reqModel)
+
+	if prof == nil || (provider != "" && model != "") {
+		return provider, model
+	}
+
+	var availableModels []ModelOption
+	if enumerator != nil {
+		availableModels = enumerator.AvailableModels()
+	}
+
+	isProviderConfigured := func(candidate string) bool {
+		if len(availableModels) == 0 {
+			return true
+		}
+		for _, opt := range availableModels {
+			if strings.EqualFold(opt.Provider, candidate) ||
+				(strings.EqualFold(candidate, "openai-compat") && strings.EqualFold(opt.Provider, "compat")) ||
+				(strings.EqualFold(candidate, "compat") && strings.EqualFold(opt.Provider, "openai-compat")) {
+				return true
+			}
+		}
+		return false
+	}
+
+	profileProviderAccepted := false
+	if provider == "" && strings.TrimSpace(prof.DefaultProvider) != "" {
+		candidate := strings.TrimSpace(prof.DefaultProvider)
+		if isProviderConfigured(candidate) {
+			provider = candidate
+			profileProviderAccepted = true
+		}
+	} else if provider != "" {
+		if strings.EqualFold(provider, strings.TrimSpace(prof.DefaultProvider)) {
+			profileProviderAccepted = true
+		}
+	}
+
+	if model == "" && strings.TrimSpace(prof.DefaultModel) != "" {
+		candidateModel := strings.TrimSpace(prof.DefaultModel)
+		if len(availableModels) == 0 {
+			if profileProviderAccepted || strings.TrimSpace(prof.DefaultProvider) == "" {
+				model = candidateModel
+			}
+		} else {
+			if profileProviderAccepted || strings.TrimSpace(prof.DefaultProvider) == "" {
+				for _, opt := range availableModels {
+					providerMatches := provider == "" || strings.EqualFold(opt.Provider, provider) ||
+						(strings.EqualFold(provider, "openai-compat") && strings.EqualFold(opt.Provider, "compat")) ||
+						(strings.EqualFold(provider, "compat") && strings.EqualFold(opt.Provider, "openai-compat"))
+
+					if providerMatches && strings.EqualFold(opt.Model, candidateModel) {
+						model = candidateModel
+						break
+					}
+				}
+				if model == "" && strings.TrimSpace(provider) != "" && strings.EqualFold(provider, strings.TrimSpace(prof.DefaultProvider)) {
+					model = candidateModel
+				}
+			}
+		}
+	}
+
+	return provider, model
 }
 
 // PDFParseJobStatus represents the asynchronous lifecycle state of a PDF resume parse operation.

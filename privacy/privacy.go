@@ -732,3 +732,14 @@ func (s *Session) DeobfuscateATSScore(score *domain.ATSScore) {
 	}
 }
 
+// SanitizeXMLFence neutralizes closing and parent prompt tags and wraps content in XML boundary tags.
+func SanitizeXMLFence(content, tagName string) string {
+	tagRegex := regexp.MustCompile(fmt.Sprintf(`(?i)</?\s*(?:%s|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|target_job_description|custom_instructions|resume_document|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|response_schema)\b[^>]*>`, regexp.QuoteMeta(tagName)))
+	safe := tagRegex.ReplaceAllStringFunc(content, func(m string) string {
+		escaped := strings.ReplaceAll(m, "<", "&lt;")
+		return strings.ReplaceAll(escaped, ">", "&gt;")
+	})
+	return fmt.Sprintf("<%s>\n%s\n</%s>", tagName, strings.TrimSpace(safe), tagName)
+}
+
+

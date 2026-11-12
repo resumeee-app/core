@@ -402,12 +402,6 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 		prof, err := s.profileRepo.GetProfile(ctx, userID)
 		if err == nil && prof != nil {
 			mainRevision = prof.MainRevision
-			if provider == "" {
-				provider = prof.DefaultProvider
-			}
-			if model == "" {
-				model = prof.DefaultModel
-			}
 		}
 	}
 
@@ -465,7 +459,6 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 // SyncBranches regenerates specified branches or all stale branches when branchIDs is empty.
 func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []string) ([]string, error) {
 	var mainRevision int64 = 1
-	var defaultProvider, defaultModel string
 
 	if s.profileRepo != nil {
 		prof, err := s.profileRepo.GetProfile(ctx, userID)
@@ -473,8 +466,6 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 			return nil, err
 		}
 		mainRevision = prof.MainRevision
-		defaultProvider = prof.DefaultProvider
-		defaultModel = prof.DefaultModel
 	}
 
 	var targetBranches []domain.Branch
@@ -510,13 +501,7 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 		}
 
 		provider := b.ProviderOverride
-		if provider == "" {
-			provider = defaultProvider
-		}
 		model := b.ModelOverride
-		if model == "" {
-			model = defaultModel
-		}
 
 		var reservationID string
 		if s.quotaRepo != nil {
@@ -943,10 +928,6 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 	}
 
 	model := b.ModelOverride
-	if model == "" {
-		model = prof.DefaultModel
-	}
-
 	reasoningLevel := b.ReasoningLevel
 
 	targetLang := preset.EffectiveLanguage()
@@ -1196,9 +1177,6 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 			SimulateATS(ctx context.Context, req domain.ATSSimulationRequest) (*domain.ATSSimulationResponse, error)
 		}); ok {
 			model := branch.ModelOverride
-			if model == "" && snapshot != nil {
-				model = snapshot.Profile.DefaultModel
-			}
 			simResp, simErr := simulator.SimulateATS(ctx, domain.ATSSimulationRequest{
 				Model:          model,
 				ReasoningLevel: branch.ReasoningLevel,

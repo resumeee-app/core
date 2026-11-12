@@ -82,7 +82,7 @@ type LeanCertification struct {
 
 // LeanMainProfile represents the projected, minimal main profile structure for LLM prompts.
 // It excludes internal database fields (user_id, created_at, updated_at, is_global, metadata,
-// main_revision, exported_at, default_provider, default_model) while retaining effective short IDs
+// main_revision, exported_at) while retaining effective short IDs
 // for provenance validation and grounding.
 type LeanMainProfile struct {
 	Profile        LeanProfile         `json:"profile"`

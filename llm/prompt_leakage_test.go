@@ -39,8 +39,6 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 				Location:           domain.Location{City: "San Francisco", Region: "CA", CountryCode: "US"},
 				Profiles:           []domain.SocialLink{{Network: "GitHub", Username: "candzero", URL: "https://github.com/candzero"}},
 				GlobalWritingRules: "Do not use passive voice.",
-				DefaultProvider:    "gemini",
-				DefaultModel:       "gemini-3.8-flash",
 				MainRevision:       42,
 				Metadata:           map[string]any{"internal_billing_tier": "enterprise", "system_tag": "vip"},
 				CreatedAt:          created,

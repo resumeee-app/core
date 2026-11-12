@@ -109,8 +109,6 @@ type Profile struct {
 	Profiles           []SocialLink   `json:"profiles" gorm:"serializer:json"`
 	Summary            string         `json:"summary"`
 	GlobalWritingRules string         `json:"global_writing_rules"` // Tier 1 LLM instructions
-	DefaultProvider    string         `json:"default_provider" gorm:"default:'gemini'"`
-	DefaultModel       string         `json:"default_model" gorm:"default:'gemini-3.8-flash'"`
 	MainRevision       int64          `json:"main_revision" gorm:"not null;default:1"`
 	Metadata           map[string]any `json:"metadata,omitempty" gorm:"serializer:json"`
 	CreatedAt          time.Time      `json:"created_at"`
@@ -610,77 +608,6 @@ func ValidateModelOverride(enumerator ModelEnumerator, providerOverride, modelOv
 	}
 
 	return nil
-}
-
-// ResolveExtractionProviderAndModel determines the active LLM provider and model for resume parsing.
-// Explicit request values take precedence; omitted fields fall back to the authenticated user's main
-// profile defaults, verified against configured models when ModelEnumerator is present.
-func ResolveExtractionProviderAndModel(prof *Profile, enumerator ModelEnumerator, reqProvider, reqModel string) (string, string) {
-	provider := strings.TrimSpace(reqProvider)
-	model := strings.TrimSpace(reqModel)
-
-	if prof == nil || (provider != "" && model != "") {
-		return provider, model
-	}
-
-	var availableModels []ModelOption
-	if enumerator != nil {
-		availableModels = enumerator.AvailableModels()
-	}
-
-	isProviderConfigured := func(candidate string) bool {
-		if len(availableModels) == 0 {
-			return true
-		}
-		for _, opt := range availableModels {
-			if strings.EqualFold(opt.Provider, candidate) ||
-				(strings.EqualFold(candidate, "openai-compat") && strings.EqualFold(opt.Provider, "compat")) ||
-				(strings.EqualFold(candidate, "compat") && strings.EqualFold(opt.Provider, "openai-compat")) {
-				return true
-			}
-		}
-		return false
-	}
-
-	profileProviderAccepted := false
-	if provider == "" && strings.TrimSpace(prof.DefaultProvider) != "" {
-		candidate := strings.TrimSpace(prof.DefaultProvider)
-		if isProviderConfigured(candidate) {
-			provider = candidate
-			profileProviderAccepted = true
-		}
-	} else if provider != "" {
-		if strings.EqualFold(provider, strings.TrimSpace(prof.DefaultProvider)) {
-			profileProviderAccepted = true
-		}
-	}
-
-	if model == "" && strings.TrimSpace(prof.DefaultModel) != "" {
-		candidateModel := strings.TrimSpace(prof.DefaultModel)
-		if len(availableModels) == 0 {
-			if profileProviderAccepted || strings.TrimSpace(prof.DefaultProvider) == "" {
-				model = candidateModel
-			}
-		} else {
-			if profileProviderAccepted || strings.TrimSpace(prof.DefaultProvider) == "" {
-				for _, opt := range availableModels {
-					providerMatches := provider == "" || strings.EqualFold(opt.Provider, provider) ||
-						(strings.EqualFold(provider, "openai-compat") && strings.EqualFold(opt.Provider, "compat")) ||
-						(strings.EqualFold(provider, "compat") && strings.EqualFold(opt.Provider, "openai-compat"))
-
-					if providerMatches && strings.EqualFold(opt.Model, candidateModel) {
-						model = candidateModel
-						break
-					}
-				}
-				if model == "" && strings.TrimSpace(provider) != "" && strings.EqualFold(provider, strings.TrimSpace(prof.DefaultProvider)) {
-					model = candidateModel
-				}
-			}
-		}
-	}
-
-	return provider, model
 }
 
 // PDFParseJobStatus represents the asynchronous lifecycle state of a PDF resume parse operation.

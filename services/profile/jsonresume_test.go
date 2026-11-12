@@ -589,8 +589,6 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 
 	// 2. Add Tier-1 LLM writing rules to profile to verify preservation across subsequent imports
 	profInDB.GlobalWritingRules = "Never use passive voice; write impact-first bullets."
-	profInDB.DefaultProvider = "openai"
-	profInDB.DefaultModel = "gpt-4o"
 	if err := profileRepo.UpsertProfile(ctx, profInDB); err != nil {
 		t.Fatalf("failed to upsert profile rules: %v", err)
 	}
@@ -637,9 +635,6 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 	// Verify Tier-1 writing rules were preserved
 	if snap2.Profile.GlobalWritingRules != "Never use passive voice; write impact-first bullets." {
 		t.Errorf("GlobalWritingRules not preserved: %q", snap2.Profile.GlobalWritingRules)
-	}
-	if snap2.Profile.DefaultProvider != "openai" || snap2.Profile.DefaultModel != "gpt-4o" {
-		t.Errorf("DefaultProvider/Model not preserved: provider=%s, model=%s", snap2.Profile.DefaultProvider, snap2.Profile.DefaultModel)
 	}
 
 	// 5. Branch staleness check: branch synced at revision 2 is now stale (2 < 3)!

@@ -247,10 +247,7 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 			ModelOverride:    "claude-branch",
 		},
 	}
-	prof := &domain.Profile{
-		DefaultProvider: ProviderOpenAI,
-		DefaultModel:    "gpt-profile",
-	}
+	prof := &domain.Profile{}
 
 	p, m, err := r.Resolve(req, nil, prof)
 	if err != nil {
@@ -260,18 +257,18 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 		t.Errorf("expected anthropic/claude-branch, got %s/%s", p.Name(), m)
 	}
 
-	// Fallback to profile
+	// Fallback to system default when branch overrides are omitted
 	req.BranchContext.ProviderOverride = ""
 	req.BranchContext.ModelOverride = ""
 	p, m, err = r.Resolve(req, nil, prof)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p.Name() != ProviderOpenAI || m != "gpt-profile" {
-		t.Errorf("expected openai/gpt-profile, got %s/%s", p.Name(), m)
+	if p.Name() != ProviderGemini || m != "gemini-default" {
+		t.Errorf("expected gemini/gemini-default, got %s/%s", p.Name(), m)
 	}
 
-	// Fallback to system default
+	// Fallback to system default with nil profile
 	p, m, err = r.Resolve(req, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

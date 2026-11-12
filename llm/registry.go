@@ -219,9 +219,8 @@ func (r *Registry) SetDefault(provider, model string) {
 // Resolve resolves the active LLMProvider and model according to the precedence ladder:
 // 1. GenerationRequest overrides (req.Model, req.BranchContext.ProviderOverride)
 // 2. Branch overrides (branch.ProviderOverride, branch.ModelOverride)
-// 3. Main Profile defaults (profile.DefaultProvider, profile.DefaultModel)
-// 4. System fallbacks (Registry default provider and model)
-func (r *Registry) Resolve(req domain.GenerationRequest, _ *domain.Preset, profile *domain.Profile) (domain.LLMProvider, string, error) {
+// 3. System fallbacks (Registry default provider and model)
+func (r *Registry) Resolve(req domain.GenerationRequest, _ *domain.Preset, _ *domain.Profile) (domain.LLMProvider, string, error) {
 	r.mu.RLock()
 	hasProviders := len(r.providers) > 0
 	r.mu.RUnlock()
@@ -234,8 +233,6 @@ func (r *Registry) Resolve(req domain.GenerationRequest, _ *domain.Preset, profi
 	providerName := ""
 	if p := strings.TrimSpace(req.BranchContext.ProviderOverride); p != "" {
 		providerName = p
-	} else if profile != nil && strings.TrimSpace(profile.DefaultProvider) != "" {
-		providerName = strings.TrimSpace(profile.DefaultProvider)
 	} else {
 		providerName = r.DefaultProvider()
 	}
@@ -258,8 +255,6 @@ func (r *Registry) Resolve(req domain.GenerationRequest, _ *domain.Preset, profi
 		modelName = m
 	} else if m := strings.TrimSpace(req.BranchContext.ModelOverride); m != "" {
 		modelName = m
-	} else if profile != nil && strings.TrimSpace(profile.DefaultModel) != "" {
-		modelName = strings.TrimSpace(profile.DefaultModel)
 	} else if r.DefaultModel() != "" && r.DefaultProvider() == provider.Name() {
 		modelName = r.DefaultModel()
 	} else if mcp, ok := provider.(ModelCatalogProvider); ok && strings.TrimSpace(mcp.DefaultModel()) != "" {

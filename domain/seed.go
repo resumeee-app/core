@@ -207,8 +207,6 @@ func EnsureTenantProvisionedRepos(
 			Email:              email,
 			Headline:           "Software Engineer",
 			MainRevision:       1,
-			DefaultProvider:    "gemini",
-			DefaultModel:       "gemini-3.8-flash",
 			GlobalWritingRules: "Prioritize measurable outcomes, active voice, and clear technical context.",
 			CreatedAt:          time.Now().UTC(),
 			UpdatedAt:          time.Now().UTC(),

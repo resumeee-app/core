@@ -40,8 +40,6 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 	// 1. Construct Profile root
 	profileID := domain.GenerateID("prof")
 	rules := ""
-	provider := "gemini"
-	model := "gemini-3.8-flash"
 	metadata := make(map[string]any)
 
 	if existingProfile != nil {
@@ -49,12 +47,6 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 			profileID = existingProfile.ID
 		}
 		rules = existingProfile.GlobalWritingRules
-		if existingProfile.DefaultProvider != "" {
-			provider = existingProfile.DefaultProvider
-		}
-		if existingProfile.DefaultModel != "" {
-			model = existingProfile.DefaultModel
-		}
 		if existingProfile.Metadata != nil {
 			for k, v := range existingProfile.Metadata {
 				metadata[k] = v
@@ -128,8 +120,6 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 		Profiles:           profiles,
 		Summary:            resume.Basics.Summary,
 		GlobalWritingRules: rules,
-		DefaultProvider:    provider,
-		DefaultModel:       model,
 		MainRevision:       revision,
 		Metadata:           metadata,
 		CreatedAt:          time.Now().UTC(),

@@ -12,13 +12,10 @@ import (
 	"github.com/resumeee-app/resumeee-core/domain"
 )
 
-// PDFTextExtractor abstracts extracting textual content from PDF binary streams.
-type PDFTextExtractor = domain.PDFTextExtractor
-
 type defaultPDFExtractor struct{}
 
 // NewExtractor constructs a pure-Go PDF text extractor based on ledongthuc/pdf.
-func NewExtractor() PDFTextExtractor {
+func NewExtractor() domain.PDFTextExtractor {
 	return &defaultPDFExtractor{}
 }
 

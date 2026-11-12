@@ -96,11 +96,7 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 
 	profiles := make([]core.SocialLink, len(resume.Basics.Profiles))
 	for i, p := range resume.Basics.Profiles {
-		profiles[i] = core.SocialLink{
-			Network:  p.Network,
-			Username: p.Username,
-			URL:      p.URL,
-		}
+		profiles[i] = core.SocialLink(p)
 	}
 
 	prof := core.Profile{
@@ -408,11 +404,7 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 	// 1. Basics
 	profiles := make([]JSONResumeProfile, len(snapshot.Profile.Profiles))
 	for i, p := range snapshot.Profile.Profiles {
-		profiles[i] = JSONResumeProfile{
-			Network:  p.Network,
-			Username: p.Username,
-			URL:      p.URL,
-		}
+		profiles[i] = JSONResumeProfile(p)
 	}
 
 	basics := JSONResumeBasics{
@@ -679,11 +671,7 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONR
 	if profile != nil {
 		profiles := make([]JSONResumeProfile, len(profile.Profiles))
 		for i, p := range profile.Profiles {
-			profiles[i] = JSONResumeProfile{
-				Network:  p.Network,
-				Username: p.Username,
-				URL:      p.URL,
-			}
+			profiles[i] = JSONResumeProfile(p)
 		}
 
 		basics = JSONResumeBasics{

@@ -7,19 +7,13 @@ import (
 	"strings"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/services/profile"
 )
 
 // ResumeExtractor abstracts LLM-driven unstructured text extraction into standard JSONResume.
-type ResumeExtractor interface {
-	ExtractResume(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, error)
-}
+type ResumeExtractor = core.ResumeExtractor
 
 // UsageResumeExtractor extends ResumeExtractor with token usage reporting.
-type UsageResumeExtractor interface {
-	ResumeExtractor
-	ExtractResumeWithUsage(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, core.TokenUsage, error)
-}
+type UsageResumeExtractor = core.UsageResumeExtractor
 
 // Completer abstracts text-based completion for LLM extraction tasks.
 type Completer interface {
@@ -53,13 +47,13 @@ type RawUsageCompleter interface {
 
 // ExtractResumeWithTokenUsage extracts a structured resume using the extractor and returns the parsed resume,
 // token usage (defaulting to defaultTokens if reported as 0), and any error encountered.
-func ExtractResumeWithTokenUsage(ctx context.Context, extractor ResumeExtractor, text, provider, model string, defaultTokens int) (*profile.JSONResume, core.TokenUsage, error) {
+func ExtractResumeWithTokenUsage(ctx context.Context, extractor core.ResumeExtractor, text, provider, model string, defaultTokens int) (*core.JSONResume, core.TokenUsage, error) {
 	var (
-		extracted *profile.JSONResume
+		extracted *core.JSONResume
 		usage     core.TokenUsage
 		err       error
 	)
-	if ue, ok := extractor.(UsageResumeExtractor); ok {
+	if ue, ok := extractor.(core.UsageResumeExtractor); ok {
 		extracted, usage, err = ue.ExtractResumeWithUsage(ctx, text, provider, model)
 	} else if extractor != nil {
 		extracted, err = extractor.ExtractResume(ctx, text, provider, model)
@@ -75,14 +69,14 @@ type resumeExtractor struct {
 }
 
 // NewResumeExtractor constructs a ResumeExtractor with the provided Completer seam.
-func NewResumeExtractor(completer Completer) ResumeExtractor {
+func NewResumeExtractor(completer Completer) core.ResumeExtractor {
 	return &resumeExtractor{
 		completer: completer,
 	}
 }
 
 // NewDefaultResumeExtractor creates a ResumeExtractor backed by the provider Registry.
-func NewDefaultResumeExtractor(registry *Registry) ResumeExtractor {
+func NewDefaultResumeExtractor(registry *Registry) core.ResumeExtractor {
 	return &resumeExtractor{
 		completer: NewRegistryCompleter(registry),
 	}
@@ -152,13 +146,13 @@ func (rc *registryCompleter) CompleteWithUsage(ctx context.Context, systemPrompt
 }
 
 // ExtractResume parses unstructured resume text into a structured JSONResume document.
-func (e *resumeExtractor) ExtractResume(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, error) {
+func (e *resumeExtractor) ExtractResume(ctx context.Context, text string, provider string, model string) (*core.JSONResume, error) {
 	res, _, err := e.ExtractResumeWithUsage(ctx, text, provider, model)
 	return res, err
 }
 
 // ExtractResumeWithUsage parses unstructured resume text into a structured JSONResume document and reports token usage.
-func (e *resumeExtractor) ExtractResumeWithUsage(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, core.TokenUsage, error) {
+func (e *resumeExtractor) ExtractResumeWithUsage(ctx context.Context, text string, provider string, model string) (*core.JSONResume, core.TokenUsage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, core.TokenUsage{}, err
 	}
@@ -197,7 +191,7 @@ func (e *resumeExtractor) ExtractResumeWithUsage(ctx context.Context, text strin
 		return nil, core.TokenUsage{}, fmt.Errorf("%w: empty or missing JSON in LLM response", core.ErrValidation)
 	}
 
-	var resume profile.JSONResume
+	var resume core.JSONResume
 	if err := json.Unmarshal([]byte(cleanedJSON), &resume); err != nil {
 		return nil, core.TokenUsage{}, fmt.Errorf("%w: failed to parse structured LLM response: %v", core.ErrValidation, err)
 	}

@@ -392,3 +392,26 @@ type PDFTextExtractor interface {
 type ModelEnumerator interface {
 	AvailableModels() []ModelOption
 }
+
+// ValidationResult contains the sanitized tailored content and structured warnings.
+type ValidationResult struct {
+	SanitizedContent *TailoredContent
+	Warnings         []string
+}
+
+// ProvenanceValidator audits and sanitizes TailoredContent against MainProfileSnapshot and Branch rules.
+type ProvenanceValidator interface {
+	Validate(content *TailoredContent, snapshot *MainProfileSnapshot, branch *Branch) (*ValidationResult, error)
+	ValidateStrict(content *TailoredContent, snapshot *MainProfileSnapshot, branch *Branch) error
+}
+
+// ResumeExtractor abstracts LLM-driven unstructured text extraction into standard JSONResume.
+type ResumeExtractor interface {
+	ExtractResume(ctx context.Context, text string, provider string, model string) (*JSONResume, error)
+}
+
+// UsageResumeExtractor extends ResumeExtractor with token usage reporting.
+type UsageResumeExtractor interface {
+	ResumeExtractor
+	ExtractResumeWithUsage(ctx context.Context, text string, provider string, model string) (*JSONResume, TokenUsage, error)
+}

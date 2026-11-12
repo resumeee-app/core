@@ -18,8 +18,6 @@ import (
 	"time"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/services/profile"
-	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 // GenerationJob encapsulates the parameters of an asynchronous resume generation task.
@@ -35,16 +33,14 @@ type PDFParseJobTask = core.PDFParseJobTask
 type PDFJobEnqueuer = core.PDFJobEnqueuer
 
 // ResumeExtractor defines the contract for structured resume data extraction from raw text via an LLM.
-type ResumeExtractor interface {
-	ExtractResume(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, error)
-}
+type ResumeExtractor = core.ResumeExtractor
 
 // LLMService abstracts multi-provider prompt generation and structured response.
 type LLMService = core.LLMService
 
 // ProvenanceValidator audits tailored content against career snapshots and exclusion lists.
 type ProvenanceValidator interface {
-	Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*validator.ValidationResult, error)
+	Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*core.ValidationResult, error)
 }
 
 // TemplateRenderer executes multi-format Go templates.
@@ -66,9 +62,9 @@ type PoolConfig struct {
 	TemplateRepo           core.TemplateRepository
 	PDFJobRepo             core.PDFParseJobRepository
 	QuotaRepo              core.QuotaRepository
-	ResumeExtractor        ResumeExtractor
+	ResumeExtractor        core.ResumeExtractor
 	LLMTimeout             time.Duration
-	LLMService             LLMService
+	LLMService             core.LLMService
 	Validator              ProvenanceValidator
 	Renderer               TemplateRenderer
 	Logger                 *slog.Logger
@@ -76,8 +72,8 @@ type PoolConfig struct {
 
 type pendingJob struct {
 	isPDF    bool
-	genJob   GenerationJob
-	pdfJob   PDFParseJobTask
+	genJob   core.GenerationJob
+	pdfJob   core.PDFParseJobTask
 	tenantID string
 }
 
@@ -109,9 +105,9 @@ type Pool struct {
 	templateRepo    core.TemplateRepository
 	pdfJobRepo      core.PDFParseJobRepository
 	quotaRepo       core.QuotaRepository
-	resumeExtractor ResumeExtractor
+	resumeExtractor core.ResumeExtractor
 	llmTimeout      time.Duration
-	llmService      LLMService
+	llmService      core.LLMService
 	validator       ProvenanceValidator
 	renderer        TemplateRenderer
 }

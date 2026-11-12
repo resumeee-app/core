@@ -27,7 +27,6 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
-	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 // Service defines domain operations for branches, async generation, batch synchronization, and version lifecycle.
@@ -57,7 +56,7 @@ type Config struct {
 	TemplateRepo      core.TemplateRepository
 	QuotaRepo         core.QuotaRepository
 	JobEnqueuer       core.JobEnqueuer
-	Validator         validator.ProvenanceValidator
+	Validator         core.ProvenanceValidator
 	Renderer          core.TemplateRenderer
 	LLMService        core.LLMService
 	PromptCompiler    core.PromptCompiler
@@ -73,7 +72,7 @@ type service struct {
 	templateRepo      core.TemplateRepository
 	quotaRepo         core.QuotaRepository
 	jobEnqueuer       core.JobEnqueuer
-	validator         validator.ProvenanceValidator
+	validator         core.ProvenanceValidator
 	renderer          core.TemplateRenderer
 	llmService        core.LLMService
 	promptCompiler    core.PromptCompiler

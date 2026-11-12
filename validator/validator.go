@@ -14,16 +14,10 @@ import (
 )
 
 // ValidationResult contains the sanitized tailored content and structured warnings.
-type ValidationResult struct {
-	SanitizedContent *core.TailoredContent
-	Warnings         []string
-}
+type ValidationResult = core.ValidationResult
 
 // ProvenanceValidator audits and sanitizes TailoredContent against MainProfileSnapshot and Branch rules.
-type ProvenanceValidator interface {
-	Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*ValidationResult, error)
-	ValidateStrict(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) error
-}
+type ProvenanceValidator = core.ProvenanceValidator
 
 // Validator implements the ProvenanceValidator interface.
 type Validator struct{}

@@ -16,6 +16,26 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
+// JSONResume and its sub-types are type aliases to the canonical core JSON Resume v1.0.0 schema types.
+type (
+	JSONResume            = core.JSONResume
+	JSONResumeBasics      = core.JSONResumeBasics
+	JSONResumeLocation    = core.JSONResumeLocation
+	JSONResumeProfile     = core.JSONResumeProfile
+	JSONResumeWork        = core.JSONResumeWork
+	JSONResumeVolunteer   = core.JSONResumeVolunteer
+	JSONResumeEducation   = core.JSONResumeEducation
+	JSONResumeAward       = core.JSONResumeAward
+	JSONResumeCertificate = core.JSONResumeCertificate
+	JSONResumePublication = core.JSONResumePublication
+	JSONResumeSkill       = core.JSONResumeSkill
+	JSONResumeLanguage    = core.JSONResumeLanguage
+	JSONResumeInterest    = core.JSONResumeInterest
+	JSONResumeReference   = core.JSONResumeReference
+	JSONResumeProject     = core.JSONResumeProject
+	JSONResumeMeta        = core.JSONResumeMeta
+)
+
 // Service defines high-level profile management, career graph operations, and JSON Resume interoperability.
 type Service interface {
 	GetProfile(ctx context.Context, userID string) (*core.Profile, error)
@@ -24,9 +44,9 @@ type Service interface {
 
 	// JSON Resume Operations
 	ImportJSONResume(ctx context.Context, userID string, payload []byte) (*core.MainProfileSnapshot, error)
-	ExportJSONResume(ctx context.Context, userID string, versionID *string) (*JSONResume, error)
-	ExportFromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error)
-	ExportFromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONResume, error)
+	ExportJSONResume(ctx context.Context, userID string, versionID *string) (*core.JSONResume, error)
+	ExportFromSnapshot(snapshot *core.MainProfileSnapshot) (*core.JSONResume, error)
+	ExportFromTailored(profile *core.Profile, tailored *core.TailoredContent) (*core.JSONResume, error)
 }
 
 type profileService struct {

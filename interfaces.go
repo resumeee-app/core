@@ -192,6 +192,21 @@ type JobEnqueuer interface {
 	Enqueue(job GenerationJob) error
 }
 
+// PDFParseJobTask encapsulates the parameters of an asynchronous PDF resume parsing task.
+type PDFParseJobTask struct {
+	JobID         string `json:"job_id"`
+	UserID        string `json:"user_id"`
+	RawText       string `json:"raw_text"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	ReservationID string `json:"reservation_id,omitempty"`
+}
+
+// PDFJobEnqueuer defines the contract for enqueuing PDF parse tasks into the worker pool.
+type PDFJobEnqueuer interface {
+	EnqueuePDFJob(task PDFParseJobTask) error
+}
+
 // LLMService abstracts multi-provider prompt generation and structured response.
 type LLMService interface {
 	GenerateTailoredResume(ctx context.Context, req GenerationRequest) (*GenerationResponse, error)

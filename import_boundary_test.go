@@ -11,6 +11,7 @@ import (
 
 // allowedCorePackages lists the relative subpackages permitted within the resumeee-core package set.
 var allowedCoreSubpackages = []string{
+	"seed",
 	"validator",
 	"privacy",
 	"branch",
@@ -53,6 +54,7 @@ func TestCorePackageSet_ImportBoundaries(t *testing.T) {
 		// Extracted core repo layout: root (.), validator, privacy, services/branch, services/profile, services/renderer
 		extractedSubdirs := []string{
 			".",
+			"seed",
 			"validator",
 			"privacy",
 			filepath.Join("services", "branch"),

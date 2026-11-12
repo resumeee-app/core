@@ -1,6 +1,9 @@
 package renderer
 
-import "github.com/resumeee-app/resumeee-core"
+import (
+	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/seed"
+)
 
 const (
 	// TemplateStandardCleanID is the canonical ID for the built-in Standard Clean template set.
@@ -21,30 +24,30 @@ const (
 
 // StandardCleanTemplate returns the production default modern tech resume template set.
 func StandardCleanTemplate() core.TemplateSet {
-	return core.StandardCleanTemplate()
+	return seed.StandardCleanTemplate()
 }
 
 // DetailedImmigrationCVTemplate returns the unabridged academic/immigration CV template set.
 func DetailedImmigrationCVTemplate() core.TemplateSet {
-	return core.DetailedImmigrationCVTemplate()
+	return seed.DetailedImmigrationCVTemplate()
 }
 
 // ATSMinimalTemplate returns the ATS minimal plain text and HTML template set.
 func ATSMinimalTemplate() core.TemplateSet {
-	return core.ATSMinimalTemplate()
+	return seed.ATSMinimalTemplate()
 }
 
 // ATSHybridTechTemplate returns the ATS modern tech resume template set.
 func ATSHybridTechTemplate() core.TemplateSet {
-	return core.ATSHybridTechTemplate()
+	return seed.ATSHybridTechTemplate()
 }
 
 // ATSExecutiveCleanTemplate returns the ATS executive clean resume template set.
 func ATSExecutiveCleanTemplate() core.TemplateSet {
-	return core.ATSExecutiveCleanTemplate()
+	return seed.ATSExecutiveCleanTemplate()
 }
 
 // DefaultTemplateSets returns the list of built-in production templates.
 func DefaultTemplateSets() []core.TemplateSet {
-	return core.DefaultTemplateSets()
+	return seed.DefaultTemplateSets()
 }

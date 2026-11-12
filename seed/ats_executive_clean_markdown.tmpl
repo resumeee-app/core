@@ -1,0 +1,43 @@
+# {{.FullName}}
+{{if .Headline}}**{{.Headline}}**
+{{end}}{{if .Email}}{{.Email}}{{end}}{{if .Phone}}{{if .Email}} | {{end}}{{.Phone}}{{end}}{{if .Location.City}}{{if or .Email .Phone}} | {{end}}{{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}{{end}}
+{{if .Profiles}}{{range $i, $p := .Profiles}}{{if or $i (or $.Email (or $.Phone $.Location.City))}} | {{end}}[{{$p.Network}}]({{$p.URL}}){{end}}
+{{end}}
+{{if .Summary}}
+## Executive Summary
+{{.Summary}}
+{{end}}
+{{if .SkillGroups}}
+## Core Competencies
+{{range .SkillGroups}}- **{{.Category}}:** {{join .Skills ", "}}
+{{end}}{{end}}
+{{if .Experiences}}
+## Executive Experience
+{{range .Experiences}}
+### {{.RoleTitle}} — {{.Company}}
+*{{formatDateRange .StartDate .EndDate "Present"}}{{if .Location.City}} | {{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}{{end}}*
+
+{{range .Bullets}}- {{.Text}}
+{{end}}
+{{end}}{{end}}
+{{if .Projects}}
+## Strategic Projects
+{{range .Projects}}
+### {{.Name}}{{if .Role}} — {{.Role}}{{end}}
+{{if .Summary}}{{.Summary}}
+{{end}}
+{{range .Bullets}}- {{.Text}}
+{{end}}
+{{end}}{{end}}
+{{if .Education}}
+## Education
+{{range .Education}}
+### {{.Degree}}{{if .Field}} in {{.Field}}{{end}} — {{.Institution}}
+*{{formatDateRange .StartDate .EndDate "Present"}}{{if .Score}} | {{.Score}}{{end}}*
+{{range .Bullets}}- {{.Text}}
+{{end}}
+{{end}}{{end}}
+{{if .Certifications}}
+## Certifications & Board Appointments
+{{range .Certifications}}- **{{.Name}}** — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
+{{end}}{{end}}

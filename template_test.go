@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/seed"
 )
 
 func TestDomainTemplateSeam(t *testing.T) {
@@ -23,8 +24,8 @@ func TestDomainTemplateSeam(t *testing.T) {
 		}
 	}
 
-	// Verify domain provides default built-in template sets
-	templates := core.DefaultTemplateSets()
+	// Verify seed provides default built-in template sets via embedded .tmpl files
+	templates := seed.DefaultTemplateSets()
 	if len(templates) != 5 {
 		t.Fatalf("expected 5 default template sets, got %d", len(templates))
 	}

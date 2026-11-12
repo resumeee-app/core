@@ -1,0 +1,43 @@
+{{.FullName}}
+{{if .Headline}}{{.Headline}}
+{{end}}
+CONTACT INFORMATION
+------------------------------------------------------------------------
+{{if .Email}}Email: {{.Email}}{{end}}{{if .Phone}}{{if .Email}} | {{end}}Phone: {{.Phone}}{{end}}{{if .Location.City}}{{if or .Email .Phone}} | {{end}}Location: {{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}{{if .Location.CountryCode}}, {{.Location.CountryCode}}{{end}}{{end}}{{if .Website}}{{if or .Email (or .Phone .Location.City)}} | {{end}}Website: {{.Website}}{{end}}{{if .Profiles}}{{range $i, $p := .Profiles}}{{if or $i (or $.Email (or $.Phone (or $.Location.City $.Website)))}} | {{end}}{{$p.Network}}: {{$p.URL}}{{end}}{{end}}
+
+{{if .Summary}}
+PROFESSIONAL SUMMARY
+------------------------------------------------------------------------
+{{.Summary}}
+
+{{end}}{{if .SkillGroups}}
+TECHNICAL SKILLS
+------------------------------------------------------------------------
+{{range .SkillGroups}}{{.Category}}: {{join .Skills ", "}}
+{{end}}
+{{end}}{{if .Experiences}}
+WORK EXPERIENCE
+------------------------------------------------------------------------
+{{range .Experiences}}{{.RoleTitle}} - {{.Company}}
+Dates: {{formatDateRange .StartDate .EndDate "Present"}}{{if .Location.City}} | Location: {{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}{{end}}
+{{range .Bullets}}- {{.Text}}
+{{end}}
+{{end}}{{end}}{{if .Projects}}
+PROJECTS
+------------------------------------------------------------------------
+{{range .Projects}}{{.Name}}{{if .Role}} ({{.Role}}){{end}}{{if .URL}} [{{.URL}}]{{end}}
+{{if .Summary}}{{.Summary}}
+{{end}}{{range .Bullets}}- {{.Text}}
+{{end}}
+{{end}}{{end}}{{if .Education}}
+EDUCATION
+------------------------------------------------------------------------
+{{range .Education}}{{.Degree}}{{if .Field}} in {{.Field}}{{end}} - {{.Institution}}
+Dates: {{formatDateRange .StartDate .EndDate "Present"}}{{if .Score}} | Score: {{.Score}}{{end}}
+{{range .Bullets}}- {{.Text}}
+{{end}}
+{{end}}{{end}}{{if .Certifications}}
+CERTIFICATIONS
+------------------------------------------------------------------------
+{{range .Certifications}}- {{.Name}} - {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
+{{end}}{{end}}

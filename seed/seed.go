@@ -1,4 +1,6 @@
-package core
+// Package seed provides embedded built-in resume templates, presets, global skills,
+// and idempotent database and tenant provisioning routines.
+package seed
 
 import (
 	"context"
@@ -6,10 +8,12 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // DefaultGlobalSkills returns the canonical, system-seeded global skills available to all tenants.
-func DefaultGlobalSkills() []Skill {
+func DefaultGlobalSkills() []core.Skill {
 	now := time.Now().UTC()
 	canonical := []struct {
 		Name     string
@@ -51,12 +55,12 @@ func DefaultGlobalSkills() []Skill {
 		{"LangChain", "langchain", "AI & Machine Learning"},
 	}
 
-	skills := make([]Skill, len(canonical))
+	skills := make([]core.Skill, len(canonical))
 	for i, c := range canonical {
-		skills[i] = Skill{
+		skills[i] = core.Skill{
 			ID:          "global-skill-" + c.Slug,
 			ShortID:     "g-" + c.Slug,
-			UserID:      SystemUserID,
+			UserID:      core.SystemUserID,
 			Name:        c.Name,
 			Slug:        c.Slug,
 			IsGlobal:    true,
@@ -72,39 +76,39 @@ func DefaultGlobalSkills() []Skill {
 // DefaultPresets returns the system default built-in presets customized for the specified user.
 //
 // Parameters:
-//   - userID: The target user identifier (defaults to SystemUserID if empty).
+//   - userID: The target user identifier (defaults to core.SystemUserID if empty).
 //
 // Returns:
-//   - []Preset: The list of system built-in presets.
-func DefaultPresets(userID string) []Preset {
+//   - []core.Preset: The list of system built-in presets.
+func DefaultPresets(userID string) []core.Preset {
 	if userID == "" {
-		userID = SystemUserID
+		userID = core.SystemUserID
 	}
 	now := time.Now().UTC()
-	themeStd := TemplateStandardCleanID
-	themeCV := TemplateDetailedImmigrationCVID
-	return []Preset{
+	themeStd := core.TemplateStandardCleanID
+	themeCV := core.TemplateDetailedImmigrationCVID
+	return []core.Preset{
 		{
-			ID:                 Preset1PageTechResumeID,
+			ID:                 core.Preset1PageTechResumeID,
 			UserID:             userID,
 			Name:               "1-Page Tech Resume",
 			Description:        "Concise tech resume format emphasizing recent high-impact metrics and key skills.",
 			SystemInstructions: "Focus strictly on high-impact engineering accomplishments, quantitative outcomes, and relevant technical skill groups. Ensure concise bullet formatting suitable for a 1-page tech resume.",
 			SuggestedThemeID:   &themeStd,
-			TemplateSetID:      TemplateStandardCleanID,
-			Language:           DefaultLanguage,
+			TemplateSetID:      core.TemplateStandardCleanID,
+			Language:           core.DefaultLanguage,
 			CreatedAt:          now,
 			UpdatedAt:          now,
 		},
 		{
-			ID:                 PresetImmigrationFullHistoryCVID,
+			ID:                 core.PresetImmigrationFullHistoryCVID,
 			UserID:             userID,
 			Name:               "Immigration Full History CV",
 			Description:        "Unabridged career history format for audit, visa, and immigration compliance.",
 			SystemInstructions: "Include full, unabridged employment and academic history. Maintain detailed hours per week, company location and verification contacts, supervisor contact information, and full explanatory duty summaries.",
 			SuggestedThemeID:   &themeCV,
-			TemplateSetID:      TemplateDetailedImmigrationCVID,
-			Language:           DefaultLanguage,
+			TemplateSetID:      core.TemplateDetailedImmigrationCVID,
+			Language:           core.DefaultLanguage,
 			CreatedAt:          now,
 			UpdatedAt:          now,
 		},
@@ -128,9 +132,9 @@ func getTenantProvisionLock(userID string) *sync.Mutex {
 // default profile, and default resume branch with an initial active rendered version.
 func EnsureTenantProvisioned(
 	ctx context.Context,
-	store Store,
+	store core.Store,
 	userID string,
-	userInfo ...*User,
+	userInfo ...*core.User,
 ) error {
 	if store == nil {
 		return errors.New("store cannot be nil")
@@ -149,15 +153,15 @@ func EnsureTenantProvisioned(
 // EnsureTenantProvisionedRepos idempotently provisions tenant entities using explicit repository handles.
 func EnsureTenantProvisionedRepos(
 	ctx context.Context,
-	profileRepo ProfileRepository,
-	branchRepo BranchRepository,
-	templateRepo TemplateRepository,
-	userRepo UserRepository,
+	profileRepo core.ProfileRepository,
+	branchRepo core.BranchRepository,
+	templateRepo core.TemplateRepository,
+	userRepo core.UserRepository,
 	userID string,
-	userInfo ...*User,
+	userInfo ...*core.User,
 ) error {
 	if userID == "" {
-		return fmt.Errorf("%w: user id cannot be empty", ErrValidation)
+		return fmt.Errorf("%w: user id cannot be empty", core.ErrValidation)
 	}
 
 	mu := getTenantProvisionLock(userID)
@@ -166,22 +170,22 @@ func EnsureTenantProvisionedRepos(
 
 	// 1. Upsert User record if UserRepository is provided
 	if userRepo != nil {
-		var u *User
+		var u *core.User
 		if len(userInfo) > 0 && userInfo[0] != nil {
 			u = userInfo[0]
 			if u.ID == "" {
 				u.ID = userID
 			}
 		} else {
-			u = &User{
+			u = &core.User{
 				ID:       userID,
-				Role:     UserRoleUser,
+				Role:     core.UserRoleUser,
 				IsActive: true,
 			}
 		}
 		if existing, err := userRepo.GetUser(ctx, userID); err == nil && existing != nil {
-			if existing.Role == UserRoleAdmin && u.Role != UserRoleAdmin {
-				u.Role = UserRoleAdmin
+			if existing.Role == core.UserRoleAdmin && u.Role != core.UserRoleAdmin {
+				u.Role = core.UserRoleAdmin
 			}
 		}
 		if err := userRepo.UpsertUser(ctx, u); err != nil {
@@ -200,7 +204,7 @@ func EnsureTenantProvisionedRepos(
 			}
 			email = userInfo[0].Email
 		}
-		defaultProfile := Profile{
+		defaultProfile := core.Profile{
 			ID:                 "profile-" + userID,
 			UserID:             userID,
 			FullName:           fullName,
@@ -218,29 +222,29 @@ func EnsureTenantProvisionedRepos(
 	}
 
 	// 3. Seed Default Branch if missing
-	defaultBranchID := DefaultBranchID(userID)
+	defaultBranchID := core.DefaultBranchID(userID)
 	existingBranch, err := branchRepo.GetBranch(ctx, userID, defaultBranchID)
 	if err != nil || existingBranch == nil {
-		tmpl, err := templateRepo.GetTemplate(ctx, userID, TemplateStandardCleanID)
+		tmpl, err := templateRepo.GetTemplate(ctx, userID, core.TemplateStandardCleanID)
 		if err != nil {
-			tmpl, err = templateRepo.GetTemplate(ctx, SystemUserID, TemplateStandardCleanID)
+			tmpl, err = templateRepo.GetTemplate(ctx, core.SystemUserID, core.TemplateStandardCleanID)
 			if err != nil {
 				return fmt.Errorf("finding standard template for default branch: %w", err)
 			}
 		}
 
 		now := time.Now().UTC()
-		defaultBranch := Branch{
+		defaultBranch := core.Branch{
 			ID:                     defaultBranchID,
 			UserID:                 userID,
-			Name:                   DefaultBranchName,
+			Name:                   core.DefaultBranchName,
 			IsDefault:              true,
-			TemplateSetID:          TemplateStandardCleanID,
+			TemplateSetID:          core.TemplateStandardCleanID,
 			LastSyncedMainRevision: existingProf.MainRevision,
 			CreatedAt:              now,
 			UpdatedAt:              now,
 		}
-		if err := branchRepo.CreateBranch(ctx, &defaultBranch); err != nil && !errors.Is(err, ErrConflict) {
+		if err := branchRepo.CreateBranch(ctx, &defaultBranch); err != nil && !errors.Is(err, core.ErrConflict) {
 			return fmt.Errorf("seeding default branch: %w", err)
 		}
 
@@ -249,22 +253,22 @@ func EnsureTenantProvisionedRepos(
 			return fmt.Errorf("getting snapshot for default branch: %w", err)
 		}
 
-		tailoredContent := SnapshotToTailoredContent(snapshot)
+		tailoredContent := core.SnapshotToTailoredContent(snapshot)
 		htmlOut, mdOut, txtOut := renderDefaultFallback(tmpl, existingProf, tailoredContent)
 
 		verID := "ver-default-" + userID
-		ver := BranchVersion{
+		ver := core.BranchVersion{
 			ID:                verID,
 			UserID:            userID,
 			ResumeID:          defaultBranch.ID,
 			BranchID:          defaultBranch.ID,
 			VersionNumber:     1,
-			Status:            VersionStatusCompleted,
+			Status:            core.VersionStatusCompleted,
 			MainRevisionUsed:  existingProf.MainRevision,
-			TemplateSetIDUsed: TemplateStandardCleanID,
+			TemplateSetIDUsed: core.TemplateStandardCleanID,
 			ProviderUsed:      "none",
 			ModelUsed:         "none",
-			SourceType:        SourceTypeMainProfile,
+			SourceType:        core.SourceTypeMainProfile,
 			TailoredContent:   tailoredContent,
 			HTMLOutput:        htmlOut,
 			MarkdownOutput:    mdOut,
@@ -272,7 +276,7 @@ func EnsureTenantProvisionedRepos(
 			CreatedAt:         now,
 			CompletedAt:       &now,
 		}
-		if err := branchRepo.CreateVersion(ctx, &ver); err != nil && !errors.Is(err, ErrConflict) {
+		if err := branchRepo.CreateVersion(ctx, &ver); err != nil && !errors.Is(err, core.ErrConflict) {
 			return fmt.Errorf("seeding default branch version: %w", err)
 		}
 
@@ -283,7 +287,7 @@ func EnsureTenantProvisionedRepos(
 	return nil
 }
 
-func renderDefaultFallback(_ *TemplateSet, profile *Profile, _ *TailoredContent) (string, string, string) {
+func renderDefaultFallback(_ *core.TemplateSet, profile *core.Profile, _ *core.TailoredContent) (string, string, string) {
 	name := "Default User"
 	if profile != nil && profile.FullName != "" {
 		name = profile.FullName
@@ -313,10 +317,10 @@ func renderDefaultFallback(_ *TemplateSet, profile *Profile, _ *TailoredContent)
 //   - error: Non-nil if seeding fails at any step.
 func SeedDefaultData(
 	ctx context.Context,
-	profileRepo ProfileRepository,
-	branchRepo BranchRepository,
-	templateRepo TemplateRepository,
-	presetRepo PresetRepository,
+	profileRepo core.ProfileRepository,
+	branchRepo core.BranchRepository,
+	templateRepo core.TemplateRepository,
+	presetRepo core.PresetRepository,
 	defaultUserID ...string,
 ) error {
 	targetUserID := "default"
@@ -327,21 +331,21 @@ func SeedDefaultData(
 	// 1. Seed Built-in Template Sets under system
 	templates := DefaultTemplateSets()
 	for _, tmpl := range templates {
-		tmpl.UserID = SystemUserID
-		existing, err := templateRepo.GetTemplate(ctx, SystemUserID, tmpl.ID)
+		tmpl.UserID = core.SystemUserID
+		existing, err := templateRepo.GetTemplate(ctx, core.SystemUserID, tmpl.ID)
 		if err != nil || existing == nil {
-			if err := templateRepo.CreateTemplate(ctx, &tmpl); err != nil && !errors.Is(err, ErrConflict) {
+			if err := templateRepo.CreateTemplate(ctx, &tmpl); err != nil && !errors.Is(err, core.ErrConflict) {
 				return fmt.Errorf("seeding template %s: %w", tmpl.Name, err)
 			}
 		}
 	}
 
 	// 2. Seed Built-in Presets under system
-	presets := DefaultPresets(SystemUserID)
+	presets := DefaultPresets(core.SystemUserID)
 	for _, preset := range presets {
-		existing, err := presetRepo.GetPreset(ctx, SystemUserID, preset.ID)
+		existing, err := presetRepo.GetPreset(ctx, core.SystemUserID, preset.ID)
 		if err != nil || existing == nil {
-			if err := presetRepo.CreatePreset(ctx, &preset); err != nil && !errors.Is(err, ErrConflict) {
+			if err := presetRepo.CreatePreset(ctx, &preset); err != nil && !errors.Is(err, core.ErrConflict) {
 				return fmt.Errorf("seeding preset %s: %w", preset.Name, err)
 			}
 		}
@@ -350,17 +354,17 @@ func SeedDefaultData(
 	// 2.5 Seed Global Skills under system
 	globalSkills := DefaultGlobalSkills()
 	for _, skill := range globalSkills {
-		existing, err := profileRepo.GetSkill(ctx, SystemUserID, skill.ID)
+		existing, err := profileRepo.GetSkill(ctx, core.SystemUserID, skill.ID)
 		if err != nil || existing == nil {
-			if err := profileRepo.CreateSkill(ctx, &skill); err != nil && !errors.Is(err, ErrConflict) {
+			if err := profileRepo.CreateSkill(ctx, &skill); err != nil && !errors.Is(err, core.ErrConflict) {
 				return fmt.Errorf("seeding global skill %s: %w", skill.Name, err)
 			}
 		}
 	}
 
 	// 3. Ensure Default Tenant is provisioned
-	var userRepo UserRepository
-	if ur, ok := profileRepo.(UserRepository); ok {
+	var userRepo core.UserRepository
+	if ur, ok := profileRepo.(core.UserRepository); ok {
 		userRepo = ur
 	}
 	return EnsureTenantProvisionedRepos(ctx, profileRepo, branchRepo, templateRepo, userRepo, targetUserID)

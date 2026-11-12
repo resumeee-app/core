@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{.FullName}} - Comprehensive Curriculum Vitae</title>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Person",
+  "name": {{.FullName}}
+  {{if .Headline}}, "jobTitle": {{.Headline}}{{end}}
+  {{if .Email}}, "email": {{.Email}}{{end}}
+  {{if .Phone}}, "telephone": {{.Phone}}{{end}}
+  {{if .Website}}, "url": {{.Website}}{{end}}
+  {{if .Location.City}}, "address": {
+    "@type": "PostalAddress",
+    "addressLocality": {{.Location.City}}
+    {{if .Location.Region}}, "addressRegion": {{.Location.Region}}{{end}}
+    {{if .Location.CountryCode}}, "addressCountry": {{.Location.CountryCode}}{{end}}
+  }{{end}}
+  {{if .Profiles}}, "sameAs": [
+    {{range $i, $p := .Profiles}}{{if $i}}, {{end}}{{$p.URL}}{{end}}
+  ]{{end}}
+  {{if .SkillGroups}}, "knowsAbout": [
+    {{range $i, $sg := .SkillGroups}}{{range $j, $s := $sg.Skills}}{{if or $i $j}}, {{end}}{{$s}}{{end}}{{end}}
+  ]{{end}}
+}
+</script>
+<style>{{.CSSStyles}}</style>
+</head>
+<body>
+<main class="cv" id="cv">
+  <header class="header">
+    <h1 class="candidate-name">{{.FullName}}</h1>
+    {{if .Headline}}<div class="headline">{{.Headline}}</div>{{end}}
+    <address class="contact-info contact">
+      {{if .Email}}<span>Email: <a href="mailto:{{.Email}}">{{.Email}}</a></span>{{end}}
+      {{if .Phone}}<span class="separator"> | </span><span>Phone: <a href="tel:{{.Phone}}">{{.Phone}}</a></span>{{end}}
+      {{if .Location.City}}<span class="separator"> | </span><span class="location">Residence: {{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}{{if .Location.CountryCode}}, {{.Location.CountryCode}}{{end}}</span>{{end}}
+      {{if .Website}}<span class="separator"> | </span><span>Website: <a href="{{.Website}}">{{.Website}}</a></span>{{end}}
+      {{range .Profiles}}
+      <span class="separator"> | </span><span><a href="{{.URL}}">{{.Network}}: {{.Username}}</a></span>
+      {{end}}
+    </address>
+  </header>
+  {{if .Summary}}
+  <section class="resume-section summary" id="summary">
+    <h2 class="section-title">Professional Statement</h2>
+    <p class="summary-text">{{.Summary}}</p>
+  </section>
+  {{end}}
+  {{if .SkillGroups}}
+  <section class="resume-section skills" id="skills">
+    <h2 class="section-title">Competencies & Specializations</h2>
+    {{range .SkillGroups}}
+    <div class="skills-group">
+      <strong class="skills-cat">{{.Category}}:</strong> <span class="skills-list">{{join .Skills ", "}}</span>
+    </div>
+    {{end}}
+  </section>
+  {{end}}
+  {{if .Experiences}}
+  <section class="resume-section experience" id="experience">
+    <h2 class="section-title">Comprehensive Employment & Verification History</h2>
+    {{range .Experiences}}
+    <article class="entry-item experience-item record">
+      <div class="entry-header">
+        <h3 class="entry-title">{{.RoleTitle}} — {{.Company}}</h3>
+      </div>
+      <div class="entry-meta meta">
+        <div><strong>Dates of Employment:</strong> <span class="date-range">{{formatDateRange .StartDate .EndDate "Present"}}</span></div>
+        {{if .CompanyLocation.City}}<div><strong>Company Location:</strong> {{.CompanyLocation.City}}{{if .CompanyLocation.Region}}, {{.Location.Region}}{{end}}{{if .CompanyLocation.CountryCode}}, {{.Location.CountryCode}}{{end}}</div>{{end}}
+        {{if .CompanyContact}}<div><strong>Company Contact:</strong> {{.CompanyContact.Type}}: {{.CompanyContact.Value}}</div>{{end}}
+        {{if .HoursPerWeek}}<div><strong>Hours per Week:</strong> {{.HoursPerWeek}}</div>{{end}}
+        {{if .SupervisorName}}<div><strong>Supervisor:</strong> {{.SupervisorName}}{{if .SupervisorContact}} ({{.SupervisorContact}}){{end}}</div>{{end}}
+        {{if .DutiesSummary}}<p class="duties"><strong>Official Duties & Responsibilities:</strong> {{.DutiesSummary}}</p>{{end}}
+      </div>
+      {{if .Bullets}}
+      <ul class="bullet-list">
+        {{range .Bullets}}
+        <li>{{.Text}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+  {{if .Projects}}
+  <section class="resume-section projects" id="projects">
+    <h2 class="section-title">Key Projects & Initiatives</h2>
+    {{range .Projects}}
+    <article class="entry-item project-item project-record">
+      <div class="entry-header">
+        <h3 class="entry-title">{{.Name}}{{if .Role}} ({{.Role}}){{end}}</h3>
+        <div class="entry-meta meta"><span class="date-range">{{formatDateRange .StartDate .EndDate "Present"}}</span>{{if .URL}} | <a href="{{.URL}}">{{.URL}}</a>{{end}}</div>
+      </div>
+      {{if .Summary}}<p class="project-summary">{{.Summary}}</p>{{end}}
+      {{if .Bullets}}
+      <ul class="bullet-list">
+        {{range .Bullets}}
+        <li>{{.Text}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+  {{if .Education}}
+  <section class="resume-section education" id="education">
+    <h2 class="section-title">Academic Credentials</h2>
+    {{range .Education}}
+    <article class="entry-item education-item edu-record">
+      <div class="entry-header">
+        <h3 class="entry-title">{{.Degree}}{{if .Field}} in {{.Field}}{{end}} — {{.Institution}}</h3>
+        <div class="entry-meta meta"><strong>Period:</strong> <span class="date-range">{{formatDateRange .StartDate .EndDate "Present"}}</span>{{if .Score}} | <strong>Grade/Score:</strong> {{.Score}}{{end}}</div>
+      </div>
+      {{if .Bullets}}
+      <ul class="bullet-list">
+        {{range .Bullets}}
+        <li>{{.Text}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+  {{if .Certifications}}
+  <section class="resume-section certifications" id="certifications">
+    <h2 class="section-title">Professional Licenses & Certifications</h2>
+    <ul class="bullet-list certifications-list">
+      {{range .Certifications}}
+      <li><strong>{{.Name}}</strong> — Issued by {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}{{if .URL}} [<a href="{{.URL}}">{{.URL}}</a>]{{end}}</li>
+      {{end}}
+    </ul>
+  </section>
+  {{end}}
+</main>
+</body>
+</html>

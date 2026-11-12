@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{.FullName}} - Technical Resume</title>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Person",
+  "name": {{.FullName}}
+  {{if .Headline}}, "jobTitle": {{.Headline}}{{end}}
+  {{if .Email}}, "email": {{.Email}}{{end}}
+  {{if .Phone}}, "telephone": {{.Phone}}{{end}}
+  {{if .Website}}, "url": {{.Website}}{{end}}
+  {{if .Location.City}}, "address": {
+    "@type": "PostalAddress",
+    "addressLocality": {{.Location.City}}
+    {{if .Location.Region}}, "addressRegion": {{.Location.Region}}{{end}}
+    {{if .Location.CountryCode}}, "addressCountry": {{.Location.CountryCode}}{{end}}
+  }{{end}}
+  {{if .Profiles}}, "sameAs": [
+    {{range $i, $p := .Profiles}}{{if $i}}, {{end}}{{$p.URL}}{{end}}
+  ]{{end}}
+  {{if .AllSkills}}, "knowsAbout": [
+    {{range $i, $s := .AllSkills}}{{if $i}}, {{end}}{{$s}}{{end}}
+  ]{{end}}
+}
+</script>
+<style>{{.CSSStyles}}</style>
+</head>
+<body>
+<main class="resume" id="resume">
+  <header class="header">
+    <h1 class="candidate-name">{{.FullName}}</h1>
+    {{if .Headline}}<div class="headline">{{.Headline}}</div>{{end}}
+    <address class="contact-info contact">
+      {{if .Email}}<span><a href="mailto:{{.Email}}">{{.Email}}</a></span>{{end}}
+      {{if .Phone}}{{if .Email}}<span class="separator">•</span>{{end}}<span><a href="tel:{{.Phone}}">{{.Phone}}</a></span>{{end}}
+      {{if .Location.City}}{{if or .Email .Phone}}<span class="separator">•</span>{{end}}<span class="location">{{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}{{if .Location.CountryCode}}, {{.Location.CountryCode}}{{end}}</span>{{end}}
+      {{if .Website}}{{if or .Email (or .Phone .Location.City)}}<span class="separator">•</span>{{end}}<span><a href="{{.Website}}">{{.Website}}</a></span>{{end}}
+      {{range $i, $p := .Profiles}}
+      {{if or $i (or $.Email (or $.Phone (or $.Location.City $.Website)))}}<span class="separator">•</span>{{end}}<span><a href="{{.URL}}">{{.Network}}: {{.Username}}</a></span>
+      {{end}}
+    </address>
+  </header>
+  {{if .Summary}}
+  <section class="resume-section summary" id="summary">
+    <h2 class="section-title">Professional Summary</h2>
+    <p class="summary-text">{{.Summary}}</p>
+  </section>
+  {{end}}
+  {{if .SkillGroups}}
+  <section class="resume-section skills" id="skills">
+    <h2 class="section-title">Technical Competencies</h2>
+    {{range .SkillGroups}}
+    <div class="skills-group">
+      <strong class="skills-cat skills-category">{{.Category}}:</strong> <span class="skills-list">{{join .Skills ", "}}</span>
+    </div>
+    {{end}}
+  </section>
+  {{end}}
+  {{if .Experiences}}
+  <section class="resume-section experience" id="experience">
+    <h2 class="section-title">Professional Experience</h2>
+    {{range .Experiences}}
+    <article class="entry-item experience-item job">
+      <div class="entry-header">
+        <h3 class="entry-title">{{.RoleTitle}} — {{.Company}}</h3>
+        <div class="entry-meta meta"><span class="date-range">{{formatDateRange .StartDate .EndDate "Present"}}</span>{{if .Location.City}}<span class="entry-location"> | {{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}</span>{{end}}</div>
+      </div>
+      {{if .Bullets}}
+      <ul class="bullet-list">
+        {{range .Bullets}}
+        <li>{{.Text}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+  {{if .Projects}}
+  <section class="resume-section projects" id="projects">
+    <h2 class="section-title">Technical Projects</h2>
+    {{range .Projects}}
+    <article class="entry-item project-item project">
+      <div class="entry-header">
+        <h3 class="entry-title">{{.Name}}{{if .Role}} ({{.Role}}){{end}}</h3>
+        {{if .URL}}<div class="entry-meta meta"><a href="{{.URL}}">{{.URL}}</a></div>{{end}}
+      </div>
+      {{if .Summary}}<p class="project-summary">{{.Summary}}</p>{{end}}
+      {{if .Bullets}}
+      <ul class="bullet-list">
+        {{range .Bullets}}
+        <li>{{.Text}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+  {{if .Education}}
+  <section class="resume-section education" id="education">
+    <h2 class="section-title">Education & Credentials</h2>
+    {{range .Education}}
+    <article class="entry-item education-item edu">
+      <div class="entry-header">
+        <h3 class="entry-title">{{.Degree}}{{if .Field}} in {{.Field}}{{end}} — {{.Institution}}</h3>
+        <div class="entry-meta meta"><span class="date-range">{{formatDateRange .StartDate .EndDate "Present"}}</span>{{if .Score}}<span class="entry-score"> | {{.Score}}</span>{{end}}</div>
+      </div>
+      {{if .Bullets}}
+      <ul class="bullet-list">
+        {{range .Bullets}}
+        <li>{{.Text}}</li>
+        {{end}}
+      </ul>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+  {{if .Certifications}}
+  <section class="resume-section certifications" id="certifications">
+    <h2 class="section-title">Certifications</h2>
+    <ul class="bullet-list certifications-list">
+      {{range .Certifications}}
+      <li><strong>{{.Name}}</strong> — {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}</li>
+      {{end}}
+    </ul>
+  </section>
+  {{end}}
+</main>
+</body>
+</html>

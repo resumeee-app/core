@@ -1,0 +1,45 @@
+{{.FullName}} - COMPREHENSIVE CURRICULUM VITAE
+{{if .Headline}}{{.Headline}}
+{{end}}{{if .Email}}Email: {{.Email}}{{end}}{{if .Phone}} | Phone: {{.Phone}}{{end}}{{if .Location.City}} | Location: {{.Location.City}}{{if .Location.Region}}, {{.Location.Region}}{{end}}{{end}}
+
+{{if .Summary}}
+PROFESSIONAL STATEMENT:
+{{.Summary}}
+{{end}}
+{{if .SkillGroups}}
+COMPETENCIES:
+{{range .SkillGroups}}{{.Category}}: {{join .Skills ", "}}
+{{end}}{{end}}
+{{if .Experiences}}
+EMPLOYMENT HISTORY:
+{{range .Experiences}}
+{{.RoleTitle}} at {{.Company}}
+Dates: {{formatDateRange .StartDate .EndDate "Present"}}
+{{if .CompanyLocation.City}}Company Location: {{.CompanyLocation.City}}{{if .CompanyLocation.Region}}, {{.Location.Region}}{{end}}
+{{end}}{{if .CompanyContact}}Company Contact: {{.CompanyContact.Type}}: {{.CompanyContact.Value}}
+{{end}}{{if .HoursPerWeek}}Hours/Week: {{.HoursPerWeek}}
+{{end}}{{if .SupervisorName}}Supervisor: {{.SupervisorName}}{{if .SupervisorContact}} ({{.SupervisorContact}}){{end}}
+{{end}}{{if .DutiesSummary}}Official Duties: {{.DutiesSummary}}
+{{end}}Achievements:
+{{range .Bullets}}* {{.Text}}
+{{end}}
+{{end}}{{end}}
+{{if .Projects}}
+PROJECTS:
+{{range .Projects}}
+{{.Name}}{{if .Role}} - {{.Role}}{{end}} ({{formatDateRange .StartDate .EndDate "Present"}})
+{{if .Summary}}{{.Summary}}
+{{end}}{{range .Bullets}}* {{.Text}}
+{{end}}
+{{end}}{{end}}
+{{if .Education}}
+ACADEMIC CREDENTIALS:
+{{range .Education}}
+{{.Degree}}{{if .Field}} in {{.Field}}{{end}} - {{.Institution}} ({{formatDateRange .StartDate .EndDate "Present"}}){{if .Score}} - {{.Score}}{{end}}
+{{range .Bullets}}* {{.Text}}
+{{end}}
+{{end}}{{end}}
+{{if .Certifications}}
+CERTIFICATIONS:
+{{range .Certifications}}* {{.Name}} - {{.Issuer}}{{if .Date}} ({{year .Date}}){{end}}
+{{end}}{{end}}

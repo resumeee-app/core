@@ -5,19 +5,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
-func sampleCandidateProfile() domain.Profile {
-	return domain.Profile{
+func sampleCandidateProfile() core.Profile {
+	return core.Profile{
 		ID:       "prof-123",
 		FullName: "Alice Walker",
 		Email:    "alice.walker@example.org",
 		Phone:    "+1 (555) 234-5678",
 		Headline: "Staff Cloud Engineer (Alice Walker)",
 		Summary:  "Alice Walker is an experienced systems architect. Reach me at alice.walker@example.org or +1 (555) 234-5678. Portfolio: https://alicewalker.dev.",
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "LinkedIn", Username: "alicewalker", URL: "https://linkedin.com/in/alicewalker"},
 			{Network: "GitHub", Username: "alicewalker-dev", URL: "https://github.com/alicewalker-dev"},
 		},
@@ -27,22 +27,22 @@ func sampleCandidateProfile() domain.Profile {
 	}
 }
 
-func sampleCandidateSnapshot() *domain.MainProfileSnapshot {
+func sampleCandidateSnapshot() *core.MainProfileSnapshot {
 	prof := sampleCandidateProfile()
-	endDate := domain.DatePtr(domain.NewDate(2023, 12, 31))
-	return &domain.MainProfileSnapshot{
+	endDate := core.DatePtr(core.NewDate(2023, 12, 31))
+	return &core.MainProfileSnapshot{
 		Profile: prof,
-		Experiences: []domain.WorkExperience{
+		Experiences: []core.WorkExperience{
 			{
 				ID:                "exp-1",
 				Company:           "Acme Cloud",
 				RoleTitle:         "Lead Engineer",
-				StartDate:         domain.NewDate(2021, 1, 1),
+				StartDate:         core.NewDate(2021, 1, 1),
 				EndDate:           endDate,
 				DutiesSummary:     "Alice Walker led distributed cache migration.",
 				SupervisorName:    "Bob Boss",
 				SupervisorContact: "alice.walker@example.org", // Candidate's email placed in verification field
-				Facts: []domain.Fact{
+				Facts: []core.Fact{
 					{
 						ID:        "fact-1",
 						Statement: "Alice Walker engineered Raft consensus layer saving $1M annually.",
@@ -51,7 +51,7 @@ func sampleCandidateSnapshot() *domain.MainProfileSnapshot {
 				},
 			},
 		},
-		Projects: []domain.Project{
+		Projects: []core.Project{
 			{
 				ID:      "proj-1",
 				Name:    "Raft-Go",
@@ -60,13 +60,13 @@ func sampleCandidateSnapshot() *domain.MainProfileSnapshot {
 				Summary: "Authored by Alice Walker (alicewalker-dev).",
 			},
 		},
-		Education: []domain.Education{
+		Education: []core.Education{
 			{
 				ID:          "edu-1",
 				Institution: "MIT",
 				Degree:      "M.S.",
 				Field:       "CS",
-				Facts: []domain.Fact{
+				Facts: []core.Fact{
 					{
 						ID:        "fact-edu-1",
 						Statement: "Alice Walker authored thesis on Paxos variants.",
@@ -74,7 +74,7 @@ func sampleCandidateSnapshot() *domain.MainProfileSnapshot {
 				},
 			},
 		},
-		Certifications: []domain.Certification{
+		Certifications: []core.Certification{
 			{
 				ID:      "cert-1",
 				Name:    "CKA",
@@ -82,7 +82,7 @@ func sampleCandidateSnapshot() *domain.MainProfileSnapshot {
 				Summary: "Issued to Alice Walker.",
 			},
 		},
-		Facts: []domain.Fact{
+		Facts: []core.Fact{
 			{
 				ID:        "fact-root-1",
 				Statement: "Alice Walker holds 3 patents.",
@@ -197,21 +197,21 @@ func TestSession_ObfuscateRequest(t *testing.T) {
 	snap := sampleCandidateSnapshot()
 	session := privacy.NewSession(&snap.Profile)
 
-	req := domain.GenerationRequest{
+	req := core.GenerationRequest{
 		GlobalRules:        "Always highlight Alice Walker's leadership at alice.walker@example.org.",
 		PresetInstructions: "Format concise bullets for Alice Walker.",
 		MainProfile:        snap,
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRequirements: "Looking for an engineer like Alice Walker (contact: alice.walker@example.org).",
 			BranchInstructions: "Emphasize Alice Walker's cloud background.",
 		},
-		PriorVersion: &domain.TailoredContent{
+		PriorVersion: &core.TailoredContent{
 			Summary: "Prior version summary for Alice Walker.",
-			Experiences: []domain.TailoredExperience{
+			Experiences: []core.TailoredExperience{
 				{
 					SourceEntityID: "exp-1",
 					Company:        "Acme",
-					Bullets: []domain.TailoredBullet{
+					Bullets: []core.TailoredBullet{
 						{Text: "Alice Walker scaled infrastructure by 300%."},
 					},
 				},
@@ -254,24 +254,24 @@ func TestSession_DeobfuscationRestoresOriginalValues(t *testing.T) {
 	session := privacy.NewSession(&snap.Profile)
 
 	// Synthetic LLM output echoing placeholders
-	tailored := domain.TailoredContent{
+	tailored := core.TailoredContent{
 		Summary: "Results-driven cloud architect " + privacy.PlaceholderFullName + " with expertise in Kubernetes. Contact: " + privacy.PlaceholderEmail + " or " + privacy.PlaceholderPhone + ". See " + privacy.PlaceholderWebsite + " and " + "https://social.example.com/profile-1" + ".",
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{Category: "Cloud", Skills: []string{"Go", "Kubernetes"}},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme",
 				RoleTitle:      "Staff Architect (" + privacy.PlaceholderFullName + ")",
 				DutiesSummary:  "Managed team; contact at " + privacy.PlaceholderEmail,
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{Text: privacy.PlaceholderFullName + " designed zero-trust networking reducing attack surface."},
 					{Text: "Direct inquiries to " + privacy.PlaceholderEmail + " or candidate profile candidate-social-1."},
 				},
 			},
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{
 				SourceEntityID: "proj-1",
 				Name:           "Raft-Go",
@@ -281,13 +281,13 @@ func TestSession_DeobfuscationRestoresOriginalValues(t *testing.T) {
 		},
 	}
 
-	gapReport := domain.GapReport{
+	gapReport := core.GapReport{
 		OverallMatchSummary: privacy.PlaceholderFullName + " strongly matches 90% of requirements.",
 		StrategicRecommendations: []string{
 			privacy.PlaceholderFullName + " should highlight enterprise scaling.",
 			"Add portfolio link " + privacy.PlaceholderWebsite,
 		},
-		MissingRequirements: []domain.GapItem{
+		MissingRequirements: []core.GapItem{
 			{
 				Requirement:       "Experience with AWS",
 				MissingArea:       "Cloud Provider",
@@ -297,7 +297,7 @@ func TestSession_DeobfuscationRestoresOriginalValues(t *testing.T) {
 		},
 	}
 
-	genResp := domain.GenerationResponse{
+	genResp := core.GenerationResponse{
 		TailoredContent: tailored,
 		GapReport:       gapReport,
 	}
@@ -365,7 +365,7 @@ func TestSession_DeobfuscationRestoresOriginalValues(t *testing.T) {
 
 func TestSession_IdempotenceAndEmptySafety(t *testing.T) {
 	// 1. Empty profile should not panic or corrupt
-	emptySession := privacy.NewSession(&domain.Profile{})
+	emptySession := privacy.NewSession(&core.Profile{})
 	raw := "Hello world"
 	if emptySession.ObfuscateString(raw) != raw {
 		t.Errorf("empty session corrupted raw string")
@@ -375,13 +375,13 @@ func TestSession_IdempotenceAndEmptySafety(t *testing.T) {
 	}
 
 	// 2. Nil request / response safety
-	var nilResp *domain.GenerationResponse
+	var nilResp *core.GenerationResponse
 	emptySession.DeobfuscateGenerationResponse(nilResp) // must not panic
 
-	var nilContent *domain.TailoredContent
+	var nilContent *core.TailoredContent
 	emptySession.DeobfuscateTailoredContent(nilContent) // must not panic
 
-	var nilReport *domain.GapReport
+	var nilReport *core.GapReport
 	emptySession.DeobfuscateGapReport(nilReport) // must not panic
 
 	// 3. Repeated deobfuscation is idempotent
@@ -400,10 +400,10 @@ func TestSession_IdempotenceAndEmptySafety(t *testing.T) {
 }
 
 func TestSession_ShortUsernames_DoNotCorruptTechnicalTerms(t *testing.T) {
-	prof := &domain.Profile{
+	prof := &core.Profile{
 		FullName: "Test Candidate",
 		Email:    "test@example.com",
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "GitHub", Username: "go", URL: "https://github.com/go"},
 			{Network: "Twitter", Username: "ai", URL: "https://twitter.com/ai"},
 			{Network: "Custom", Username: "c", URL: "https://custom.com/c"},
@@ -411,7 +411,7 @@ func TestSession_ShortUsernames_DoNotCorruptTechnicalTerms(t *testing.T) {
 	}
 
 	session := privacy.NewSession(prof)
-	snap := &domain.MainProfileSnapshot{Profile: *prof}
+	snap := &core.MainProfileSnapshot{Profile: *prof}
 	obf := session.ObfuscateSnapshot(snap)
 
 	// 1. Structured usernames are masked to synthetic placeholders
@@ -443,7 +443,7 @@ func TestSession_ShortUsernames_DoNotCorruptTechnicalTerms(t *testing.T) {
 
 func TestSession_PhoneBoundary_AndMetricsProtection(t *testing.T) {
 	// Case A: Partial/short phone like "+1" (substantive digits < 7)
-	shortProf := &domain.Profile{
+	shortProf := &core.Profile{
 		FullName: "Metric Master",
 		Phone:    "+1",
 	}
@@ -454,7 +454,7 @@ func TestSession_PhoneBoundary_AndMetricsProtection(t *testing.T) {
 	}
 
 	// Case B: Full phone number starting with '+'
-	fullProf := &domain.Profile{
+	fullProf := &core.Profile{
 		FullName: "Alice Walker",
 		Phone:    "+1 555 432 1098",
 	}
@@ -485,7 +485,7 @@ func TestSession_PhoneBoundary_AndMetricsProtection(t *testing.T) {
 	}
 
 	// Case C: Phone with parentheses like (555) 432-1098
-	parenProf := &domain.Profile{
+	parenProf := &core.Profile{
 		FullName: "Bob Smith",
 		Phone:    "(555) 432-1098",
 	}
@@ -501,12 +501,12 @@ func TestSession_PhoneBoundary_AndMetricsProtection(t *testing.T) {
 }
 
 func TestSession_InvalidURLs_DoNotPolluteOrCorrupt(t *testing.T) {
-	prof := &domain.Profile{
+	prof := &core.Profile{
 		FullName: "URL Candidate",
 		Metadata: map[string]any{
 			"website": "/",
 		},
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "Short", URL: "co"},
 			{Network: "Incomplete", URL: "http://"},
 		},

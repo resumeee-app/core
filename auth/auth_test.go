@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/resumeee-app/resumeee-core/auth"
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 type stubVerifier struct {
@@ -18,11 +18,11 @@ type stubVerifier struct {
 	err error
 }
 
-func (s *stubVerifier) VerifyIDToken(_ context.Context, _ string) (*domain.TokenInfo, error) {
+func (s *stubVerifier) VerifyIDToken(_ context.Context, _ string) (*core.TokenInfo, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &domain.TokenInfo{UID: s.uid}, nil
+	return &core.TokenInfo{UID: s.uid}, nil
 }
 
 func TestExtractBearerToken(t *testing.T) {
@@ -82,10 +82,10 @@ func TestAdminAuthProvider(t *testing.T) {
 type mockEmptyNameProvider struct{}
 
 func (m *mockEmptyNameProvider) Name() string { return "   " }
-func (m *mockEmptyNameProvider) AuthenticateRequest(_ *http.Request) (*domain.TokenInfo, error) {
+func (m *mockEmptyNameProvider) AuthenticateRequest(_ *http.Request) (*core.TokenInfo, error) {
 	return nil, nil
 }
-func (m *mockEmptyNameProvider) VerifyIDToken(_ context.Context, _ string) (*domain.TokenInfo, error) {
+func (m *mockEmptyNameProvider) VerifyIDToken(_ context.Context, _ string) (*core.TokenInfo, error) {
 	return nil, nil
 }
 
@@ -160,8 +160,8 @@ func TestDefensiveNilReceivers(t *testing.T) {
 	if _, err := tvp.AuthenticateRequest(req); !errors.Is(err, auth.ErrProviderNotConfigured) {
 		t.Errorf("expected ErrProviderNotConfigured, got %v", err)
 	}
-	if _, err := tvp.VerifyIDToken(ctx, "token"); !errors.Is(err, domain.ErrUnauthorized) {
-		t.Errorf("expected domain.ErrUnauthorized, got %v", err)
+	if _, err := tvp.VerifyIDToken(ctx, "token"); !errors.Is(err, core.ErrUnauthorized) {
+		t.Errorf("expected core.ErrUnauthorized, got %v", err)
 	}
 
 	reg := auth.NewRegistry()

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 )
 
@@ -17,23 +17,23 @@ func TestBuildPrompt_EntitiesUseShortIDs(t *testing.T) {
 	uuidFact := "fact-3db884b2-f155-442b-9e0a-ef5f8b96d997"
 	uuidProj := "proj-55556666-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 
-	req := domain.GenerationRequest{
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{FullName: "Test Candidate"},
-			Skills: []domain.Skill{
+	req := core.GenerationRequest{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{FullName: "Test Candidate"},
+			Skills: []core.Skill{
 				{
 					ID:      uuidSkill,
 					ShortID: "skill-go",
 					Name:    "Go",
 				},
 			},
-			Experiences: []domain.WorkExperience{
+			Experiences: []core.WorkExperience{
 				{
 					ID:        uuidExp,
 					ShortID:   "exp-1",
 					Company:   "Acme Corp",
 					RoleTitle: "Engineer",
-					Facts: []domain.Fact{
+					Facts: []core.Fact{
 						{
 							ID:        uuidFact,
 							ShortID:   "fact-1",
@@ -43,7 +43,7 @@ func TestBuildPrompt_EntitiesUseShortIDs(t *testing.T) {
 					},
 				},
 			},
-			Projects: []domain.Project{
+			Projects: []core.Project{
 				{
 					ID:      uuidProj,
 					ShortID: "proj-1",
@@ -52,7 +52,7 @@ func TestBuildPrompt_EntitiesUseShortIDs(t *testing.T) {
 			},
 			ExportedAt: time.Now(),
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRole: "Senior Engineer",
 		},
 	}
@@ -97,16 +97,16 @@ func TestBuildPrompt_FactOwnerUsesShortID(t *testing.T) {
 	uuidExp := "exp-9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 	uuidFact := "fact-3db884b2-f155-442b-9e0a-ef5f8b96d997"
 
-	req := domain.GenerationRequest{
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{FullName: "Test Candidate"},
-			Experiences: []domain.WorkExperience{
+	req := core.GenerationRequest{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{FullName: "Test Candidate"},
+			Experiences: []core.WorkExperience{
 				{
 					ID:        uuidExp,
 					ShortID:   "exp-1",
 					Company:   "Acme Corp",
 					RoleTitle: "Engineer",
-					Facts: []domain.Fact{
+					Facts: []core.Fact{
 						{
 							ID:        uuidFact,
 							ShortID:   "fact-1",
@@ -117,7 +117,7 @@ func TestBuildPrompt_FactOwnerUsesShortID(t *testing.T) {
 				},
 			},
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRole: "Senior Engineer",
 		},
 	}
@@ -139,10 +139,10 @@ func TestBuildPrompt_PinnedAndExcludedUseShortID(t *testing.T) {
 	uuidExp := "exp-9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 	uuidProj := "proj-55556666-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 
-	req := domain.GenerationRequest{
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{FullName: "Test Candidate"},
-			Experiences: []domain.WorkExperience{
+	req := core.GenerationRequest{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{FullName: "Test Candidate"},
+			Experiences: []core.WorkExperience{
 				{
 					ID:        uuidExp,
 					ShortID:   "exp-1",
@@ -150,7 +150,7 @@ func TestBuildPrompt_PinnedAndExcludedUseShortID(t *testing.T) {
 					RoleTitle: "Engineer",
 				},
 			},
-			Projects: []domain.Project{
+			Projects: []core.Project{
 				{
 					ID:      uuidProj,
 					ShortID: "proj-1",
@@ -158,7 +158,7 @@ func TestBuildPrompt_PinnedAndExcludedUseShortID(t *testing.T) {
 				},
 			},
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			PinnedEntityIDs:   []string{uuidExp},
 			ExcludedEntityIDs: []string{uuidProj},
 		},
@@ -184,32 +184,32 @@ func TestBuildPrompt_PriorVersionUsesShortID(t *testing.T) {
 	uuidFact := "fact-3db884b2-f155-442b-9e0a-ef5f8b96d997"
 	uuidSkill := "skill-12345678-3b7d-4bad-9bdd-2b0d7b3dcb6d"
 
-	req := domain.GenerationRequest{
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{FullName: "Test Candidate"},
-			Skills: []domain.Skill{
+	req := core.GenerationRequest{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{FullName: "Test Candidate"},
+			Skills: []core.Skill{
 				{ID: uuidSkill, ShortID: "skill-go", Name: "Go"},
 			},
-			Experiences: []domain.WorkExperience{
+			Experiences: []core.WorkExperience{
 				{
 					ID:        uuidExp,
 					ShortID:   "exp-1",
 					Company:   "Acme Corp",
 					RoleTitle: "Engineer",
-					Facts: []domain.Fact{
+					Facts: []core.Fact{
 						{ID: uuidFact, ShortID: "fact-1", OwnerID: uuidExp, Statement: "Built distributed system"},
 					},
 				},
 			},
 		},
-		BranchContext: domain.Branch{TargetRole: "Senior Engineer"},
-		PriorVersion: &domain.TailoredContent{
-			Experiences: []domain.TailoredExperience{
+		BranchContext: core.Branch{TargetRole: "Senior Engineer"},
+		PriorVersion: &core.TailoredContent{
+			Experiences: []core.TailoredExperience{
 				{
 					SourceEntityID: uuidExp,
 					Company:        "Acme Corp",
 					RoleTitle:      "Engineer",
-					Bullets: []domain.TailoredBullet{
+					Bullets: []core.TailoredBullet{
 						{
 							Text:           "Built distributed system with 99.99% uptime.",
 							SourceFactIDs:  []string{uuidFact},
@@ -249,8 +249,8 @@ func TestBuildPrompt_PriorVersionUsesShortID(t *testing.T) {
 // TestBuildPrompt_SystemRulesSpecifyShortIDs asserts that system prompt rules explicitly instruct
 // the LLM to output short identifiers and reference examples like 'exp-1' and 'fact-1'.
 func TestBuildPrompt_SystemRulesSpecifyShortIDs(t *testing.T) {
-	req := domain.GenerationRequest{
-		BranchContext: domain.Branch{TargetRole: "Staff Engineer"},
+	req := core.GenerationRequest{
+		BranchContext: core.Branch{TargetRole: "Staff Engineer"},
 	}
 
 	payload, err := llm.BuildPrompt(req)

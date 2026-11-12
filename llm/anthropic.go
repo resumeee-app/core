@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 const (
@@ -18,7 +18,7 @@ const (
 	anthropicToolName       = "generate_tailored_resume"
 )
 
-// AnthropicProvider implements domain.LLMClient for Anthropic Claude models via the Messages API.
+// AnthropicProvider implements core.LLMClient for Anthropic Claude models via the Messages API.
 type AnthropicProvider struct {
 	apiKey       string
 	baseURL      string
@@ -51,9 +51,9 @@ func (p *AnthropicProvider) DefaultModel() string {
 }
 
 // Models returns the default model option for Anthropic.
-func (p *AnthropicProvider) Models() []domain.ModelOption {
+func (p *AnthropicProvider) Models() []core.ModelOption {
 	def := p.DefaultModel()
-	return []domain.ModelOption{
+	return []core.ModelOption{
 		{
 			Provider:    ProviderAnthropic,
 			Model:       def,
@@ -64,7 +64,7 @@ func (p *AnthropicProvider) Models() []domain.ModelOption {
 }
 
 // Complete executes a completion request against the Anthropic Messages API.
-func (p *AnthropicProvider) Complete(ctx context.Context, req domain.LLMCompletionRequest) (*domain.LLMCompletionResponse, error) {
+func (p *AnthropicProvider) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
 		model = p.DefaultModel()
@@ -146,7 +146,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req domain.LLMCompleti
 
 	rawBody := string(bodyBytes)
 	if err := checkStatusError("anthropic", resp.StatusCode, bodyBytes); err != nil {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, err
@@ -169,13 +169,13 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req domain.LLMCompleti
 
 	var anthropicResp anthropicResponse
 	if err := json.Unmarshal(bodyBytes, &anthropicResp); err != nil {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, fmt.Errorf("%w: malformed anthropic response: %v", ErrInvalidResponse, err)
 	}
 
-	usage := domain.TokenUsage{
+	usage := core.TokenUsage{
 		PromptTokens:     anthropicResp.Usage.InputTokens,
 		CompletionTokens: anthropicResp.Usage.OutputTokens,
 		TotalTokens:      anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens,
@@ -190,12 +190,12 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req domain.LLMCompleti
 			}
 		}
 		if len(targetInput) == 0 {
-			return &domain.LLMCompletionResponse{
+			return &core.LLMCompletionResponse{
 				RawBody:    rawBody,
 				StatusCode: resp.StatusCode,
 			}, fmt.Errorf("%w: no %s tool call in anthropic response", ErrInvalidResponse, anthropicToolName)
 		}
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			Text:       string(targetInput),
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
@@ -205,7 +205,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req domain.LLMCompleti
 
 	for _, block := range anthropicResp.Content {
 		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-			return &domain.LLMCompletionResponse{
+			return &core.LLMCompletionResponse{
 				Text:       strings.TrimSpace(block.Text),
 				RawBody:    rawBody,
 				StatusCode: resp.StatusCode,
@@ -214,7 +214,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req domain.LLMCompleti
 		}
 	}
 
-	return &domain.LLMCompletionResponse{
+	return &core.LLMCompletionResponse{
 		RawBody:    rawBody,
 		StatusCode: resp.StatusCode,
 	}, fmt.Errorf("%w: no text content returned by anthropic", ErrInvalidResponse)

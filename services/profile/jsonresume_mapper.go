@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 const defaultSchemaURL = "https://raw.githubusercontent.com/jsonresume/resume-schema/v1.0.0/schema.json"
@@ -22,23 +22,23 @@ const defaultSchemaURL = "https://raw.githubusercontent.com/jsonresume/resume-sc
 //   - revision: Main revision sequence number.
 //
 // Returns:
-//   - Pointer to MainProfileSnapshot with generated IDs and short IDs, or domain.ErrValidation.
-func ToSnapshot(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64) (*domain.MainProfileSnapshot, error) {
+//   - Pointer to MainProfileSnapshot with generated IDs and short IDs, or core.ErrValidation.
+func ToSnapshot(resume *JSONResume, userID string, existingProfile *core.Profile, revision int64) (*core.MainProfileSnapshot, error) {
 	return ToSnapshotWithGlobalSkills(resume, userID, existingProfile, revision, nil)
 }
 
 // ToSnapshotWithGlobalSkills converts a validated JSON Resume AST into a full MainProfileSnapshot,
 // resolving candidate skills against the global skills catalog before creating custom tenant skills.
-func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfile *domain.Profile, revision int64, globalSkills []domain.Skill) (*domain.MainProfileSnapshot, error) {
+func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfile *core.Profile, revision int64, globalSkills []core.Skill) (*core.MainProfileSnapshot, error) {
 	if resume == nil {
-		return nil, domain.ErrValidation
+		return nil, core.ErrValidation
 	}
 	if userID == "" {
 		userID = "default"
 	}
 
 	// 1. Construct Profile root
-	profileID := domain.GenerateID("prof")
+	profileID := core.GenerateID("prof")
 	rules := ""
 	metadata := make(map[string]any)
 
@@ -94,23 +94,23 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 		metadata["jsonresume_unmapped"] = unmappedData
 	}
 
-	profiles := make([]domain.SocialLink, len(resume.Basics.Profiles))
+	profiles := make([]core.SocialLink, len(resume.Basics.Profiles))
 	for i, p := range resume.Basics.Profiles {
-		profiles[i] = domain.SocialLink{
+		profiles[i] = core.SocialLink{
 			Network:  p.Network,
 			Username: p.Username,
 			URL:      p.URL,
 		}
 	}
 
-	prof := domain.Profile{
+	prof := core.Profile{
 		ID:       profileID,
 		UserID:   userID,
 		FullName: resume.Basics.Name,
 		Headline: resume.Basics.Label,
 		Email:    resume.Basics.Email,
 		Phone:    resume.Basics.Phone,
-		Location: domain.Location{
+		Location: core.Location{
 			Address:     resume.Basics.Location.Address,
 			PostalCode:  resume.Basics.Location.PostalCode,
 			City:        resume.Basics.Location.City,
@@ -127,7 +127,7 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 	}
 
 	// 2. Map Skills and build matching index
-	globalSkillsByName := make(map[string]domain.Skill)
+	globalSkillsByName := make(map[string]core.Skill)
 	for _, gs := range globalSkills {
 		globalSkillsByName[strings.ToLower(strings.TrimSpace(gs.Name))] = gs
 		if gs.Slug != "" {
@@ -135,11 +135,11 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 		}
 	}
 
-	skills := make([]domain.Skill, len(resume.Skills))
+	skills := make([]core.Skill, len(resume.Skills))
 	for i, s := range resume.Skills {
 		cleanName := strings.TrimSpace(s.Name)
 		lookupKey := strings.ToLower(cleanName)
-		slug := domain.Slugify(cleanName)
+		slug := core.Slugify(cleanName)
 
 		canonicalName := s.Name
 		if matchedGlobal, found := globalSkillsByName[lookupKey]; found {
@@ -150,9 +150,9 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 			slug = matchedGlobal.Slug
 		}
 
-		skills[i] = domain.Skill{
-			ID:          domain.GenerateID("skill"),
-			ShortID:     domain.GenerateShortID("skill"),
+		skills[i] = core.Skill{
+			ID:          core.GenerateID("skill"),
+			ShortID:     core.GenerateShortID("skill"),
 			UserID:      userID,
 			Name:        canonicalName,
 			Slug:        slug,
@@ -165,25 +165,25 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 	}
 	matcher := newSkillMatcher(skills)
 
-	var allFacts []domain.Fact
+	var allFacts []core.Fact
 
 	// 3. Map Work Experiences and child Facts
-	experiences := make([]domain.WorkExperience, len(resume.Work))
+	experiences := make([]core.WorkExperience, len(resume.Work))
 	for i, w := range resume.Work {
-		expID := domain.GenerateID("exp")
-		expShortID := domain.GenerateShortID("exp")
+		expID := core.GenerateID("exp")
+		expShortID := core.GenerateShortID("exp")
 		company := w.GetCompany()
-		var endDate *domain.Date
+		var endDate *core.Date
 		isCurrent := true
 		cleanEnd := strings.TrimSpace(w.EndDate)
 		if cleanEnd != "" && !strings.EqualFold(cleanEnd, "present") {
-			if ed, err := domain.ParseDate(cleanEnd); err == nil && !ed.IsZero() {
+			if ed, err := core.ParseDate(cleanEnd); err == nil && !ed.IsZero() {
 				endDate = &ed
 				isCurrent = false
 			}
 		}
 
-		parsedStart, _ := domain.ParseDate(w.StartDate)
+		parsedStart, _ := core.ParseDate(w.StartDate)
 
 		expMeta := make(map[string]any)
 		if w.URL != "" {
@@ -193,15 +193,15 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 			expMeta["location"] = w.Location
 		}
 
-		var expFacts []domain.Fact
+		var expFacts []core.Fact
 		for _, h := range w.Highlights {
 			matched := matcher.findMatchingSkills(h)
-			fact := domain.Fact{
-				ID:        domain.GenerateID("fact"),
-				ShortID:   domain.GenerateShortID("fact"),
+			fact := core.Fact{
+				ID:        core.GenerateID("fact"),
+				ShortID:   core.GenerateShortID("fact"),
 				UserID:    userID,
 				OwnerID:   expID,
-				OwnerType: domain.OwnerTypeWorkExperience,
+				OwnerType: core.OwnerTypeWorkExperience,
 				Statement: h,
 				Skills:    matched,
 				CreatedAt: time.Now().UTC(),
@@ -217,17 +217,17 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 			expSkills = mergeUniqueSkills(expSkills, f.Skills)
 		}
 
-		experiences[i] = domain.WorkExperience{
+		experiences[i] = core.WorkExperience{
 			ID:             expID,
 			ShortID:        expShortID,
 			UserID:         userID,
 			Company:        company,
 			RoleTitle:      w.Position,
-			EmploymentType: domain.EmploymentTypeFullTime,
+			EmploymentType: core.EmploymentTypeFullTime,
 			StartDate:      parsedStart,
 			EndDate:        endDate,
 			IsCurrent:      isCurrent,
-			Location: domain.Location{
+			Location: core.Location{
 				City: w.Location,
 			},
 			DutiesSummary: w.Summary,
@@ -240,20 +240,20 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 	}
 
 	// 4. Map Projects and child Facts
-	projects := make([]domain.Project, len(resume.Projects))
+	projects := make([]core.Project, len(resume.Projects))
 	for i, p := range resume.Projects {
-		projID := domain.GenerateID("proj")
-		projShortID := domain.GenerateShortID("proj")
-		var startDate *domain.Date
+		projID := core.GenerateID("proj")
+		projShortID := core.GenerateShortID("proj")
+		var startDate *core.Date
 		if p.StartDate != "" {
-			if sd, err := domain.ParseDate(p.StartDate); err == nil && !sd.IsZero() {
+			if sd, err := core.ParseDate(p.StartDate); err == nil && !sd.IsZero() {
 				startDate = &sd
 			}
 		}
-		var endDate *domain.Date
+		var endDate *core.Date
 		cleanEnd := strings.TrimSpace(p.EndDate)
 		if cleanEnd != "" && !strings.EqualFold(cleanEnd, "present") {
-			if ed, err := domain.ParseDate(cleanEnd); err == nil && !ed.IsZero() {
+			if ed, err := core.ParseDate(cleanEnd); err == nil && !ed.IsZero() {
 				endDate = &ed
 			}
 		}
@@ -276,15 +276,15 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 			projMeta["roles"] = p.Roles
 		}
 
-		var projFacts []domain.Fact
+		var projFacts []core.Fact
 		for _, h := range p.Highlights {
 			matched := matcher.findMatchingSkills(h)
-			fact := domain.Fact{
-				ID:        domain.GenerateID("fact"),
-				ShortID:   domain.GenerateShortID("fact"),
+			fact := core.Fact{
+				ID:        core.GenerateID("fact"),
+				ShortID:   core.GenerateShortID("fact"),
 				UserID:    userID,
 				OwnerID:   projID,
-				OwnerType: domain.OwnerTypeProject,
+				OwnerType: core.OwnerTypeProject,
 				Statement: h,
 				Skills:    matched,
 				CreatedAt: time.Now().UTC(),
@@ -299,7 +299,7 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 			projSkills = mergeUniqueSkills(projSkills, f.Skills)
 		}
 
-		projects[i] = domain.Project{
+		projects[i] = core.Project{
 			ID:        projID,
 			ShortID:   projShortID,
 			UserID:    userID,
@@ -318,20 +318,20 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 	}
 
 	// 5. Map Education
-	educations := make([]domain.Education, len(resume.Education))
+	educations := make([]core.Education, len(resume.Education))
 	for i, e := range resume.Education {
-		eduID := domain.GenerateID("edu")
-		eduShortID := domain.GenerateShortID("edu")
-		var startDate *domain.Date
+		eduID := core.GenerateID("edu")
+		eduShortID := core.GenerateShortID("edu")
+		var startDate *core.Date
 		if e.StartDate != "" {
-			if sd, err := domain.ParseDate(e.StartDate); err == nil && !sd.IsZero() {
+			if sd, err := core.ParseDate(e.StartDate); err == nil && !sd.IsZero() {
 				startDate = &sd
 			}
 		}
-		var endDate *domain.Date
+		var endDate *core.Date
 		cleanEnd := strings.TrimSpace(e.EndDate)
 		if cleanEnd != "" && !strings.EqualFold(cleanEnd, "present") {
-			if ed, err := domain.ParseDate(cleanEnd); err == nil && !ed.IsZero() {
+			if ed, err := core.ParseDate(cleanEnd); err == nil && !ed.IsZero() {
 				endDate = &ed
 			}
 		}
@@ -343,7 +343,7 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 			eduMeta["courses"] = e.Courses
 		}
 
-		educations[i] = domain.Education{
+		educations[i] = core.Education{
 			ID:          eduID,
 			ShortID:     eduShortID,
 			UserID:      userID,
@@ -360,17 +360,17 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 	}
 
 	// 6. Map Certifications
-	certifications := make([]domain.Certification, len(resume.Certificates))
+	certifications := make([]core.Certification, len(resume.Certificates))
 	for i, c := range resume.Certificates {
-		certID := domain.GenerateID("cert")
-		certShortID := domain.GenerateShortID("cert")
-		var certDate *domain.Date
+		certID := core.GenerateID("cert")
+		certShortID := core.GenerateShortID("cert")
+		var certDate *core.Date
 		if c.Date != "" {
-			if cd, err := domain.ParseDate(c.Date); err == nil && !cd.IsZero() {
+			if cd, err := core.ParseDate(c.Date); err == nil && !cd.IsZero() {
 				certDate = &cd
 			}
 		}
-		certifications[i] = domain.Certification{
+		certifications[i] = core.Certification{
 			ID:        certID,
 			ShortID:   certShortID,
 			UserID:    userID,
@@ -383,7 +383,7 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 		}
 	}
 
-	return &domain.MainProfileSnapshot{
+	return &core.MainProfileSnapshot{
 		Profile:        prof,
 		MainRevision:   revision,
 		Skills:         skills,
@@ -398,9 +398,9 @@ func ToSnapshotWithGlobalSkills(resume *JSONResume, userID string, existingProfi
 
 // FromSnapshot converts a MainProfileSnapshot back into a valid JSONResume document,
 // restoring unmapped sections and child highlights.
-func FromSnapshot(snapshot *domain.MainProfileSnapshot) (*JSONResume, error) {
+func FromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 	if snapshot == nil {
-		return nil, domain.ErrValidation
+		return nil, core.ErrValidation
 	}
 
 	schemaURL := defaultSchemaURL
@@ -446,9 +446,9 @@ func FromSnapshot(snapshot *domain.MainProfileSnapshot) (*JSONResume, error) {
 	projFactsMap := make(map[string][]string)
 	for _, f := range snapshot.Facts {
 		switch f.OwnerType {
-		case domain.OwnerTypeWorkExperience:
+		case core.OwnerTypeWorkExperience:
 			expFactsMap[f.OwnerID] = append(expFactsMap[f.OwnerID], f.Statement)
-		case domain.OwnerTypeProject:
+		case core.OwnerTypeProject:
 			projFactsMap[f.OwnerID] = append(projFactsMap[f.OwnerID], f.Statement)
 		}
 	}
@@ -668,9 +668,9 @@ func FromSnapshot(snapshot *domain.MainProfileSnapshot) (*JSONResume, error) {
 }
 
 // FromTailored converts a BranchVersion's TailoredContent and base Profile into a valid JSONResume export.
-func FromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*JSONResume, error) {
+func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONResume, error) {
 	if tailored == nil {
-		return nil, domain.ErrValidation
+		return nil, core.ErrValidation
 	}
 
 	schemaURL := defaultSchemaURL
@@ -887,7 +887,7 @@ func FromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*J
 // Helper types & functions for skill matching
 
 type skillEntry struct {
-	skill   domain.Skill
+	skill   core.Skill
 	pattern *regexp.Regexp
 }
 
@@ -896,7 +896,7 @@ type skillMatcher struct {
 }
 
 // newSkillMatcher compiles regex boundary patterns for skill names and keywords to associate skills with bullet text.
-func newSkillMatcher(skills []domain.Skill) *skillMatcher {
+func newSkillMatcher(skills []core.Skill) *skillMatcher {
 	var entries []skillEntry
 	for _, s := range skills {
 		terms := []string{s.Name}
@@ -925,12 +925,12 @@ func newSkillMatcher(skills []domain.Skill) *skillMatcher {
 }
 
 // findMatchingSkills scans text against compiled skill patterns and returns matched unique skills.
-func (m *skillMatcher) findMatchingSkills(text string) []domain.Skill {
+func (m *skillMatcher) findMatchingSkills(text string) []core.Skill {
 	if m == nil || strings.TrimSpace(text) == "" {
 		return nil
 	}
 
-	var matched []domain.Skill
+	var matched []core.Skill
 	seen := make(map[string]bool)
 
 	for _, entry := range m.entries {
@@ -944,9 +944,9 @@ func (m *skillMatcher) findMatchingSkills(text string) []domain.Skill {
 	return matched
 }
 
-// mergeUniqueSkills combines two skill slices and removes duplicates by skill ID using domain.MergeUniqueSkills.
-func mergeUniqueSkills(a, b []domain.Skill) []domain.Skill {
-	return domain.MergeUniqueSkills(a, b)
+// mergeUniqueSkills combines two skill slices and removes duplicates by skill ID using core.MergeUniqueSkills.
+func mergeUniqueSkills(a, b []core.Skill) []core.Skill {
+	return core.MergeUniqueSkills(a, b)
 }
 
 // extractStringSlice safely extracts a slice of strings from either []string or []any.

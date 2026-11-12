@@ -1,15 +1,15 @@
-package domain_test
+package core_test
 
 import (
 	"encoding/json"
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 func TestDate_NewAndFromTime(t *testing.T) {
-	d := domain.NewDate(2024, time.March, 15)
+	d := core.NewDate(2024, time.March, 15)
 	if d.Year() != 2024 || d.Month() != time.March || d.Day() != 15 {
 		t.Fatalf("expected 2024-03-15, got %v", d)
 	}
@@ -18,7 +18,7 @@ func TestDate_NewAndFromTime(t *testing.T) {
 	}
 
 	utcTime := time.Date(2023, time.December, 31, 23, 59, 59, 999, time.UTC)
-	fromT := domain.FromTime(utcTime)
+	fromT := core.FromTime(utcTime)
 	if fromT.Year() != 2023 || fromT.Month() != time.December || fromT.Day() != 31 {
 		t.Errorf("expected 2023-12-31, got %v", fromT)
 	}
@@ -47,7 +47,7 @@ func TestDate_ParseDate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := domain.ParseDate(tt.input)
+			got, err := core.ParseDate(tt.input)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ParseDate(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
 			}
@@ -67,13 +67,13 @@ func TestDate_ParseDate(t *testing.T) {
 
 func TestDate_JSONSerialization(t *testing.T) {
 	type Sample struct {
-		Start domain.Date  `json:"start"`
-		End   *domain.Date `json:"end,omitempty"`
+		Start core.Date  `json:"start"`
+		End   *core.Date `json:"end,omitempty"`
 	}
 
-	endDate := domain.NewDate(2025, time.February, 28)
+	endDate := core.NewDate(2025, time.February, 28)
 	sample := Sample{
-		Start: domain.NewDate(2022, time.January, 1),
+		Start: core.NewDate(2022, time.January, 1),
 		End:   &endDate,
 	}
 
@@ -118,7 +118,7 @@ func TestDate_JSONSerialization(t *testing.T) {
 }
 
 func TestDate_SQLValuerAndScanner(t *testing.T) {
-	d := domain.NewDate(2024, time.July, 4)
+	d := core.NewDate(2024, time.July, 4)
 
 	val, err := d.Value()
 	if err != nil {
@@ -129,7 +129,7 @@ func TestDate_SQLValuerAndScanner(t *testing.T) {
 	}
 
 	// Zero date value
-	zeroD := domain.Date{}
+	zeroD := core.Date{}
 	zeroVal, err := zeroD.Value()
 	if err != nil {
 		t.Fatalf("zero Date Value() error: %v", err)
@@ -139,7 +139,7 @@ func TestDate_SQLValuerAndScanner(t *testing.T) {
 	}
 
 	// Scan from string
-	var scanned domain.Date
+	var scanned core.Date
 	if err := scanned.Scan("2024-07-04"); err != nil {
 		t.Fatalf("Scan(string) error: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestDate_SQLValuerAndScanner(t *testing.T) {
 	}
 
 	// Scan from []byte
-	var scannedBytes domain.Date
+	var scannedBytes core.Date
 	if err := scannedBytes.Scan([]byte("2024-07-04")); err != nil {
 		t.Fatalf("Scan([]byte) error: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestDate_SQLValuerAndScanner(t *testing.T) {
 	}
 
 	// Scan from time.Time
-	var scannedTime domain.Date
+	var scannedTime core.Date
 	tInput := time.Date(2024, time.July, 4, 12, 0, 0, 0, time.UTC)
 	if err := scannedTime.Scan(tInput); err != nil {
 		t.Fatalf("Scan(time.Time) error: %v", err)
@@ -167,7 +167,7 @@ func TestDate_SQLValuerAndScanner(t *testing.T) {
 	}
 
 	// Scan from nil
-	var scannedNil domain.Date
+	var scannedNil core.Date
 	if err := scannedNil.Scan(nil); err != nil {
 		t.Fatalf("Scan(nil) error: %v", err)
 	}
@@ -177,9 +177,9 @@ func TestDate_SQLValuerAndScanner(t *testing.T) {
 }
 
 func TestDate_ComparisonsAndHelpers(t *testing.T) {
-	d1 := domain.NewDate(2022, time.January, 1)
-	d2 := domain.NewDate(2022, time.January, 1)
-	d3 := domain.NewDate(2023, time.January, 1)
+	d1 := core.NewDate(2022, time.January, 1)
+	d2 := core.NewDate(2022, time.January, 1)
+	d3 := core.NewDate(2023, time.January, 1)
 
 	if !d1.EqualDate(d2) {
 		t.Errorf("expected d1 == d2")
@@ -191,7 +191,7 @@ func TestDate_ComparisonsAndHelpers(t *testing.T) {
 		t.Errorf("expected d3 > d1")
 	}
 
-	ptr := domain.DatePtr(d1)
+	ptr := core.DatePtr(d1)
 	if ptr == nil || !ptr.EqualDate(d1) {
 		t.Errorf("expected DatePtr to match d1")
 	}

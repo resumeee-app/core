@@ -1,15 +1,15 @@
-package domain_test
+package core_test
 
 import (
 	"reflect"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 func TestBranch_DefaultBranchHelpers(t *testing.T) {
-	bDefault := domain.Branch{
-		ID:        domain.DefaultBranchID("user-1"),
+	bDefault := core.Branch{
+		ID:        core.DefaultBranchID("user-1"),
 		UserID:    "user-1",
 		IsDefault: true,
 	}
@@ -20,7 +20,7 @@ func TestBranch_DefaultBranchHelpers(t *testing.T) {
 		t.Errorf("expected ID 'branch-default-user-1', got %q", bDefault.ID)
 	}
 
-	bTailored := domain.Branch{
+	bTailored := core.Branch{
 		ID:        "branch-custom",
 		UserID:    "user-1",
 		IsDefault: false,
@@ -32,7 +32,7 @@ func TestBranch_DefaultBranchHelpers(t *testing.T) {
 
 func TestSnapshotToTailoredContent(t *testing.T) {
 	t.Run("nil snapshot returns safe non-nil empty slices", func(t *testing.T) {
-		res := domain.SnapshotToTailoredContent(nil)
+		res := core.SnapshotToTailoredContent(nil)
 		if res == nil {
 			t.Fatal("expected non-nil result")
 		}
@@ -57,8 +57,8 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 	})
 
 	t.Run("empty snapshot returns safe non-nil empty slices", func(t *testing.T) {
-		snap := &domain.MainProfileSnapshot{}
-		res := domain.SnapshotToTailoredContent(snap)
+		snap := &core.MainProfileSnapshot{}
+		res := core.SnapshotToTailoredContent(snap)
 		if res == nil {
 			t.Fatal("expected non-nil result")
 		}
@@ -83,57 +83,57 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 	})
 
 	t.Run("full career graph projection with 100% fidelity", func(t *testing.T) {
-		endDate := domain.NewDate(2023, 12, 31)
-		projStart := domain.NewDate(2024, 1, 1)
-		eduStart := domain.NewDate(2016, 9, 1)
-		certDate := domain.NewDate(2022, 6, 1)
+		endDate := core.NewDate(2023, 12, 31)
+		projStart := core.NewDate(2024, 1, 1)
+		eduStart := core.NewDate(2016, 9, 1)
+		certDate := core.NewDate(2022, 6, 1)
 		hours := 40
-		snap := &domain.MainProfileSnapshot{
-			Profile: domain.Profile{
+		snap := &core.MainProfileSnapshot{
+			Profile: core.Profile{
 				Summary: "Experienced distributed systems engineer with deep Go and cloud expertise.",
 			},
-			Skills: []domain.Skill{
+			Skills: []core.Skill{
 				{ID: "skill-go", Name: "Go", Category: "Languages"},
 				{ID: "skill-rust", Name: "Rust", Category: "Languages"},
 				{ID: "skill-k8s", Name: "Kubernetes", Category: "Cloud & Ops"},
 				{ID: "skill-comm", Name: "Mentorship", Category: ""}, // uncategorized
 			},
-			Experiences: []domain.WorkExperience{
+			Experiences: []core.WorkExperience{
 				{
 					ID:                "exp-1",
 					Company:           "Acme Corp",
 					RoleTitle:         "Principal Engineer",
-					EmploymentType:    domain.EmploymentTypeFullTime,
-					StartDate:         domain.NewDate(2021, 1, 1),
+					EmploymentType:    core.EmploymentTypeFullTime,
+					StartDate:         core.NewDate(2021, 1, 1),
 					EndDate:           &endDate,
 					IsCurrent:         false,
-					Location:          domain.Location{City: "San Francisco", Region: "CA"},
-					CompanyLocation:   domain.Location{City: "San Francisco", Region: "CA"},
-					CompanyContact:    &domain.ContactDetail{Type: domain.ContactTypeEmail, Value: "hr@acme.corp"},
+					Location:          core.Location{City: "San Francisco", Region: "CA"},
+					CompanyLocation:   core.Location{City: "San Francisco", Region: "CA"},
+					CompanyContact:    &core.ContactDetail{Type: core.ContactTypeEmail, Value: "hr@acme.corp"},
 					HoursPerWeek:      &hours,
 					SupervisorName:    "Jane Doe",
 					SupervisorContact: "jane@acme.corp",
 					DutiesSummary:     "Architected distributed platform systems.",
 					Metadata:          map[string]any{"level": "principal"},
-					Facts: []domain.Fact{
+					Facts: []core.Fact{
 						{
 							ID:        "fact-1",
 							Statement: "Architected distributed raft cluster reducing failover latency by 80%.",
-							Skills: []domain.Skill{
+							Skills: []core.Skill{
 								{ID: "skill-go", Name: "Go"},
 							},
 						},
 						{
 							ID:        "fact-2",
 							Statement: "Mentored 12 junior engineers.",
-							Skills: []domain.Skill{
+							Skills: []core.Skill{
 								{ID: "skill-comm", Name: "Mentorship"},
 							},
 						},
 					},
 				},
 			},
-			Projects: []domain.Project{
+			Projects: []core.Project{
 				{
 					ID:        "proj-1",
 					Name:      "Resumeee Engine",
@@ -142,18 +142,18 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					StartDate: &projStart,
 					Summary:   "Open-source resume management system.",
 					Metadata:  map[string]any{"stars": 500},
-					Facts: []domain.Fact{
+					Facts: []core.Fact{
 						{
 							ID:        "fact-3",
 							Statement: "Implemented AST template parser with 100% test coverage.",
-							Skills: []domain.Skill{
+							Skills: []core.Skill{
 								{ID: "skill-go", Name: "Go"},
 							},
 						},
 					},
 				},
 			},
-			Education: []domain.Education{
+			Education: []core.Education{
 				{
 					ID:          "edu-1",
 					Institution: "State University",
@@ -163,7 +163,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					EndDate:     &endDate,
 					Score:       "3.9 GPA",
 					Metadata:    map[string]any{"honors": "cum laude"},
-					Facts: []domain.Fact{
+					Facts: []core.Fact{
 						{
 							ID:        "fact-4",
 							Statement: "Dean's Honor List all semesters.",
@@ -171,7 +171,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					},
 				},
 			},
-			Certifications: []domain.Certification{
+			Certifications: []core.Certification{
 				{
 					ID:       "cert-1",
 					Name:     "Certified Kubernetes Administrator",
@@ -184,7 +184,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 			},
 		}
 
-		res := domain.SnapshotToTailoredContent(snap)
+		res := core.SnapshotToTailoredContent(snap)
 		if res == nil {
 			t.Fatal("expected non-nil tailored content")
 		}
@@ -226,13 +226,13 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 		if exp.SourceEntityID != "exp-1" || exp.Company != "Acme Corp" || exp.RoleTitle != "Principal Engineer" {
 			t.Errorf("unexpected experience header: %+v", exp)
 		}
-		if exp.EmploymentType != domain.EmploymentTypeFullTime || exp.IsCurrent {
+		if exp.EmploymentType != core.EmploymentTypeFullTime || exp.IsCurrent {
 			t.Errorf("unexpected experience employment type or current status: %+v", exp)
 		}
 		if exp.Metadata["level"] != "principal" {
 			t.Errorf("unexpected experience metadata: %+v", exp.Metadata)
 		}
-		if !exp.StartDate.EqualDate(domain.NewDate(2021, 1, 1)) || exp.EndDate == nil || !exp.EndDate.EqualDate(endDate) {
+		if !exp.StartDate.EqualDate(core.NewDate(2021, 1, 1)) || exp.EndDate == nil || !exp.EndDate.EqualDate(endDate) {
 			t.Errorf("unexpected experience dates: %+v", exp)
 		}
 		if exp.HoursPerWeek == nil || *exp.HoursPerWeek != hours || exp.SupervisorName != "Jane Doe" {
@@ -304,27 +304,27 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 	})
 
 	t.Run("facts indexed from snapshot.Facts if entity Facts slice is empty", func(t *testing.T) {
-		snap := &domain.MainProfileSnapshot{
-			Experiences: []domain.WorkExperience{
+		snap := &core.MainProfileSnapshot{
+			Experiences: []core.WorkExperience{
 				{
 					ID:        "exp-orphan-facts",
 					Company:   "Beta Inc",
 					RoleTitle: "Engineer",
-					StartDate: domain.NewDate(2020, 1, 1),
+					StartDate: core.NewDate(2020, 1, 1),
 					Facts:     nil, // Empty on entity
 				},
 			},
-			Facts: []domain.Fact{
+			Facts: []core.Fact{
 				{
 					ID:        "fact-orphan-1",
 					OwnerID:   "exp-orphan-facts",
-					OwnerType: domain.OwnerTypeWorkExperience,
+					OwnerType: core.OwnerTypeWorkExperience,
 					Statement: "Built billing pipeline.",
 				},
 			},
 		}
 
-		res := domain.SnapshotToTailoredContent(snap)
+		res := core.SnapshotToTailoredContent(snap)
 		if res == nil {
 			t.Fatal("expected non-nil tailored content")
 		}
@@ -343,24 +343,24 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 	})
 
 	t.Run("nested skills from experiences and facts are consolidated into SkillGroups", func(t *testing.T) {
-		snap := &domain.MainProfileSnapshot{
-			Skills: []domain.Skill{
+		snap := &core.MainProfileSnapshot{
+			Skills: []core.Skill{
 				{ID: "sk-top", Name: "Go", Category: "Backend"},
 			},
-			Experiences: []domain.WorkExperience{
+			Experiences: []core.WorkExperience{
 				{
 					ID:        "exp-1",
 					Company:   "Acme",
 					RoleTitle: "Dev",
-					StartDate: domain.NewDate(2020, 1, 1),
-					Skills: []domain.Skill{
+					StartDate: core.NewDate(2020, 1, 1),
+					Skills: []core.Skill{
 						{ID: "sk-exp", Name: "gRPC", Category: "Backend"},
 					},
-					Facts: []domain.Fact{
+					Facts: []core.Fact{
 						{
 							ID:        "fact-1",
 							Statement: "Built microservices",
-							Skills: []domain.Skill{
+							Skills: []core.Skill{
 								{ID: "sk-fact", Name: "PostgreSQL", Category: "Database"},
 							},
 						},
@@ -369,7 +369,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 			},
 		}
 
-		res := domain.SnapshotToTailoredContent(snap)
+		res := core.SnapshotToTailoredContent(snap)
 		if len(res.SkillGroups) != 2 {
 			t.Fatalf("expected 2 skill groups, got %d", len(res.SkillGroups))
 		}
@@ -382,27 +382,27 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 	})
 
 	t.Run("mutating returned tailored content pointers or metadata does not mutate snapshot", func(t *testing.T) {
-		endDate := domain.NewDate(2023, 12, 31)
-		projStart := domain.NewDate(2020, 1, 1)
-		eduStart := domain.NewDate(2015, 9, 1)
-		certDate := domain.NewDate(2021, 5, 1)
+		endDate := core.NewDate(2023, 12, 31)
+		projStart := core.NewDate(2020, 1, 1)
+		eduStart := core.NewDate(2015, 9, 1)
+		certDate := core.NewDate(2021, 5, 1)
 		hours := 40
-		contact := domain.ContactDetail{Type: domain.ContactTypePhone, Value: "+1-555-0100"}
+		contact := core.ContactDetail{Type: core.ContactTypePhone, Value: "+1-555-0100"}
 
-		snap := &domain.MainProfileSnapshot{
-			Experiences: []domain.WorkExperience{
+		snap := &core.MainProfileSnapshot{
+			Experiences: []core.WorkExperience{
 				{
 					ID:             "exp-1",
 					Company:        "Acme",
 					RoleTitle:      "Lead",
-					StartDate:      domain.NewDate(2021, 1, 1),
+					StartDate:      core.NewDate(2021, 1, 1),
 					EndDate:        &endDate,
 					CompanyContact: &contact,
 					HoursPerWeek:   &hours,
 					Metadata:       map[string]any{"sec_level": "secret"},
 				},
 			},
-			Projects: []domain.Project{
+			Projects: []core.Project{
 				{
 					ID:        "proj-1",
 					Name:      "Tool",
@@ -410,7 +410,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					Metadata:  map[string]any{"status": "active"},
 				},
 			},
-			Education: []domain.Education{
+			Education: []core.Education{
 				{
 					ID:          "edu-1",
 					Institution: "Uni",
@@ -418,7 +418,7 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 					Metadata:    map[string]any{"gpa": "3.8"},
 				},
 			},
-			Certifications: []domain.Certification{
+			Certifications: []core.Certification{
 				{
 					ID:       "cert-1",
 					Name:     "Cloud Cert",
@@ -428,22 +428,22 @@ func TestSnapshotToTailoredContent(t *testing.T) {
 			},
 		}
 
-		res := domain.SnapshotToTailoredContent(snap)
+		res := core.SnapshotToTailoredContent(snap)
 
 		// Mutate fields in res
-		*res.Experiences[0].EndDate = domain.NewDate(1990, 1, 1)
+		*res.Experiences[0].EndDate = core.NewDate(1990, 1, 1)
 		res.Experiences[0].CompanyContact.Value = "+1-999-9999"
 		*res.Experiences[0].HoursPerWeek = 10
 		res.Experiences[0].Metadata["sec_level"] = "tampered"
 		res.Experiences[0].Metadata["extra"] = "injected"
 
-		*res.Projects[0].StartDate = domain.NewDate(1990, 1, 1)
+		*res.Projects[0].StartDate = core.NewDate(1990, 1, 1)
 		res.Projects[0].Metadata["status"] = "tampered"
 
-		*res.Education[0].StartDate = domain.NewDate(1990, 1, 1)
+		*res.Education[0].StartDate = core.NewDate(1990, 1, 1)
 		res.Education[0].Metadata["gpa"] = "tampered"
 
-		*res.Certifications[0].Date = domain.NewDate(1990, 1, 1)
+		*res.Certifications[0].Date = core.NewDate(1990, 1, 1)
 		res.Certifications[0].Metadata["credential_id"] = "tampered"
 
 		// Assert snap is preserved

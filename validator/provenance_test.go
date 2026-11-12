@@ -6,100 +6,100 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/validator"
 )
 
-func sampleSnapshot() *domain.MainProfileSnapshot {
-	endDate := domain.NewDate(2023, 12, 31)
+func sampleSnapshot() *core.MainProfileSnapshot {
+	endDate := core.NewDate(2023, 12, 31)
 	hours := 40
-	contact := domain.ContactDetail{Type: domain.ContactTypePhone, Value: "+1-555-0199"}
-	projEnd := domain.NewDate(2022, 12, 31)
-	eduEnd := domain.NewDate(2018, 5, 31)
-	certDate := domain.NewDate(2022, 5, 1)
+	contact := core.ContactDetail{Type: core.ContactTypePhone, Value: "+1-555-0199"}
+	projEnd := core.NewDate(2022, 12, 31)
+	eduEnd := core.NewDate(2018, 5, 31)
+	certDate := core.NewDate(2022, 5, 1)
 
-	return &domain.MainProfileSnapshot{
-		Profile: domain.Profile{
+	return &core.MainProfileSnapshot{
+		Profile: core.Profile{
 			ID:       "prof-1",
 			FullName: "Ada Lovelace",
 		},
-		Skills: []domain.Skill{
+		Skills: []core.Skill{
 			{ID: "skill-go", Name: "Go", Category: "Backend"},
 			{ID: "skill-grpc", Name: "gRPC", Category: "Backend"},
 			{ID: "skill-k8s", Name: "Kubernetes", Category: "Infrastructure"},
 		},
-		Experiences: []domain.WorkExperience{
+		Experiences: []core.WorkExperience{
 			{
 				ID:             "exp-1",
 				Company:        "Acme Corp",
 				RoleTitle:      "Principal Engineer",
-				StartDate:      domain.NewDate(2021, 1, 1),
+				StartDate:      core.NewDate(2021, 1, 1),
 				EndDate:        &endDate,
 				CompanyContact: &contact,
 				HoursPerWeek:   &hours,
-				Skills: []domain.Skill{
+				Skills: []core.Skill{
 					{ID: "skill-exp-nested", Name: "Postgres", Category: "Databases"},
 				},
-				Facts: []domain.Fact{
+				Facts: []core.Fact{
 					{
 						ID:        "fact-exp-1",
 						Statement: "Built event streaming pipeline",
-						Skills: []domain.Skill{
+						Skills: []core.Skill{
 							{ID: "skill-fact-nested", Name: "Kafka", Category: "Streaming"},
 						},
 					},
-					{ID: "fact-exp-2", OwnerID: "exp-1", OwnerType: domain.OwnerTypeWorkExperience, Statement: "Scaled Postgres cluster to 100k QPS"},
+					{ID: "fact-exp-2", OwnerID: "exp-1", OwnerType: core.OwnerTypeWorkExperience, Statement: "Scaled Postgres cluster to 100k QPS"},
 				},
 			},
 			{
 				ID:        "exp-2",
 				Company:   "Beta LLC",
 				RoleTitle: "Senior Engineer",
-				StartDate: domain.NewDate(2018, 1, 1),
-				Facts: []domain.Fact{
-					{ID: "fact-exp-beta", OwnerID: "exp-2", OwnerType: domain.OwnerTypeWorkExperience, Statement: "Led rewrite of auth service"},
+				StartDate: core.NewDate(2018, 1, 1),
+				Facts: []core.Fact{
+					{ID: "fact-exp-beta", OwnerID: "exp-2", OwnerType: core.OwnerTypeWorkExperience, Statement: "Led rewrite of auth service"},
 				},
 			},
 		},
-		Projects: []domain.Project{
+		Projects: []core.Project{
 			{
 				ID:      "proj-1",
 				Name:    "OpenTelemetry Collector Exporter",
 				EndDate: &projEnd,
-				Skills: []domain.Skill{
+				Skills: []core.Skill{
 					{ID: "skill-proj-nested", Name: "OTel", Category: "Observability"},
 				},
-				Facts: []domain.Fact{
+				Facts: []core.Fact{
 					{
 						ID:        "fact-proj-1",
 						Statement: "Maintained custom exporter plugin",
-						Skills: []domain.Skill{
+						Skills: []core.Skill{
 							{ID: "skill-proj-fact-nested", Name: "Go Collector", Category: "Observability"},
 						},
 					},
 				},
 			},
 		},
-		Education: []domain.Education{
+		Education: []core.Education{
 			{
 				ID:          "edu-1",
 				Institution: "MIT",
 				Degree:      "B.S.",
 				Field:       "Computer Science",
-				StartDate:   domain.DatePtr(domain.NewDate(2014, 9, 1)),
+				StartDate:   core.DatePtr(core.NewDate(2014, 9, 1)),
 				EndDate:     &eduEnd,
-				Facts: []domain.Fact{
+				Facts: []core.Fact{
 					{
 						ID:        "fact-edu-1",
 						Statement: "Published research on distributed consensus",
-						Skills: []domain.Skill{
+						Skills: []core.Skill{
 							{ID: "skill-edu-fact-nested", Name: "Paxos", Category: "Distributed"},
 						},
 					},
 				},
 			},
 		},
-		Certifications: []domain.Certification{
+		Certifications: []core.Certification{
 			{
 				ID:     "cert-1",
 				Name:   "Certified Kubernetes Administrator",
@@ -107,13 +107,13 @@ func sampleSnapshot() *domain.MainProfileSnapshot {
 				Date:   &certDate,
 			},
 		},
-		Facts: []domain.Fact{
+		Facts: []core.Fact{
 			{
 				ID:        "fact-top-level",
 				OwnerID:   "exp-1",
-				OwnerType: domain.OwnerTypeWorkExperience,
+				OwnerType: core.OwnerTypeWorkExperience,
 				Statement: "Top-level indexed fact",
-				Skills: []domain.Skill{
+				Skills: []core.Skill{
 					{ID: "skill-top-fact-nested", Name: "Docker", Category: "Containers"},
 				},
 			},
@@ -121,17 +121,17 @@ func sampleSnapshot() *domain.MainProfileSnapshot {
 	}
 }
 
-func sampleValidContent() *domain.TailoredContent {
-	endDate := domain.NewDate(2023, 12, 31)
+func sampleValidContent() *core.TailoredContent {
+	endDate := core.NewDate(2023, 12, 31)
 	hours := 40
-	contact := domain.ContactDetail{Type: domain.ContactTypePhone, Value: "+1-555-0199"}
-	projEnd := domain.NewDate(2022, 12, 31)
-	eduEnd := domain.NewDate(2018, 5, 31)
-	certDate := domain.NewDate(2022, 5, 1)
+	contact := core.ContactDetail{Type: core.ContactTypePhone, Value: "+1-555-0199"}
+	projEnd := core.NewDate(2022, 12, 31)
+	eduEnd := core.NewDate(2018, 5, 31)
+	certDate := core.NewDate(2022, 5, 1)
 
-	return &domain.TailoredContent{
+	return &core.TailoredContent{
 		Summary: "Experienced systems engineer focused on distributed systems.",
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category:       "Backend",
 				Skills:         []string{"Go", "gRPC"},
@@ -143,16 +143,16 @@ func sampleValidContent() *domain.TailoredContent {
 				SourceSkillIDs: []string{"skill-k8s"},
 			},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme Corp",
 				RoleTitle:      "Principal Engineer",
-				StartDate:      domain.NewDate(2021, 1, 1),
+				StartDate:      core.NewDate(2021, 1, 1),
 				EndDate:        &endDate,
 				CompanyContact: &contact,
 				HoursPerWeek:   &hours,
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{
 						Text:           "Architected streaming pipeline handling 100k eps.",
 						SourceFactIDs:  []string{"fact-exp-1"},
@@ -169,8 +169,8 @@ func sampleValidContent() *domain.TailoredContent {
 				SourceEntityID: "exp-2",
 				Company:        "Beta LLC",
 				RoleTitle:      "Senior Engineer",
-				StartDate:      domain.NewDate(2018, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2018, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Spearheaded auth rewrite with zero downtime.",
 						SourceFactIDs: []string{"fact-exp-beta"},
@@ -178,12 +178,12 @@ func sampleValidContent() *domain.TailoredContent {
 				},
 			},
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{
 				SourceEntityID: "proj-1",
 				Name:           "OpenTelemetry Collector Exporter",
 				EndDate:        &projEnd,
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Maintained and released high-throughput plugin.",
 						SourceFactIDs: []string{"fact-proj-1"},
@@ -191,15 +191,15 @@ func sampleValidContent() *domain.TailoredContent {
 				},
 			},
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{
 				SourceEntityID: "edu-1",
 				Institution:    "MIT",
 				Degree:         "B.S.",
 				Field:          "Computer Science",
-				StartDate:      domain.DatePtr(domain.NewDate(2014, 9, 1)),
+				StartDate:      core.DatePtr(core.NewDate(2014, 9, 1)),
 				EndDate:        &eduEnd,
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Published distributed consensus research in ACM.",
 						SourceFactIDs: []string{"fact-edu-1"},
@@ -207,7 +207,7 @@ func sampleValidContent() *domain.TailoredContent {
 				},
 			},
 		},
-		Certifications: []domain.TailoredCert{
+		Certifications: []core.TailoredCert{
 			{
 				SourceEntityID: "cert-1",
 				Name:           "Certified Kubernetes Administrator",
@@ -241,26 +241,26 @@ func TestValidate_FabricatedEntityIDs(t *testing.T) {
 	content := sampleValidContent()
 
 	// Inject fabricated entity IDs
-	content.Experiences = append(content.Experiences, domain.TailoredExperience{
+	content.Experiences = append(content.Experiences, core.TailoredExperience{
 		SourceEntityID: "fabricated-exp-uuid",
 		Company:        "Fake Tech",
 		RoleTitle:      "Ghost Engineer",
-		Bullets: []domain.TailoredBullet{
+		Bullets: []core.TailoredBullet{
 			{Text: "Invented warp drive", SourceFactIDs: []string{"fact-exp-1"}},
 		},
 	})
-	content.Projects = append(content.Projects, domain.TailoredProject{
+	content.Projects = append(content.Projects, core.TailoredProject{
 		SourceEntityID: "fabricated-proj-uuid",
 		Name:           "Fake Blockchain",
-		Bullets: []domain.TailoredBullet{
+		Bullets: []core.TailoredBullet{
 			{Text: "Minted fake coins", SourceFactIDs: []string{"fact-proj-1"}},
 		},
 	})
-	content.Education = append(content.Education, domain.TailoredEducation{
+	content.Education = append(content.Education, core.TailoredEducation{
 		SourceEntityID: "fabricated-edu-uuid",
 		Institution:    "Fake University",
 	})
-	content.Certifications = append(content.Certifications, domain.TailoredCert{
+	content.Certifications = append(content.Certifications, core.TailoredCert{
 		SourceEntityID: "fabricated-cert-uuid",
 		Name:           "Certified Fake Architect",
 	})
@@ -319,7 +319,7 @@ func TestValidate_FabricatedFactIDs(t *testing.T) {
 	content := sampleValidContent()
 
 	// Add fabricated fact ID to exp-1
-	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, domain.TailoredBullet{
+	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, core.TailoredBullet{
 		Text:          "Claimed impossible hallucinated metric.",
 		SourceFactIDs: []string{"fact-fabricated-999"},
 	})
@@ -349,11 +349,11 @@ func TestValidate_EmptyFactIDs(t *testing.T) {
 	snapshot := sampleSnapshot()
 	content := sampleValidContent()
 
-	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, domain.TailoredBullet{
+	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, core.TailoredBullet{
 		Text:          "Uncited bullet with no source fact ids.",
 		SourceFactIDs: []string{},
 	})
-	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, domain.TailoredBullet{
+	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, core.TailoredBullet{
 		Text:          "Nil source fact ids bullet.",
 		SourceFactIDs: nil,
 	})
@@ -383,7 +383,7 @@ func TestValidate_CrossEntityFactSpoofing(t *testing.T) {
 	content := sampleValidContent()
 
 	// Bullet under experience exp-1 cites a fact belonging to Project proj-1
-	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, domain.TailoredBullet{
+	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, core.TailoredBullet{
 		Text:          "Citing project achievement under work experience.",
 		SourceFactIDs: []string{"fact-proj-1"},
 	})
@@ -414,7 +414,7 @@ func TestValidate_CrossExperienceFactSpoofing(t *testing.T) {
 	content := sampleValidContent()
 
 	// Bullet under experience exp-1 cites fact-exp-beta belonging to exp-2
-	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, domain.TailoredBullet{
+	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, core.TailoredBullet{
 		Text:          "Attributing Beta LLC achievement to Acme Corp.",
 		SourceFactIDs: []string{"fact-exp-beta"},
 	})
@@ -444,7 +444,7 @@ func TestValidate_BranchExclusions(t *testing.T) {
 	snapshot := sampleSnapshot()
 	content := sampleValidContent()
 
-	branch := &domain.Branch{
+	branch := &core.Branch{
 		ID:                "branch-1",
 		Name:              "Target Role",
 		ExcludedEntityIDs: []string{"exp-2", "proj-1", "edu-1", "cert-1"},
@@ -493,22 +493,22 @@ func TestValidate_BranchExclusions(t *testing.T) {
 
 func TestValidate_BranchExclusions_FallbackNames(t *testing.T) {
 	snapshot := sampleSnapshot()
-	content := &domain.TailoredContent{
-		Experiences: []domain.TailoredExperience{
+	content := &core.TailoredContent{
+		Experiences: []core.TailoredExperience{
 			{SourceEntityID: "exp-1"}, // Empty Company
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{SourceEntityID: "proj-1"}, // Empty Name
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{SourceEntityID: "edu-1"}, // Empty Institution
 		},
-		Certifications: []domain.TailoredCert{
+		Certifications: []core.TailoredCert{
 			{SourceEntityID: "cert-1"}, // Empty Name
 		},
 	}
 
-	branch := &domain.Branch{
+	branch := &core.Branch{
 		ExcludedEntityIDs: []string{"exp-1", "proj-1", "edu-1", "cert-1"},
 	}
 
@@ -537,12 +537,12 @@ func TestValidate_BranchPinnedOmission(t *testing.T) {
 	snapshot := sampleSnapshot()
 	content := sampleValidContent()
 
-	snapshot.Projects = append(snapshot.Projects, domain.Project{
+	snapshot.Projects = append(snapshot.Projects, core.Project{
 		ID:   "proj-pinned",
 		Name: "Critical Open Source Project",
 	})
 
-	branch := &domain.Branch{
+	branch := &core.Branch{
 		ID:              "branch-1",
 		PinnedEntityIDs: []string{"proj-pinned"},
 	}
@@ -620,8 +620,8 @@ func TestValidate_SkillGroupVariations(t *testing.T) {
 	snapshot := sampleSnapshot()
 
 	// 1. Unequal length with matching and ungrounded skills
-	content := &domain.TailoredContent{
-		SkillGroups: []domain.TailoredSkillGroup{
+	content := &core.TailoredContent{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category:       "Data",
 				Skills:         []string{"Go", "UnrelatedSkill"},
@@ -668,7 +668,7 @@ func TestValidate_EmptySkillGroupPruning(t *testing.T) {
 	snapshot := sampleSnapshot()
 	content := sampleValidContent()
 
-	content.SkillGroups = append(content.SkillGroups, domain.TailoredSkillGroup{
+	content.SkillGroups = append(content.SkillGroups, core.TailoredSkillGroup{
 		Category:       "Voodoo Languages",
 		Skills:         []string{"FakeLang1", "FakeLang2"},
 		SourceSkillIDs: []string{"skill-fake-1", "skill-fake-2"},
@@ -688,8 +688,8 @@ func TestValidate_EmptySkillGroupPruning(t *testing.T) {
 
 func TestValidate_NestedSkillsResolution(t *testing.T) {
 	snapshot := sampleSnapshot()
-	content := &domain.TailoredContent{
-		SkillGroups: []domain.TailoredSkillGroup{
+	content := &core.TailoredContent{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category:       "ResolvedSkills",
 				Skills:         []string{"Postgres", "Kafka", "OTel", "Go Collector", "Paxos", "Docker"},
@@ -719,11 +719,11 @@ func TestValidate_Immutability(t *testing.T) {
 	original := sampleValidContent()
 
 	// Inject items that will be pruned
-	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, domain.TailoredBullet{
+	content.Experiences[0].Bullets = append(content.Experiences[0].Bullets, core.TailoredBullet{
 		Text:          "Bad bullet",
 		SourceFactIDs: []string{"fake-fact"},
 	})
-	original.Experiences[0].Bullets = append(original.Experiences[0].Bullets, domain.TailoredBullet{
+	original.Experiences[0].Bullets = append(original.Experiences[0].Bullets, core.TailoredBullet{
 		Text:          "Bad bullet",
 		SourceFactIDs: []string{"fake-fact"},
 	})
@@ -756,7 +756,7 @@ func TestValidate_NilAndBoundaryInputs(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when snapshot is nil")
 	}
-	if !errors.Is(err, domain.ErrValidation) {
+	if !errors.Is(err, core.ErrValidation) {
 		t.Fatalf("expected ErrValidation for nil snapshot, got %v", err)
 	}
 
@@ -765,7 +765,7 @@ func TestValidate_NilAndBoundaryInputs(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when content is nil")
 	}
-	if !errors.Is(err, domain.ErrValidation) {
+	if !errors.Is(err, core.ErrValidation) {
 		t.Fatalf("expected ErrValidation for nil content, got %v", err)
 	}
 
@@ -779,7 +779,7 @@ func TestValidate_NilAndBoundaryInputs(t *testing.T) {
 	}
 
 	// Empty content struct
-	emptyContent := &domain.TailoredContent{}
+	emptyContent := &core.TailoredContent{}
 	resEmpty, err := validator.Validate(emptyContent, snapshot, nil)
 	if err != nil {
 		t.Fatalf("unexpected error with empty content: %v", err)
@@ -789,8 +789,8 @@ func TestValidate_NilAndBoundaryInputs(t *testing.T) {
 	}
 
 	// Content with nil bullets
-	nilBulletsContent := &domain.TailoredContent{
-		Experiences: []domain.TailoredExperience{
+	nilBulletsContent := &core.TailoredContent{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme Corp",
@@ -819,7 +819,7 @@ func TestValidateStrict_Behavior(t *testing.T) {
 
 	// Strict validate on content with warnings
 	dirtyContent := sampleValidContent()
-	dirtyContent.Experiences[0].Bullets = append(dirtyContent.Experiences[0].Bullets, domain.TailoredBullet{
+	dirtyContent.Experiences[0].Bullets = append(dirtyContent.Experiences[0].Bullets, core.TailoredBullet{
 		Text:          "Uncited bullet",
 		SourceFactIDs: []string{},
 	})
@@ -828,7 +828,7 @@ func TestValidateStrict_Behavior(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error on dirty content in ValidateStrict")
 	}
-	if !errors.Is(err, domain.ErrProvenance) {
+	if !errors.Is(err, core.ErrProvenance) {
 		t.Fatalf("expected ErrProvenance, got %v", err)
 	}
 
@@ -837,7 +837,7 @@ func TestValidateStrict_Behavior(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error on nil snapshot in ValidateStrict")
 	}
-	if !errors.Is(err, domain.ErrValidation) {
+	if !errors.Is(err, core.ErrValidation) {
 		t.Fatalf("expected ErrValidation, got %v", err)
 	}
 }
@@ -862,30 +862,30 @@ func TestValidatorInterfaceAndNew(t *testing.T) {
 
 func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	snapshot := sampleSnapshot()
-	snapshot.Experiences[0].Location = domain.Location{City: "San Francisco", Region: "CA", CountryCode: "USA"}
-	snapshot.Experiences[0].EmploymentType = domain.EmploymentTypeContract
+	snapshot.Experiences[0].Location = core.Location{City: "San Francisco", Region: "CA", CountryCode: "USA"}
+	snapshot.Experiences[0].EmploymentType = core.EmploymentTypeContract
 	snapshot.Experiences[0].Metadata = map[string]any{"clearance": "Top Secret"}
 	snapshot.Projects[0].Metadata = map[string]any{"stars": 120}
 	snapshot.Education[0].Metadata = map[string]any{"honors": "cum laude"}
 	snapshot.Certifications[0].Metadata = map[string]any{"badge_id": "CKA-1234"}
 
-	adversarialEndDate := domain.NewDate(2099, 1, 1)
-	advProjStart := domain.NewDate(1991, 1, 1)
-	advEduStart := domain.NewDate(1980, 1, 1)
-	advCertDate := domain.NewDate(1901, 1, 1)
-	adversarialContent := &domain.TailoredContent{
+	adversarialEndDate := core.NewDate(2099, 1, 1)
+	advProjStart := core.NewDate(1991, 1, 1)
+	advEduStart := core.NewDate(1980, 1, 1)
+	advCertDate := core.NewDate(1901, 1, 1)
+	adversarialContent := &core.TailoredContent{
 		Summary: "Adversarial LLM content",
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Hallucinated Stripe Inc",
 				RoleTitle:      "Chief Executive Officer",
-				EmploymentType: domain.EmploymentTypeFullTime,
-				StartDate:      domain.NewDate(1990, 1, 1),
+				EmploymentType: core.EmploymentTypeFullTime,
+				StartDate:      core.NewDate(1990, 1, 1),
 				EndDate:        &adversarialEndDate,
-				Location:       domain.Location{City: "Atlantis", CountryCode: "XX"},
+				Location:       core.Location{City: "Atlantis", CountryCode: "XX"},
 				Metadata:       map[string]any{"clearance": "Public", "injected": "exploit"},
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Architected streaming pipeline handling 100k eps.",
 						SourceFactIDs: []string{"fact-exp-1"},
@@ -893,7 +893,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				},
 			},
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{
 				SourceEntityID: "proj-1",
 				Name:           "Hallucinated Linux Kernel",
@@ -901,7 +901,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				URL:            "https://fake.example.com",
 				StartDate:      &advProjStart,
 				Metadata:       map[string]any{"stars": 999999, "injected": "exploit"},
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Maintained custom exporter plugin",
 						SourceFactIDs: []string{"fact-proj-1"},
@@ -909,7 +909,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				},
 			},
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{
 				SourceEntityID: "edu-1",
 				Institution:    "Hallucinated Oxford University",
@@ -917,7 +917,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				Field:          "Astrophysics",
 				StartDate:      &advEduStart,
 				Metadata:       map[string]any{"honors": "summa cum laude", "injected": "exploit"},
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Published research on distributed consensus",
 						SourceFactIDs: []string{"fact-edu-1"},
@@ -925,7 +925,7 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 				},
 			},
 		},
-		Certifications: []domain.TailoredCert{
+		Certifications: []core.TailoredCert{
 			{
 				SourceEntityID: "cert-1",
 				Name:           "Hallucinated Nobel Prize",
@@ -950,8 +950,8 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 	if exp.RoleTitle != "Principal Engineer" {
 		t.Errorf("expected RoleTitle 'Principal Engineer', got '%s'", exp.RoleTitle)
 	}
-	if exp.EmploymentType != domain.EmploymentTypeContract {
-		t.Errorf("expected EmploymentType %q, got %q", domain.EmploymentTypeContract, exp.EmploymentType)
+	if exp.EmploymentType != core.EmploymentTypeContract {
+		t.Errorf("expected EmploymentType %q, got %q", core.EmploymentTypeContract, exp.EmploymentType)
 	}
 	if exp.StartDate.String() != "2021-01-01" {
 		t.Errorf("expected StartDate '2021-01-01', got '%s'", exp.StartDate)
@@ -1024,13 +1024,13 @@ func TestValidate_ReconcilesAuthoritativeEntityMetadata_NoLies(t *testing.T) {
 func TestValidate_Immutability_SnapshotPreserved(t *testing.T) {
 	snapshot := sampleSnapshot()
 	snapshot.Experiences[0].Metadata = map[string]any{"dept": "Engineering"}
-	snapshot.Experiences[0].EndDate = domain.DatePtr(domain.NewDate(2023, 12, 31))
+	snapshot.Experiences[0].EndDate = core.DatePtr(core.NewDate(2023, 12, 31))
 	snapshot.Projects[0].Metadata = map[string]any{"repo": "github.com/foo/bar"}
-	snapshot.Projects[0].StartDate = domain.DatePtr(domain.NewDate(2021, 5, 1))
+	snapshot.Projects[0].StartDate = core.DatePtr(core.NewDate(2021, 5, 1))
 	snapshot.Education[0].Metadata = map[string]any{"gpa": "3.9"}
-	snapshot.Education[0].StartDate = domain.DatePtr(domain.NewDate(2014, 9, 1))
+	snapshot.Education[0].StartDate = core.DatePtr(core.NewDate(2014, 9, 1))
 	snapshot.Certifications[0].Metadata = map[string]any{"tier": "professional"}
-	snapshot.Certifications[0].Date = domain.DatePtr(domain.NewDate(2022, 5, 1))
+	snapshot.Certifications[0].Date = core.DatePtr(core.NewDate(2022, 5, 1))
 
 	content := sampleValidContent()
 	res, err := validator.Validate(content, snapshot, nil)
@@ -1041,16 +1041,16 @@ func TestValidate_Immutability_SnapshotPreserved(t *testing.T) {
 	// Mutate sanitized content in-place
 	res.SanitizedContent.Experiences[0].Metadata["dept"] = "Tampered Dept"
 	res.SanitizedContent.Experiences[0].Metadata["injected"] = "tampered"
-	*res.SanitizedContent.Experiences[0].EndDate = domain.NewDate(1999, 1, 1)
+	*res.SanitizedContent.Experiences[0].EndDate = core.NewDate(1999, 1, 1)
 
 	res.SanitizedContent.Projects[0].Metadata["repo"] = "tampered"
-	*res.SanitizedContent.Projects[0].StartDate = domain.NewDate(1999, 1, 1)
+	*res.SanitizedContent.Projects[0].StartDate = core.NewDate(1999, 1, 1)
 
 	res.SanitizedContent.Education[0].Metadata["gpa"] = "1.0"
-	*res.SanitizedContent.Education[0].StartDate = domain.NewDate(1999, 1, 1)
+	*res.SanitizedContent.Education[0].StartDate = core.NewDate(1999, 1, 1)
 
 	res.SanitizedContent.Certifications[0].Metadata["tier"] = "tampered"
-	*res.SanitizedContent.Certifications[0].Date = domain.NewDate(1999, 1, 1)
+	*res.SanitizedContent.Certifications[0].Date = core.NewDate(1999, 1, 1)
 
 	// Verify snapshot remains completely unmutated
 	if snapshot.Experiences[0].Metadata["dept"] != "Engineering" {

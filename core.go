@@ -1,4 +1,4 @@
-// Package domain defines the core domain models, interfaces, entities, error sentinels,
+// Package core defines the core domain models, interfaces, entities, error sentinels,
 // and business invariants for the Resumeee resume tailoring engine.
 //
 // Core domain entities include:
@@ -12,4 +12,4 @@
 //
 // All persistence repositories, LLM adapters, worker queues, and HTTP handlers adhere
 // to the decoupled interface contracts defined in this package.
-package domain
+package core

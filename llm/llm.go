@@ -7,6 +7,6 @@
 //   - Anthropic (claude-3-5-sonnet, claude-3-opus, claude-3-5-haiku)
 //   - OpenAI-compatible endpoints (LocalAI, Ollama, vLLM, DeepSeek)
 //
-// The package enforces structured JSON outputs conforming to domain.TailoredContent
+// The package enforces structured JSON outputs conforming to core.TailoredContent
 // schemas and records prompt/response traces when debugging is enabled.
 package llm

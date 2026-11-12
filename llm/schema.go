@@ -49,7 +49,7 @@ func ExtractJSON(s string) string {
 	return trimmed
 }
 
-// GenerationResponseSchema returns the canonical JSON Schema for domain.GenerationResponse
+// GenerationResponseSchema returns the canonical JSON Schema for core.GenerationResponse
 // (TailoredContent and GapReport), enforcing strict validation keywords (required, additionalProperties: false)
 // with comprehensive field descriptions and hints to guide accurate LLM token generation.
 //
@@ -289,7 +289,7 @@ func GenerationResponseSchema() map[string]any {
 	}
 }
 
-// gapReportSchema returns the canonical JSON Schema for a domain.GapReport object,
+// gapReportSchema returns the canonical JSON Schema for a core.GapReport object,
 // enforcing strict validation keywords, enum constraints, and comprehensive field descriptions.
 func gapReportSchema() map[string]any {
 	return map[string]any{
@@ -345,7 +345,7 @@ func gapReportSchema() map[string]any {
 	}
 }
 
-// GapReportSchema returns the canonical JSON Schema for a domain.GapReport object,
+// GapReportSchema returns the canonical JSON Schema for a core.GapReport object,
 // enforcing strict validation keywords, enum constraints, and comprehensive field descriptions.
 func GapReportSchema() map[string]any {
 	return gapReportSchema()
@@ -830,7 +830,7 @@ func sanitizeNode(val any) any {
 	}
 }
 
-// GeminiResponseSchema returns a Google Gemini-compatible JSON schema for domain.GenerationResponse
+// GeminiResponseSchema returns a Google Gemini-compatible JSON schema for core.GenerationResponse
 // by stripping additionalProperties and OpenAPI extensions unsupported by Gemini.
 func GeminiResponseSchema() map[string]any {
 	return SanitizeGeminiSchema(GenerationResponseSchema())

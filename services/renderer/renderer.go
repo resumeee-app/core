@@ -13,7 +13,7 @@ import (
 	"sync"
 	texttemplate "text/template"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 var (
@@ -69,19 +69,19 @@ type RenderContext struct {
 	Email          string
 	Phone          string
 	Website        string
-	Location       domain.Location
-	Profiles       []domain.SocialLink
+	Location       core.Location
+	Profiles       []core.SocialLink
 	Summary        string
 	CSSStyles      htmltemplate.CSS
-	SkillGroups    []domain.TailoredSkillGroup
-	Experiences    []domain.TailoredExperience
-	Projects       []domain.TailoredProject
-	Education      []domain.TailoredEducation
-	Certifications []domain.TailoredCert
+	SkillGroups    []core.TailoredSkillGroup
+	Experiences    []core.TailoredExperience
+	Projects       []core.TailoredProject
+	Education      []core.TailoredEducation
+	Certifications []core.TailoredCert
 
 	// Structured domains for advanced template authors
-	Profile *domain.Profile
-	Content *domain.TailoredContent
+	Profile *core.Profile
+	Content *core.TailoredContent
 	Meta    map[string]any
 }
 
@@ -108,7 +108,7 @@ func (rc *RenderContext) AllSkills() []string {
 }
 
 // NewRenderContext builds a populated RenderContext combining Profile, TailoredContent, and TemplateSet styles.
-func NewRenderContext(tmpl *domain.TemplateSet, profile *domain.Profile, content *domain.TailoredContent) *RenderContext {
+func NewRenderContext(tmpl *core.TemplateSet, profile *core.Profile, content *core.TailoredContent) *RenderContext {
 	ctx := &RenderContext{
 		Meta: make(map[string]any),
 	}
@@ -139,7 +139,7 @@ func NewRenderContext(tmpl *domain.TemplateSet, profile *domain.Profile, content
 			}
 		}
 	} else {
-		ctx.Profile = &domain.Profile{}
+		ctx.Profile = &core.Profile{}
 	}
 	if content != nil {
 		ctx.Content = content
@@ -152,17 +152,17 @@ func NewRenderContext(tmpl *domain.TemplateSet, profile *domain.Profile, content
 		ctx.Education = content.Education
 		ctx.Certifications = content.Certifications
 	} else {
-		ctx.Content = &domain.TailoredContent{}
+		ctx.Content = &core.TailoredContent{}
 	}
 	return ctx
 }
 
 // SyntheticRenderContext returns a fully populated mock context used for pre-persistence dry-run validation.
 func SyntheticRenderContext() *RenderContext {
-	endDate := domain.NewDate(2023, 1, 1)
-	projStart := domain.NewDate(2021, 6, 1)
-	eduStart := domain.NewDate(2014, 9, 1)
-	certDate := domain.NewDate(2022, 5, 1)
+	endDate := core.NewDate(2023, 1, 1)
+	projStart := core.NewDate(2021, 6, 1)
+	eduStart := core.NewDate(2014, 9, 1)
+	certDate := core.NewDate(2022, 5, 1)
 	hours := 40
 	return &RenderContext{
 		FullName: "Jane Doe",
@@ -170,48 +170,48 @@ func SyntheticRenderContext() *RenderContext {
 		Email:    "jane@example.com",
 		Phone:    "+1-555-0123",
 		Website:  "https://example.com",
-		Location: domain.Location{
+		Location: core.Location{
 			Address:     "123 Main St",
 			PostalCode:  "94105",
 			City:        "San Francisco",
 			Region:      "CA",
 			CountryCode: "US",
 		},
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "LinkedIn", Username: "janedoe", URL: "https://linkedin.com/in/janedoe"},
 			{Network: "GitHub", Username: "janedoe", URL: "https://github.com/janedoe"},
 		},
 		Summary:   "Experienced software engineer with a track record of building reliable systems.",
 		CSSStyles: htmltemplate.CSS("body { font-family: sans-serif; }"),
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category:       "Languages",
 				Skills:         []string{"Go", "Python", "TypeScript"},
 				SourceSkillIDs: []string{"skill-1", "skill-2"},
 			},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID:    "exp-1",
 				Company:           "Acme Corp",
 				RoleTitle:         "Senior Software Engineer",
-				EmploymentType:    domain.EmploymentTypeFullTime,
-				StartDate:         domain.NewDate(2020, 1, 1),
+				EmploymentType:    core.EmploymentTypeFullTime,
+				StartDate:         core.NewDate(2020, 1, 1),
 				EndDate:           &endDate,
 				IsCurrent:         false,
-				Location:          domain.Location{City: "San Francisco", Region: "CA"},
-				CompanyLocation:   domain.Location{City: "San Francisco", Region: "CA"},
-				CompanyContact:    &domain.ContactDetail{Type: domain.ContactTypeEmail, Value: "hr@acme.com"},
+				Location:          core.Location{City: "San Francisco", Region: "CA"},
+				CompanyLocation:   core.Location{City: "San Francisco", Region: "CA"},
+				CompanyContact:    &core.ContactDetail{Type: core.ContactTypeEmail, Value: "hr@acme.com"},
 				HoursPerWeek:      &hours,
 				SupervisorName:    "Alice Manager",
 				SupervisorContact: "alice@acme.com",
 				DutiesSummary:     "Led core infrastructure development.",
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{Text: "Engineered distributed caching layer reducing latency by 45%.", SourceFactIDs: []string{"fact-1"}},
 				},
 			},
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{
 				SourceEntityID: "proj-1",
 				Name:           "High-Throughput Queue",
@@ -220,12 +220,12 @@ func SyntheticRenderContext() *RenderContext {
 				StartDate:      &projStart,
 				EndDate:        &endDate,
 				Summary:        "A distributed message queue in Go.",
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{Text: "Processed 1M msg/sec with sub-millisecond p99 latency.", SourceFactIDs: []string{"fact-2"}},
 				},
 			},
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{
 				SourceEntityID: "edu-1",
 				Institution:    "University of Technology",
@@ -234,12 +234,12 @@ func SyntheticRenderContext() *RenderContext {
 				StartDate:      &eduStart,
 				EndDate:        &endDate,
 				Score:          "3.9 GPA",
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{Text: "Graduated with Honors; President of ACM chapter.", SourceFactIDs: []string{"fact-3"}},
 				},
 			},
 		},
-		Certifications: []domain.TailoredCert{
+		Certifications: []core.TailoredCert{
 			{
 				SourceEntityID: "cert-1",
 				Name:           "Certified Kubernetes Administrator",
@@ -249,13 +249,13 @@ func SyntheticRenderContext() *RenderContext {
 				Summary:        "Demonstrated proficiency in cluster architecture and cloud native tooling.",
 			},
 		},
-		Profile: &domain.Profile{
+		Profile: &core.Profile{
 			FullName: "Jane Doe",
 			Headline: "Staff Software Engineer",
 			Email:    "jane@example.com",
 			Phone:    "+1-555-0123",
 		},
-		Content: &domain.TailoredContent{
+		Content: &core.TailoredContent{
 			Summary: "Experienced software engineer with a track record of building reliable systems.",
 		},
 		Meta: map[string]any{
@@ -265,9 +265,9 @@ func SyntheticRenderContext() *RenderContext {
 }
 
 // Validate executes pre-persistence dry-run validation on HTML, Markdown, and Plain Text templates.
-func Validate(tmpl *domain.TemplateSet) error {
+func Validate(tmpl *core.TemplateSet) error {
 	if tmpl == nil {
-		return fmt.Errorf("%w: template set cannot be nil", domain.ErrValidation)
+		return fmt.Errorf("%w: template set cannot be nil", core.ErrValidation)
 	}
 
 	synth := SyntheticRenderContext()
@@ -276,10 +276,10 @@ func Validate(tmpl *domain.TemplateSet) error {
 	if tmpl.HTMLTemplate != "" {
 		ht, err := htmltemplate.New("html").Funcs(SafeFuncMap).Parse(tmpl.HTMLTemplate)
 		if err != nil {
-			return fmt.Errorf("%w in html_template: %v", domain.ErrTemplateSyntax, err)
+			return fmt.Errorf("%w in html_template: %v", core.ErrTemplateSyntax, err)
 		}
 		if err := ht.Execute(io.Discard, synth); err != nil {
-			return fmt.Errorf("%w in html_template evaluation: %v", domain.ErrTemplateSyntax, err)
+			return fmt.Errorf("%w in html_template evaluation: %v", core.ErrTemplateSyntax, err)
 		}
 	}
 
@@ -293,10 +293,10 @@ func Validate(tmpl *domain.TemplateSet) error {
 		if textTmpl.body != "" {
 			tt, err := texttemplate.New(textTmpl.name).Funcs(SafeFuncMap).Parse(textTmpl.body)
 			if err != nil {
-				return fmt.Errorf("%w in %s: %v", domain.ErrTemplateSyntax, textTmpl.name, err)
+				return fmt.Errorf("%w in %s: %v", core.ErrTemplateSyntax, textTmpl.name, err)
 			}
 			if err := tt.Execute(io.Discard, synth); err != nil {
-				return fmt.Errorf("%w in %s evaluation: %v", domain.ErrTemplateSyntax, textTmpl.name, err)
+				return fmt.Errorf("%w in %s evaluation: %v", core.ErrTemplateSyntax, textTmpl.name, err)
 			}
 		}
 	}
@@ -305,7 +305,7 @@ func Validate(tmpl *domain.TemplateSet) error {
 }
 
 // RenderFormat compiles and executes a single template string targeting the designated OutputFormat.
-func RenderFormat(format domain.OutputFormat, tmplStr string, data any) (string, error) {
+func RenderFormat(format core.OutputFormat, tmplStr string, data any) (string, error) {
 	if tmplStr == "" {
 		return "", nil
 	}
@@ -314,27 +314,27 @@ func RenderFormat(format domain.OutputFormat, tmplStr string, data any) (string,
 	defer putBuffer(buf)
 
 	switch format {
-	case domain.OutputFormatHTML:
+	case core.OutputFormatHTML:
 		t, err := htmltemplate.New("html").Funcs(SafeFuncMap).Parse(tmplStr)
 		if err != nil {
-			return "", fmt.Errorf("%w in html template: %v", domain.ErrTemplateSyntax, err)
+			return "", fmt.Errorf("%w in html template: %v", core.ErrTemplateSyntax, err)
 		}
 		if err := t.Execute(buf, data); err != nil {
-			return "", fmt.Errorf("%w in html template execution: %v", domain.ErrTemplateSyntax, err)
+			return "", fmt.Errorf("%w in html template execution: %v", core.ErrTemplateSyntax, err)
 		}
 		return buf.String(), nil
 
-	case domain.OutputFormatMarkdown, domain.OutputFormatPlainText:
+	case core.OutputFormatMarkdown, core.OutputFormatPlainText:
 		name := "markdown"
-		if format == domain.OutputFormatPlainText {
+		if format == core.OutputFormatPlainText {
 			name = "text"
 		}
 		t, err := texttemplate.New(name).Funcs(SafeFuncMap).Parse(tmplStr)
 		if err != nil {
-			return "", fmt.Errorf("%w in %s template: %v", domain.ErrTemplateSyntax, name, err)
+			return "", fmt.Errorf("%w in %s template: %v", core.ErrTemplateSyntax, name, err)
 		}
 		if err := t.Execute(buf, data); err != nil {
-			return "", fmt.Errorf("%w in %s template execution: %v", domain.ErrTemplateSyntax, name, err)
+			return "", fmt.Errorf("%w in %s template execution: %v", core.ErrTemplateSyntax, name, err)
 		}
 		return buf.String(), nil
 
@@ -344,29 +344,29 @@ func RenderFormat(format domain.OutputFormat, tmplStr string, data any) (string,
 }
 
 // Render compiles and executes HTML, Markdown, and Plain Text formats for a given TemplateSet against candidate data.
-func Render(ctx context.Context, tmpl *domain.TemplateSet, profile *domain.Profile, content *domain.TailoredContent) (*domain.RenderOutput, error) {
+func Render(ctx context.Context, tmpl *core.TemplateSet, profile *core.Profile, content *core.TailoredContent) (*core.RenderOutput, error) {
 	if tmpl == nil {
-		return nil, fmt.Errorf("%w: template set is required", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: template set is required", core.ErrValidation)
 	}
 
 	renderCtx := NewRenderContext(tmpl, profile, content)
 
-	htmlOut, err := RenderFormat(domain.OutputFormatHTML, tmpl.HTMLTemplate, renderCtx)
+	htmlOut, err := RenderFormat(core.OutputFormatHTML, tmpl.HTMLTemplate, renderCtx)
 	if err != nil {
 		return nil, err
 	}
 
-	mdOut, err := RenderFormat(domain.OutputFormatMarkdown, tmpl.MarkdownTemplate, renderCtx)
+	mdOut, err := RenderFormat(core.OutputFormatMarkdown, tmpl.MarkdownTemplate, renderCtx)
 	if err != nil {
 		return nil, err
 	}
 
-	txtOut, err := RenderFormat(domain.OutputFormatPlainText, tmpl.TextTemplate, renderCtx)
+	txtOut, err := RenderFormat(core.OutputFormatPlainText, tmpl.TextTemplate, renderCtx)
 	if err != nil {
 		return nil, err
 	}
 
-	return &domain.RenderOutput{
+	return &core.RenderOutput{
 		HTML:      htmlOut,
 		Markdown:  mdOut,
 		PlainText: txtOut,
@@ -375,25 +375,25 @@ func Render(ctx context.Context, tmpl *domain.TemplateSet, profile *domain.Profi
 
 type engine struct{}
 
-// New constructs a thread-safe, stateless domain.TemplateRenderer implementation.
-func New() domain.TemplateRenderer {
+// New constructs a thread-safe, stateless core.TemplateRenderer implementation.
+func New() core.TemplateRenderer {
 	return &engine{}
 }
 
 // NewTemplateRenderer is a constructor alias for New.
-func NewTemplateRenderer() domain.TemplateRenderer {
+func NewTemplateRenderer() core.TemplateRenderer {
 	return &engine{}
 }
 
-func (e *engine) Render(ctx context.Context, tmpl *domain.TemplateSet, profile *domain.Profile, content *domain.TailoredContent) (*domain.RenderOutput, error) {
+func (e *engine) Render(ctx context.Context, tmpl *core.TemplateSet, profile *core.Profile, content *core.TailoredContent) (*core.RenderOutput, error) {
 	return Render(ctx, tmpl, profile, content)
 }
 
-func (e *engine) RenderFormat(format domain.OutputFormat, tmplStr string, data any) (string, error) {
+func (e *engine) RenderFormat(format core.OutputFormat, tmplStr string, data any) (string, error) {
 	return RenderFormat(format, tmplStr, data)
 }
 
-func (e *engine) Validate(tmpl *domain.TemplateSet) error {
+func (e *engine) Validate(tmpl *core.TemplateSet) error {
 	return Validate(tmpl)
 }
 
@@ -401,7 +401,7 @@ func (e *engine) Validate(tmpl *domain.TemplateSet) error {
 const DefaultSeededProfileName = "Default User"
 
 // HasCustomProfileData returns true if the profile contains non-empty custom user data rather than unconfigured defaults.
-func HasCustomProfileData(prof *domain.Profile, snap *domain.MainProfileSnapshot) bool {
+func HasCustomProfileData(prof *core.Profile, snap *core.MainProfileSnapshot) bool {
 	if prof == nil {
 		return false
 	}
@@ -416,7 +416,7 @@ func HasCustomProfileData(prof *domain.Profile, snap *domain.MainProfileSnapshot
 
 // BuildPreviewRenderContext constructs a comprehensive execution context for template preview rendering.
 // Prefers actual user profile facts when present, merging with synthetic sample data for empty sections.
-func BuildPreviewRenderContext(ctx context.Context, profileRepo domain.ProfileRepository, userID string, tmpl *domain.TemplateSet) *RenderContext {
+func BuildPreviewRenderContext(ctx context.Context, profileRepo core.ProfileRepository, userID string, tmpl *core.TemplateSet) *RenderContext {
 	synth := SyntheticRenderContext()
 	if tmpl != nil && tmpl.CSSStyles != "" {
 		synth.CSSStyles = htmltemplate.CSS(tmpl.CSSStyles)
@@ -430,9 +430,9 @@ func BuildPreviewRenderContext(ctx context.Context, profileRepo domain.ProfileRe
 	if err == nil && prof != nil {
 		snapshot, _ := profileRepo.GetSnapshot(ctx, userID)
 		if HasCustomProfileData(prof, snapshot) {
-			var tailored *domain.TailoredContent
+			var tailored *core.TailoredContent
 			if snapshot != nil {
-				tailored = domain.SnapshotToTailoredContent(snapshot)
+				tailored = core.SnapshotToTailoredContent(snapshot)
 			}
 			userCtx := NewRenderContext(tmpl, prof, tailored)
 			if len(userCtx.Experiences) == 0 {
@@ -461,32 +461,32 @@ func BuildPreviewRenderContext(ctx context.Context, profileRepo domain.ProfileRe
 }
 
 // RenderAllFormats compiles and executes all template formats (HTML, Markdown, PlainText) using the provided context.
-func RenderAllFormats(r domain.TemplateRenderer, tmpl *domain.TemplateSet, renderCtx *RenderContext) (domain.RenderOutput, error) {
+func RenderAllFormats(r core.TemplateRenderer, tmpl *core.TemplateSet, renderCtx *RenderContext) (core.RenderOutput, error) {
 	if tmpl == nil || r == nil {
-		return domain.RenderOutput{}, nil
+		return core.RenderOutput{}, nil
 	}
 
-	var out domain.RenderOutput
+	var out core.RenderOutput
 	if tmpl.HTMLTemplate != "" {
-		htmlOut, err := r.RenderFormat(domain.OutputFormatHTML, tmpl.HTMLTemplate, renderCtx)
+		htmlOut, err := r.RenderFormat(core.OutputFormatHTML, tmpl.HTMLTemplate, renderCtx)
 		if err != nil {
-			return domain.RenderOutput{}, fmt.Errorf("html template rendering failed: %w", err)
+			return core.RenderOutput{}, fmt.Errorf("html template rendering failed: %w", err)
 		}
 		out.HTML = StripScriptTags(htmlOut)
 	}
 
 	if tmpl.MarkdownTemplate != "" {
-		mdOut, err := r.RenderFormat(domain.OutputFormatMarkdown, tmpl.MarkdownTemplate, renderCtx)
+		mdOut, err := r.RenderFormat(core.OutputFormatMarkdown, tmpl.MarkdownTemplate, renderCtx)
 		if err != nil {
-			return domain.RenderOutput{}, fmt.Errorf("markdown template rendering failed: %w", err)
+			return core.RenderOutput{}, fmt.Errorf("markdown template rendering failed: %w", err)
 		}
 		out.Markdown = mdOut
 	}
 
 	if tmpl.TextTemplate != "" {
-		txtOut, err := r.RenderFormat(domain.OutputFormatPlainText, tmpl.TextTemplate, renderCtx)
+		txtOut, err := r.RenderFormat(core.OutputFormatPlainText, tmpl.TextTemplate, renderCtx)
 		if err != nil {
-			return domain.RenderOutput{}, fmt.Errorf("text template rendering failed: %w", err)
+			return core.RenderOutput{}, fmt.Errorf("text template rendering failed: %w", err)
 		}
 		out.PlainText = txtOut
 	}
@@ -497,16 +497,16 @@ func RenderAllFormats(r domain.TemplateRenderer, tmpl *domain.TemplateSet, rende
 // ResolveVersionOutputs resolves or dynamically re-renders resume outputs incorporating targetTemplateID.
 func ResolveVersionOutputs(
 	ctx context.Context,
-	r domain.TemplateRenderer,
-	templateRepo domain.TemplateRepository,
-	profileRepo domain.ProfileRepository,
+	r core.TemplateRenderer,
+	templateRepo core.TemplateRepository,
+	profileRepo core.ProfileRepository,
 	userID string,
-	b *domain.Branch,
-	ver *domain.BranchVersion,
+	b *core.Branch,
+	ver *core.BranchVersion,
 	targetTemplateID string,
-) domain.RenderOutput {
+) core.RenderOutput {
 	if ver == nil {
-		return domain.RenderOutput{}
+		return core.RenderOutput{}
 	}
 	htmlOut := ver.HTMLOutput
 	mdOut := ver.MarkdownOutput
@@ -525,7 +525,7 @@ func ResolveVersionOutputs(
 
 	if shouldRender && r != nil && templateRepo != nil && targetTemplateID != "" {
 		if tmpl, tErr := templateRepo.GetTemplate(ctx, userID, targetTemplateID); tErr == nil && tmpl != nil {
-			var prof *domain.Profile
+			var prof *core.Profile
 			if profileRepo != nil {
 				prof, _ = profileRepo.GetProfile(ctx, userID)
 			}
@@ -538,17 +538,17 @@ func ResolveVersionOutputs(
 			} else {
 				renderCtx := NewRenderContext(tmpl, prof, nil)
 				if htmlOut == "" && tmpl.HTMLTemplate != "" {
-					if hOut, rErr := r.RenderFormat(domain.OutputFormatHTML, tmpl.HTMLTemplate, renderCtx); rErr == nil {
+					if hOut, rErr := r.RenderFormat(core.OutputFormatHTML, tmpl.HTMLTemplate, renderCtx); rErr == nil {
 						htmlOut = hOut
 					}
 				}
 				if mdOut == "" && tmpl.MarkdownTemplate != "" {
-					if mOut, rErr := r.RenderFormat(domain.OutputFormatMarkdown, tmpl.MarkdownTemplate, renderCtx); rErr == nil {
+					if mOut, rErr := r.RenderFormat(core.OutputFormatMarkdown, tmpl.MarkdownTemplate, renderCtx); rErr == nil {
 						mdOut = mOut
 					}
 				}
 				if txtOut == "" && tmpl.TextTemplate != "" {
-					if tOut, rErr := r.RenderFormat(domain.OutputFormatPlainText, tmpl.TextTemplate, renderCtx); rErr == nil {
+					if tOut, rErr := r.RenderFormat(core.OutputFormatPlainText, tmpl.TextTemplate, renderCtx); rErr == nil {
 						txtOut = tOut
 					}
 				}
@@ -556,7 +556,7 @@ func ResolveVersionOutputs(
 		}
 	}
 
-	return domain.RenderOutput{
+	return core.RenderOutput{
 		HTML:      htmlOut,
 		Markdown:  mdOut,
 		PlainText: txtOut,

@@ -4,19 +4,19 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // ValidationResult contains the sanitized tailored content and structured warnings.
 type ValidationResult struct {
-	SanitizedContent *domain.TailoredContent
+	SanitizedContent *core.TailoredContent
 	Warnings         []string
 }
 
 // ProvenanceValidator audits and sanitizes TailoredContent against MainProfileSnapshot and Branch rules.
 type ProvenanceValidator interface {
-	Validate(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) (*ValidationResult, error)
-	ValidateStrict(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) error
+	Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*ValidationResult, error)
+	ValidateStrict(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) error
 }
 
 // Validator implements the ProvenanceValidator interface.
@@ -28,22 +28,22 @@ func New() *Validator {
 }
 
 // Validate is a package-level convenience function delegating to Validator.
-func Validate(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) (*ValidationResult, error) {
+func Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*ValidationResult, error) {
 	return New().Validate(content, snapshot, branch)
 }
 
 // ValidateStrict is a package-level convenience function delegating to Validator.
-func ValidateStrict(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) error {
+func ValidateStrict(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) error {
 	return New().ValidateStrict(content, snapshot, branch)
 }
 
 type factMetadata struct {
 	OwnerID      string
 	OwnerShortID string
-	OwnerType    domain.OwnerType
+	OwnerType    core.OwnerType
 }
 
-func registerSkills(validSkills map[string]domain.Skill, skills []domain.Skill) {
+func registerSkills(validSkills map[string]core.Skill, skills []core.Skill) {
 	for _, s := range skills {
 		validSkills[s.ID] = s
 		if short := s.EffectiveShortID(); short != "" {
@@ -58,7 +58,7 @@ func registerSkills(validSkills map[string]domain.Skill, skills []domain.Skill) 
 	}
 }
 
-func registerFacts(factRegistry map[string]factMetadata, facts []domain.Fact, ownerID, ownerShortID string, defaultOwnerType domain.OwnerType) {
+func registerFacts(factRegistry map[string]factMetadata, facts []core.Fact, ownerID, ownerShortID string, defaultOwnerType core.OwnerType) {
 	for _, f := range facts {
 		ownerType := f.OwnerType
 		if ownerType == "" {
@@ -84,22 +84,22 @@ func registerFacts(factRegistry map[string]factMetadata, facts []domain.Fact, ow
 // Returns:
 //   - ValidationResult containing SanitizedContent, list of Warnings, and IsValid boolean flag.
 //   - Error if content or snapshot is nil.
-func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) (*ValidationResult, error) {
+func (v *Validator) Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*ValidationResult, error) {
 	if content == nil {
-		return nil, fmt.Errorf("%w: content cannot be nil", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: content cannot be nil", core.ErrValidation)
 	}
 	if snapshot == nil {
-		return nil, fmt.Errorf("%w: main profile snapshot cannot be nil", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: main profile snapshot cannot be nil", core.ErrValidation)
 	}
 
 	allSkills := snapshot.AllSkills()
-	validSkills := make(map[string]domain.Skill, len(allSkills)*2)
+	validSkills := make(map[string]core.Skill, len(allSkills)*2)
 	registerSkills(validSkills, allSkills)
 
-	validExperiences := make(map[string]domain.WorkExperience, len(snapshot.Experiences)*2)
-	validProjects := make(map[string]domain.Project, len(snapshot.Projects)*2)
-	validEducation := make(map[string]domain.Education, len(snapshot.Education)*2)
-	validCertifications := make(map[string]domain.Certification, len(snapshot.Certifications)*2)
+	validExperiences := make(map[string]core.WorkExperience, len(snapshot.Experiences)*2)
+	validProjects := make(map[string]core.Project, len(snapshot.Projects)*2)
+	validEducation := make(map[string]core.Education, len(snapshot.Education)*2)
+	validCertifications := make(map[string]core.Certification, len(snapshot.Certifications)*2)
 	factRegistry := make(map[string]factMetadata)
 
 	for _, exp := range snapshot.Experiences {
@@ -107,7 +107,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if exp.EffectiveShortID() != "" {
 			validExperiences[exp.EffectiveShortID()] = exp
 		}
-		registerFacts(factRegistry, exp.Facts, exp.ID, exp.EffectiveShortID(), domain.OwnerTypeWorkExperience)
+		registerFacts(factRegistry, exp.Facts, exp.ID, exp.EffectiveShortID(), core.OwnerTypeWorkExperience)
 	}
 
 	for _, proj := range snapshot.Projects {
@@ -115,7 +115,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if proj.EffectiveShortID() != "" {
 			validProjects[proj.EffectiveShortID()] = proj
 		}
-		registerFacts(factRegistry, proj.Facts, proj.ID, proj.EffectiveShortID(), domain.OwnerTypeProject)
+		registerFacts(factRegistry, proj.Facts, proj.ID, proj.EffectiveShortID(), core.OwnerTypeProject)
 	}
 
 	for _, edu := range snapshot.Education {
@@ -123,7 +123,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 		if edu.EffectiveShortID() != "" {
 			validEducation[edu.EffectiveShortID()] = edu
 		}
-		registerFacts(factRegistry, edu.Facts, edu.ID, edu.EffectiveShortID(), domain.OwnerTypeEducation)
+		registerFacts(factRegistry, edu.Facts, edu.ID, edu.EffectiveShortID(), core.OwnerTypeEducation)
 	}
 
 	for _, cert := range snapshot.Certifications {
@@ -193,13 +193,13 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 	var warnings []string
 	retainedEntityIDs := make(map[string]bool)
 
-	sanitized := &domain.TailoredContent{
+	sanitized := &core.TailoredContent{
 		Summary: content.Summary,
 	}
 
 	// 1. Skill Groups
 	if content.SkillGroups != nil {
-		sanitizedGroups := make([]domain.TailoredSkillGroup, 0, len(content.SkillGroups))
+		sanitizedGroups := make([]core.TailoredSkillGroup, 0, len(content.SkillGroups))
 		for _, group := range content.SkillGroups {
 			sg, groupWarnings, ok := sanitizeSkillGroup(group, validSkills)
 			warnings = append(warnings, groupWarnings...)
@@ -221,7 +221,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 	// 2. Experiences
 	if content.Experiences != nil {
-		sanitizedExperiences := make([]domain.TailoredExperience, 0, len(content.Experiences))
+		sanitizedExperiences := make([]core.TailoredExperience, 0, len(content.Experiences))
 		for _, exp := range content.Experiences {
 			if excludedSet[exp.SourceEntityID] {
 				company := exp.Company
@@ -247,7 +247,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 			sanitizedBullets := sanitizeBullets("experience", exp.SourceEntityID, exp.Bullets, factRegistry, validSkills, &warnings)
 
-			sanitizedExp := domain.TailoredExperience{
+			sanitizedExp := core.TailoredExperience{
 				SourceEntityID:    origExp.ID,
 				Company:           origExp.Company,
 				RoleTitle:         origExp.RoleTitle,
@@ -259,7 +259,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				SupervisorName:    origExp.SupervisorName,
 				SupervisorContact: origExp.SupervisorContact,
 				Bullets:           sanitizedBullets,
-				Metadata:          domain.CloneMetadata(origExp.Metadata),
+				Metadata:          core.CloneMetadata(origExp.Metadata),
 			}
 			if origExp.EndDate != nil {
 				end := *origExp.EndDate
@@ -291,7 +291,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 	// 3. Projects
 	if content.Projects != nil {
-		sanitizedProjects := make([]domain.TailoredProject, 0, len(content.Projects))
+		sanitizedProjects := make([]core.TailoredProject, 0, len(content.Projects))
 		for _, proj := range content.Projects {
 			if excludedSet[proj.SourceEntityID] {
 				name := proj.Name
@@ -317,18 +317,18 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 			sanitizedBullets := sanitizeBullets("project", proj.SourceEntityID, proj.Bullets, factRegistry, validSkills, &warnings)
 
-			var projStart *domain.Date
+			var projStart *core.Date
 			if origProj.StartDate != nil {
 				st := *origProj.StartDate
 				projStart = &st
 			}
-			var projEnd *domain.Date
+			var projEnd *core.Date
 			if origProj.EndDate != nil {
 				end := *origProj.EndDate
 				projEnd = &end
 			}
 
-			sanitizedProj := domain.TailoredProject{
+			sanitizedProj := core.TailoredProject{
 				SourceEntityID: origProj.ID,
 				Name:           origProj.Name,
 				Role:           origProj.Role,
@@ -336,7 +336,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				StartDate:      projStart,
 				EndDate:        projEnd,
 				Bullets:        sanitizedBullets,
-				Metadata:       domain.CloneMetadata(origProj.Metadata),
+				Metadata:       core.CloneMetadata(origProj.Metadata),
 			}
 			if proj.Summary != "" {
 				sanitizedProj.Summary = proj.Summary
@@ -356,7 +356,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 	// 4. Education
 	if content.Education != nil {
-		sanitizedEducation := make([]domain.TailoredEducation, 0, len(content.Education))
+		sanitizedEducation := make([]core.TailoredEducation, 0, len(content.Education))
 		for _, edu := range content.Education {
 			if excludedSet[edu.SourceEntityID] {
 				inst := edu.Institution
@@ -382,18 +382,18 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 			sanitizedBullets := sanitizeBullets("education", edu.SourceEntityID, edu.Bullets, factRegistry, validSkills, &warnings)
 
-			var eduStart *domain.Date
+			var eduStart *core.Date
 			if origEdu.StartDate != nil {
 				st := *origEdu.StartDate
 				eduStart = &st
 			}
-			var eduEnd *domain.Date
+			var eduEnd *core.Date
 			if origEdu.EndDate != nil {
 				end := *origEdu.EndDate
 				eduEnd = &end
 			}
 
-			sanitizedEdu := domain.TailoredEducation{
+			sanitizedEdu := core.TailoredEducation{
 				SourceEntityID: origEdu.ID,
 				Institution:    origEdu.Institution,
 				Degree:         origEdu.Degree,
@@ -403,7 +403,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 				Location:       origEdu.Location,
 				Score:          origEdu.Score,
 				Bullets:        sanitizedBullets,
-				Metadata:       domain.CloneMetadata(origEdu.Metadata),
+				Metadata:       core.CloneMetadata(origEdu.Metadata),
 			}
 
 			sanitizedEducation = append(sanitizedEducation, sanitizedEdu)
@@ -418,7 +418,7 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 
 	// 5. Certifications
 	if content.Certifications != nil {
-		sanitizedCerts := make([]domain.TailoredCert, 0, len(content.Certifications))
+		sanitizedCerts := make([]core.TailoredCert, 0, len(content.Certifications))
 		for _, cert := range content.Certifications {
 			if excludedSet[cert.SourceEntityID] {
 				name := cert.Name
@@ -446,20 +446,20 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 			if cert.Summary != "" {
 				summary = cert.Summary
 			}
-			var certDate *domain.Date
+			var certDate *core.Date
 			if origCert.Date != nil {
 				cd := *origCert.Date
 				certDate = &cd
 			}
 
-			sanitizedCert := domain.TailoredCert{
+			sanitizedCert := core.TailoredCert{
 				SourceEntityID: origCert.ID,
 				Name:           origCert.Name,
 				Issuer:         origCert.Issuer,
 				Date:           certDate,
 				URL:            origCert.URL,
 				Summary:        summary,
-				Metadata:       domain.CloneMetadata(origCert.Metadata),
+				Metadata:       core.CloneMetadata(origCert.Metadata),
 			}
 
 			sanitizedCerts = append(sanitizedCerts, sanitizedCert)
@@ -487,26 +487,26 @@ func (v *Validator) Validate(content *domain.TailoredContent, snapshot *domain.M
 	}, nil
 }
 
-// ValidateStrict runs Validate and returns domain.ErrProvenance if any warnings are emitted.
-func (v *Validator) ValidateStrict(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) error {
+// ValidateStrict runs Validate and returns core.ErrProvenance if any warnings are emitted.
+func (v *Validator) ValidateStrict(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) error {
 	res, err := v.Validate(content, snapshot, branch)
 	if err != nil {
 		return err
 	}
 	if len(res.Warnings) > 0 {
-		return domain.ErrProvenance
+		return core.ErrProvenance
 	}
 	return nil
 }
 
 // sanitizeSkillGroup verifies skill IDs against valid snapshot skills and removes ungrounded entries.
-func sanitizeSkillGroup(group domain.TailoredSkillGroup, validSkills map[string]domain.Skill) (domain.TailoredSkillGroup, []string, bool) {
+func sanitizeSkillGroup(group core.TailoredSkillGroup, validSkills map[string]core.Skill) (core.TailoredSkillGroup, []string, bool) {
 	var warnings []string
 	if len(group.SourceSkillIDs) == 0 {
 		if len(group.Skills) > 0 {
 			warnings = append(warnings, fmt.Sprintf("[UNGROUNDED_SKILL] pruned ungrounded skills from category '%s': missing source skill citations", group.Category))
 		}
-		return domain.TailoredSkillGroup{}, warnings, false
+		return core.TailoredSkillGroup{}, warnings, false
 	}
 
 	var validIDs []string
@@ -547,10 +547,10 @@ func sanitizeSkillGroup(group domain.TailoredSkillGroup, validSkills map[string]
 	}
 
 	if len(validIDs) == 0 {
-		return domain.TailoredSkillGroup{}, warnings, false
+		return core.TailoredSkillGroup{}, warnings, false
 	}
 
-	return domain.TailoredSkillGroup{
+	return core.TailoredSkillGroup{
 		Category:       group.Category,
 		Skills:         validSkillNames,
 		SourceSkillIDs: validIDs,
@@ -572,12 +572,12 @@ func sanitizeSkillGroup(group domain.TailoredSkillGroup, validSkills map[string]
 //
 // Returns:
 //   - Slice of sanitized, fully grounded TailoredBullet items.
-func sanitizeBullets(entityType, entityID string, bullets []domain.TailoredBullet, factRegistry map[string]factMetadata, validSkills map[string]domain.Skill, warnings *[]string) []domain.TailoredBullet {
+func sanitizeBullets(entityType, entityID string, bullets []core.TailoredBullet, factRegistry map[string]factMetadata, validSkills map[string]core.Skill, warnings *[]string) []core.TailoredBullet {
 	if bullets == nil {
 		return nil
 	}
 
-	sanitizedBullets := make([]domain.TailoredBullet, 0, len(bullets))
+	sanitizedBullets := make([]core.TailoredBullet, 0, len(bullets))
 
 	for _, bullet := range bullets {
 		if len(bullet.SourceFactIDs) == 0 {
@@ -619,7 +619,7 @@ func sanitizeBullets(entityType, entityID string, bullets []domain.TailoredBulle
 		sanitizedFactIDs := make([]string, len(bullet.SourceFactIDs))
 		copy(sanitizedFactIDs, bullet.SourceFactIDs)
 
-		sanitizedBullet := domain.TailoredBullet{
+		sanitizedBullet := core.TailoredBullet{
 			Text:           bullet.Text,
 			SourceFactIDs:  sanitizedFactIDs,
 			SourceSkillIDs: validBulletSkillIDs,

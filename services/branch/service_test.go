@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/resumeee-app/resumeee-core/services/branch"
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/privacy"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 	"github.com/resumeee-app/resumeee-core/validator"
@@ -22,7 +22,7 @@ import (
 type stubEnqueuer struct {
 	mu       sync.Mutex
 	capacity int
-	jobs     []domain.GenerationJob
+	jobs     []core.GenerationJob
 	closed   bool
 }
 
@@ -30,12 +30,12 @@ func newStubEnqueuer(capacity int) *stubEnqueuer {
 	return &stubEnqueuer{capacity: capacity}
 }
 
-func (e *stubEnqueuer) Enqueue(job domain.GenerationJob) error {
+func (e *stubEnqueuer) Enqueue(job core.GenerationJob) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if e.closed || (e.capacity > 0 && len(e.jobs) >= e.capacity) {
-		return domain.ErrQueueFull
+		return core.ErrQueueFull
 	}
 	e.jobs = append(e.jobs, job)
 	return nil
@@ -44,8 +44,8 @@ func (e *stubEnqueuer) Enqueue(job domain.GenerationJob) error {
 type testBranchEnv struct {
 	db          any
 	svc         branch.Service
-	branchRepo  domain.BranchRepository
-	profileRepo domain.ProfileRepository
+	branchRepo  core.BranchRepository
+	profileRepo core.ProfileRepository
 	enqueuer    *stubEnqueuer
 	defaultUser string
 	branchID    string
@@ -82,7 +82,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 		PromptCompiler: &fakePromptCompiler{},
 	})
 
-	b := &domain.Branch{
+	b := &core.Branch{
 		ID:            "branch-" + uuid.New().String(),
 		UserID:        defaultUser,
 		Name:          "Senior Cloud Architect",
@@ -94,13 +94,13 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 	}
 
 	// Create initial v1
-	v1 := &domain.BranchVersion{
+	v1 := &core.BranchVersion{
 		ID:                "ver-init-1",
 		BranchID:          created.ID,
-		Status:            domain.VersionStatusCompleted,
+		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
-		SourceType:        domain.SourceTypeLLMGeneration,
+		SourceType:        core.SourceTypeLLMGeneration,
 	}
 	if err := branchRepo.CreateVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to create v1: %v", err)
@@ -110,22 +110,22 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 	}
 
 	// Seed an experience and fact so manual edits have valid provenance
-	exp := &domain.WorkExperience{
+	exp := &core.WorkExperience{
 		ID:        "exp-test-1",
 		UserID:    defaultUser,
 		Company:   "Acme Corp",
 		RoleTitle: "Lead Systems Architect",
-		StartDate: domain.NewDate(2020, 1, 1),
+		StartDate: core.NewDate(2020, 1, 1),
 	}
 	if err := profileRepo.CreateExperience(ctx, exp); err != nil {
 		t.Fatalf("failed to create experience: %v", err)
 	}
 
-	fact := &domain.Fact{
+	fact := &core.Fact{
 		ID:        "fact-test-1",
 		UserID:    defaultUser,
 		OwnerID:   exp.ID,
-		OwnerType: domain.OwnerTypeWorkExperience,
+		OwnerType: core.OwnerTypeWorkExperience,
 		Statement: "Optimized distributed consensus throughput by 40%.",
 	}
 	if err := profileRepo.CreateFact(ctx, fact); err != nil {
@@ -177,22 +177,22 @@ func TestService_ConcurrentManualEditVersioning(t *testing.T) {
 	const concurrency = 8
 	var wg sync.WaitGroup
 	errCh := make(chan error, concurrency)
-	results := make([]*domain.BranchVersion, concurrency)
+	results := make([]*core.BranchVersion, concurrency)
 
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 
-			content := domain.TailoredContent{
+			content := core.TailoredContent{
 				Summary: fmt.Sprintf("Summary updated by thread %d", idx),
-				Experiences: []domain.TailoredExperience{
+				Experiences: []core.TailoredExperience{
 					{
 						SourceEntityID: env.validExpID,
 						Company:        "Acme Corp",
 						RoleTitle:      "Engineer",
-						StartDate:      domain.NewDate(2021, 1, 1),
-						Bullets: []domain.TailoredBullet{
+						StartDate:      core.NewDate(2021, 1, 1),
+						Bullets: []core.TailoredBullet{
 							{
 								Text:          fmt.Sprintf("Bullet point %d", idx),
 								SourceFactIDs: []string{env.validFactID},
@@ -251,15 +251,15 @@ func TestService_EditVersionProvenanceFailure(t *testing.T) {
 	ctx := context.Background()
 
 	// Content citing a non-existent hallucinated fact ID
-	badContent := domain.TailoredContent{
+	badContent := core.TailoredContent{
 		Summary: "Fake accomplishments",
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: env.validExpID,
 				Company:        "Acme Corp",
 				RoleTitle:      "Engineer",
-				StartDate:      domain.NewDate(2021, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2021, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Claiming ungrounded achievement",
 						SourceFactIDs: []string{"fabricated-fact-id-12345"},
@@ -273,8 +273,8 @@ func TestService_EditVersionProvenanceFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected provenance error, got nil")
 	}
-	if !errors.Is(err, domain.ErrProvenance) {
-		t.Fatalf("expected errors.Is(err, domain.ErrProvenance), got %v", err)
+	if !errors.Is(err, core.ErrProvenance) {
+		t.Fatalf("expected errors.Is(err, core.ErrProvenance), got %v", err)
 	}
 }
 
@@ -284,7 +284,7 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a second branch
-	b2 := &domain.Branch{
+	b2 := &core.Branch{
 		ID:            "branch-2-" + uuid.New().String(),
 		UserID:        env.defaultUser,
 		Name:          "Frontend Architect",
@@ -312,8 +312,8 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 
 	// Batch sync all stale branches: queue capacity is 1, so 1 should enqueue and 2nd hit ErrQueueFull
 	enqueuedIDs, err := env.svc.SyncBranches(ctx, env.defaultUser, []string{env.branchID, b2.ID})
-	if !errors.Is(err, domain.ErrQueueFull) {
-		t.Fatalf("expected domain.ErrQueueFull on saturated batch sync, got %v", err)
+	if !errors.Is(err, core.ErrQueueFull) {
+		t.Fatalf("expected core.ErrQueueFull on saturated batch sync, got %v", err)
 	}
 	if len(enqueuedIDs) != 1 {
 		t.Fatalf("expected exactly 1 enqueued version ID before saturation, got %d", len(enqueuedIDs))
@@ -330,7 +330,7 @@ func TestService_GenerateVersion(t *testing.T) {
 		t.Fatalf("GenerateVersion failed: %v", err)
 	}
 
-	if ver.Status != domain.VersionStatusPending {
+	if ver.Status != core.VersionStatusPending {
 		t.Errorf("expected pending status, got %s", ver.Status)
 	}
 	if ver.VersionNumber != 2 {
@@ -373,13 +373,13 @@ func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 	}
 
 	// Create and complete v2 at MainRevisionUsed = rev2
-	v2 := &domain.BranchVersion{
+	v2 := &core.BranchVersion{
 		ID:               "ver-v2-test",
 		BranchID:         env.branchID,
-		Status:           domain.VersionStatusCompleted,
+		Status:           core.VersionStatusCompleted,
 		MainRevisionUsed: rev2,
 		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
-		SourceType:       domain.SourceTypeLLMGeneration,
+		SourceType:       core.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
 		t.Fatalf("create v2: %v", err)
@@ -439,13 +439,13 @@ func TestService_UpdateBranchSyncsGapReportOnActiveVersionSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get v1: %v", err)
 	}
-	v1.Status = domain.VersionStatusCompleted
-	v1.GapReport = &domain.GapReport{
+	v1.Status = core.VersionStatusCompleted
+	v1.GapReport = &core.GapReport{
 		OverallMatchSummary: "V1 match report",
 		MatchScore:          &score70,
-		MissingRequirements: []domain.GapItem{
-			{Requirement: "Rust programming", Importance: domain.GapImportanceCritical},
-			{Requirement: "Distributed consensus", Importance: domain.GapImportancePreferred},
+		MissingRequirements: []core.GapItem{
+			{Requirement: "Rust programming", Importance: core.GapImportanceCritical},
+			{Requirement: "Distributed consensus", Importance: core.GapImportancePreferred},
 		},
 	}
 	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
@@ -453,18 +453,18 @@ func TestService_UpdateBranchSyncsGapReportOnActiveVersionSwitch(t *testing.T) {
 	}
 
 	// Create v2 with GapReport score 95
-	v2 := &domain.BranchVersion{
+	v2 := &core.BranchVersion{
 		ID:                "ver-v2-gap-test",
 		BranchID:          env.branchID,
-		Status:            domain.VersionStatusCompleted,
+		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
-		SourceType:        domain.SourceTypeLLMGeneration,
-		GapReport: &domain.GapReport{
+		SourceType:        core.SourceTypeLLMGeneration,
+		GapReport: &core.GapReport{
 			OverallMatchSummary: "V2 improved match report",
 			MatchScore:          &score95,
-			MissingRequirements: []domain.GapItem{
-				{Requirement: "Docker orchestration", Importance: domain.GapImportanceNiceToHave},
+			MissingRequirements: []core.GapItem{
+				{Requirement: "Docker orchestration", Importance: core.GapImportanceNiceToHave},
 			},
 		},
 	}
@@ -517,7 +517,7 @@ func TestService_GetAndListBranchesFallbackResolution(t *testing.T) {
 	score87 := 87.0
 
 	// Create branch with active version
-	b := &domain.Branch{
+	b := &core.Branch{
 		ID:            "branch-service-fallback-" + uuid.New().String(),
 		UserID:        env.defaultUser,
 		Name:          "Data Platform Architect",
@@ -527,18 +527,18 @@ func TestService_GetAndListBranchesFallbackResolution(t *testing.T) {
 		t.Fatalf("create branch: %v", err)
 	}
 
-	v := &domain.BranchVersion{
+	v := &core.BranchVersion{
 		ID:                "ver-service-fallback",
 		BranchID:          b.ID,
-		Status:            domain.VersionStatusCompleted,
+		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
-		SourceType:        domain.SourceTypeLLMGeneration,
-		GapReport: &domain.GapReport{
+		SourceType:        core.SourceTypeLLMGeneration,
+		GapReport: &core.GapReport{
 			OverallMatchSummary: "Fallback summary from version",
 			MatchScore:          &score87,
-			MissingRequirements: []domain.GapItem{
-				{Requirement: "Apache Spark Streaming", Importance: domain.GapImportanceCritical},
+			MissingRequirements: []core.GapItem{
+				{Requirement: "Apache Spark Streaming", Importance: core.GapImportanceCritical},
 			},
 		},
 	}
@@ -574,7 +574,7 @@ func TestService_GetAndListBranchesFallbackResolution(t *testing.T) {
 		t.Fatalf("svc.ListBranches failed: %v", err)
 	}
 
-	var found *domain.Branch
+	var found *core.Branch
 	for i := range branches {
 		if branches[i].ID == b.ID {
 			found = &branches[i]
@@ -598,7 +598,7 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 	ctx := context.Background()
 
 	// Create Branch 2 with version vOther
-	b2 := &domain.Branch{
+	b2 := &core.Branch{
 		ID:            "branch-other-" + uuid.New().String(),
 		UserID:        env.defaultUser,
 		Name:          "Other Branch",
@@ -609,13 +609,13 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 		t.Fatalf("failed to create branch 2: %v", err)
 	}
 
-	vOther := &domain.BranchVersion{
+	vOther := &core.BranchVersion{
 		ID:                "ver-other-branch",
 		BranchID:          created2.ID,
-		Status:            domain.VersionStatusCompleted,
+		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
-		SourceType:        domain.SourceTypeLLMGeneration,
+		SourceType:        core.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vOther); err != nil {
 		t.Fatalf("failed to create vOther: %v", err)
@@ -635,8 +635,8 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error assigning foreign branch version, got nil")
 	}
-	if !errors.Is(err, domain.ErrValidation) {
-		t.Errorf("expected domain.ErrValidation, got: %v", err)
+	if !errors.Is(err, core.ErrValidation) {
+		t.Errorf("expected core.ErrValidation, got: %v", err)
 	}
 
 	// 2. Non-existent version assignment
@@ -646,18 +646,18 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error assigning non-existent version, got nil")
 	}
-	if !errors.Is(err, domain.ErrValidation) {
-		t.Errorf("expected domain.ErrValidation, got: %v", err)
+	if !errors.Is(err, core.ErrValidation) {
+		t.Errorf("expected core.ErrValidation, got: %v", err)
 	}
 
 	// 3. Pending/incomplete version assignment
-	vPending := &domain.BranchVersion{
+	vPending := &core.BranchVersion{
 		ID:                "ver-pending-test",
 		BranchID:          env.branchID,
-		Status:            domain.VersionStatusPending,
+		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: renderer.TemplateStandardCleanID,
-		SourceType:        domain.SourceTypeLLMGeneration,
+		SourceType:        core.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, vPending); err != nil {
 		t.Fatalf("failed to create pending version: %v", err)
@@ -667,15 +667,15 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error assigning pending version as active, got nil")
 	}
-	if !errors.Is(err, domain.ErrValidation) {
-		t.Errorf("expected domain.ErrValidation, got: %v", err)
+	if !errors.Is(err, core.ErrValidation) {
+		t.Errorf("expected core.ErrValidation, got: %v", err)
 	}
 }
 
 func TestBranchService_DefaultBranch(t *testing.T) {
 	ctx := context.Background()
 	env := setupTestBranchEnv(t, 10)
-	defaultBranchID := domain.DefaultBranchID(env.defaultUser)
+	defaultBranchID := core.DefaultBranchID(env.defaultUser)
 
 	// Fetch default branch
 	defaultBranch, err := env.svc.GetBranch(ctx, env.defaultUser, defaultBranchID)
@@ -697,11 +697,11 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if len(env.enqueuer.jobs) != initialEnqueued {
 			t.Errorf("expected enqueuer jobs to remain %d, got %d", initialEnqueued, len(env.enqueuer.jobs))
 		}
-		if ver.Status != domain.VersionStatusCompleted {
+		if ver.Status != core.VersionStatusCompleted {
 			t.Errorf("expected status completed, got %s", ver.Status)
 		}
-		if ver.SourceType != domain.SourceTypeMainProfile {
-			t.Errorf("expected SourceType %s, got %s", domain.SourceTypeMainProfile, ver.SourceType)
+		if ver.SourceType != core.SourceTypeMainProfile {
+			t.Errorf("expected SourceType %s, got %s", core.SourceTypeMainProfile, ver.SourceType)
 		}
 		if ver.ProviderUsed != "none" || ver.ModelUsed != "none" {
 			t.Errorf("expected provider/model to be none, got %s/%s", ver.ProviderUsed, ver.ModelUsed)
@@ -731,7 +731,7 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if len(env.enqueuer.jobs) != initialEnqueued+1 {
 			t.Errorf("expected enqueuer jobs to increase by 1, got %d (was %d)", len(env.enqueuer.jobs), initialEnqueued)
 		}
-		if ver.Status != domain.VersionStatusPending {
+		if ver.Status != core.VersionStatusPending {
 			t.Errorf("expected status pending for tailored branch, got %s", ver.Status)
 		}
 	})
@@ -780,7 +780,7 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error modifying target role on default branch, got nil")
 		}
-		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+		if !errors.Is(err, core.ErrDefaultBranchImmutable) {
 			t.Errorf("expected ErrDefaultBranchImmutable, got: %v", err)
 		}
 
@@ -791,7 +791,7 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error modifying reasoning level on default branch, got nil")
 		}
-		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+		if !errors.Is(err, core.ErrDefaultBranchImmutable) {
 			t.Errorf("expected ErrDefaultBranchImmutable for reasoning_level, got: %v", err)
 		}
 	})
@@ -801,7 +801,7 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error deleting default branch, got nil")
 		}
-		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+		if !errors.Is(err, core.ErrDefaultBranchImmutable) {
 			t.Errorf("expected ErrDefaultBranchImmutable, got: %v", err)
 		}
 	})
@@ -815,11 +815,11 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 			t.Fatalf("expected active version on default branch")
 		}
 
-		_, err = env.svc.EditVersion(ctx, env.defaultUser, defaultBranchID, *b.ActiveVersionID, domain.TailoredContent{})
+		_, err = env.svc.EditVersion(ctx, env.defaultUser, defaultBranchID, *b.ActiveVersionID, core.TailoredContent{})
 		if err == nil {
 			t.Fatalf("expected error editing version on default branch, got nil")
 		}
-		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+		if !errors.Is(err, core.ErrDefaultBranchImmutable) {
 			t.Errorf("expected ErrDefaultBranchImmutable, got: %v", err)
 		}
 	})
@@ -845,7 +845,7 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get default branch version: %v", err)
 		}
-		if defVer.Status != domain.VersionStatusCompleted {
+		if defVer.Status != core.VersionStatusCompleted {
 			t.Errorf("expected default branch version to be completed, got %s", defVer.Status)
 		}
 	})
@@ -856,14 +856,14 @@ func TestService_EditVersionPreservesGapReport(t *testing.T) {
 	ctx := context.Background()
 
 	score := 88.0
-	expectedReport := &domain.GapReport{
+	expectedReport := &core.GapReport{
 		OverallMatchSummary: "Solid engineering match with minor distributed gaps.",
 		MatchScore:          &score,
-		MissingRequirements: []domain.GapItem{
+		MissingRequirements: []core.GapItem{
 			{
 				Requirement:      "Kubernetes Operator SDK",
 				MissingArea:      "Orchestration",
-				Importance:       domain.GapImportancePreferred,
+				Importance:       core.GapImportancePreferred,
 				ClarifyingPrompt: "Have you written Kubernetes operators in Go?",
 			},
 		},
@@ -880,16 +880,16 @@ func TestService_EditVersionPreservesGapReport(t *testing.T) {
 		t.Fatalf("failed to update v1 with gap report: %v", err)
 	}
 
-	validContent := domain.TailoredContent{
+	validContent := core.TailoredContent{
 		Summary: "Updated manual summary for Senior Cloud Architect.",
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: env.validExpID,
 				Company:        "Acme Corp",
 				RoleTitle:      "Lead Systems Architect",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				Location:       domain.Location{City: "San Francisco"},
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2020, 1, 1),
+				Location:       core.Location{City: "San Francisco"},
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Optimized distributed consensus throughput by 40%.",
 						SourceFactIDs: []string{env.validFactID},
@@ -919,16 +919,16 @@ func TestService_EditVersionPreservesGapReport(t *testing.T) {
 }
 
 type stubLLMService struct {
-	gapReport *domain.GapReport
-	genResp   *domain.GenerationResponse
+	gapReport *core.GapReport
+	genResp   *core.GenerationResponse
 	err       error
 }
 
-func (s *stubLLMService) GenerateTailoredResume(_ context.Context, _ domain.GenerationRequest) (*domain.GenerationResponse, error) {
+func (s *stubLLMService) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
 	return s.genResp, s.err
 }
 
-func (s *stubLLMService) GenerateGapAnalysis(_ context.Context, _ domain.GenerationRequest) (*domain.GapReport, error) {
+func (s *stubLLMService) GenerateGapAnalysis(_ context.Context, _ core.GenerationRequest) (*core.GapReport, error) {
 	if s.gapReport != nil {
 		return s.gapReport, s.err
 	}
@@ -944,7 +944,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 	t.Run("returns ErrNotFound for unknown branch", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 		_, err := env.svc.AnalyzeGaps(ctx, env.defaultUser, "non-existent-branch")
-		if !errors.Is(err, domain.ErrNotFound) {
+		if !errors.Is(err, core.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
@@ -953,19 +953,19 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 
 		stubLLM := &stubLLMService{
-			gapReport: &domain.GapReport{
+			gapReport: &core.GapReport{
 				OverallMatchSummary: "Decoupled fast analysis completed.",
-				MissingRequirements: []domain.GapItem{
+				MissingRequirements: []core.GapItem{
 					{
 						Requirement:      "Kubernetes CRD controllers",
 						MissingArea:      "Container Orchestration",
-						Importance:       domain.GapImportanceCritical,
+						Importance:       core.GapImportanceCritical,
 						ClarifyingPrompt: "Have you authored custom controllers?",
 					},
 					{
 						Requirement:      "Kafka event streams",
 						MissingArea:      "Messaging",
-						Importance:       domain.GapImportancePreferred,
+						Importance:       core.GapImportancePreferred,
 						ClarifyingPrompt: "Have you worked with high-throughput Kafka?",
 					},
 				},
@@ -1006,16 +1006,16 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 
 		stubLLM := &stubLLMService{
-			gapReport: &domain.GapReport{
+			gapReport: &core.GapReport{
 				OverallMatchSummary: "Report with only identified_gaps populated.",
-				IdentifiedGaps: []domain.GapItem{
+				IdentifiedGaps: []core.GapItem{
 					{
 						Requirement: "Distributed consensus",
-						Importance:  domain.GapImportanceCritical, // -15
+						Importance:  core.GapImportanceCritical, // -15
 					},
 					{
 						Requirement: "GraphQL subscriptions",
-						Importance:  domain.GapImportancePreferred, // -7
+						Importance:  core.GapImportancePreferred, // -7
 					},
 				},
 			},
@@ -1041,7 +1041,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 
 		// Create a branch without active version
-		b := &domain.Branch{
+		b := &core.Branch{
 			ID:                 "branch-no-ver-" + uuid.New().String(),
 			UserID:             env.defaultUser,
 			Name:               "New Branch Without Versions",
@@ -1055,10 +1055,10 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 
 		stubLLM := &stubLLMService{
-			gapReport: &domain.GapReport{
+			gapReport: &core.GapReport{
 				OverallMatchSummary: "Analysis for versionless branch",
-				MissingRequirements: []domain.GapItem{
-					{Requirement: "Kubernetes", Importance: domain.GapImportanceCritical},
+				MissingRequirements: []core.GapItem{
+					{Requirement: "Kubernetes", Importance: core.GapImportanceCritical},
 				},
 			},
 		}
@@ -1091,7 +1091,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 
 		// Seed a skill on profile
-		s := &domain.Skill{
+		s := &core.Skill{
 			ID:       "skill-go-test",
 			UserID:   env.defaultUser,
 			Name:     "Go",
@@ -1112,10 +1112,10 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 
 		stubLLM := &stubLLMService{
-			gapReport: &domain.GapReport{
+			gapReport: &core.GapReport{
 				OverallMatchSummary: "Coverage test",
-				MissingRequirements: []domain.GapItem{
-					{Requirement: "Raft consensus", Importance: domain.GapImportanceCritical},
+				MissingRequirements: []core.GapItem{
+					{Requirement: "Raft consensus", Importance: core.GapImportanceCritical},
 				},
 			},
 		}
@@ -1148,12 +1148,12 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		_ = env.profileRepo.UpsertProfile(ctx, prof)
 
 		stubLLM := &stubLLMService{
-			gapReport: &domain.GapReport{
+			gapReport: &core.GapReport{
 				OverallMatchSummary: realName + " matches compiler design requirements.",
 				StrategicRecommendations: []string{
 					realName + " should highlight COBOL leadership.",
 				},
-				MissingRequirements: []domain.GapItem{
+				MissingRequirements: []core.GapItem{
 					{
 						Requirement:       "Machine code optimization",
 						ClarifyingPrompt:  "Does " + realName + " have machine code experience?",
@@ -1201,7 +1201,7 @@ func TestService_GetPromptPreview_ContactPrivacy(t *testing.T) {
 	prof.Email = realEmail
 	prof.Phone = realPhone
 	prof.Summary = realName + " created the Liskov substitution principle."
-	prof.Profiles = []domain.SocialLink{
+	prof.Profiles = []core.SocialLink{
 		{Network: "Website", URL: "https://liskov.csail.mit.edu"},
 	}
 	_ = env.profileRepo.UpsertProfile(ctx, prof)
@@ -1276,7 +1276,7 @@ func TestService_GetPromptPreview_ZeroInternalLeakage(t *testing.T) {
 func TestService_GetPromptPreview_UnconfiguredCompiler(t *testing.T) {
 	ctx := context.Background()
 	store := newSeededBranchStore(ctx, "user-no-compiler")
-	b := &domain.Branch{
+	b := &core.Branch{
 		ID:            "branch-no-comp",
 		UserID:        "user-no-compiler",
 		Name:          "Branch No Compiler",
@@ -1296,7 +1296,7 @@ func TestService_GetPromptPreview_UnconfiguredCompiler(t *testing.T) {
 	})
 
 	_, err := svc.GetPromptPreview(ctx, "user-no-compiler", b.ID, nil)
-	if !errors.Is(err, domain.ErrValidation) {
+	if !errors.Is(err, core.ErrValidation) {
 		t.Fatalf("expected ErrValidation when PromptCompiler is nil, got %v", err)
 	}
 }
@@ -1305,14 +1305,14 @@ type spyQuotaRepo struct {
 	mu           sync.Mutex
 	reservations []struct {
 		UserID          string
-		Op              domain.LLMOperationType
+		Op              core.LLMOperationType
 		EstimatedTokens int
 		DailyLimit      int
 		MonthlyLimit    int
 	}
 	commits []struct {
 		ReservationID string
-		Usage         domain.TokenUsage
+		Usage         core.TokenUsage
 	}
 	releases []struct {
 		ReservationID string
@@ -1320,12 +1320,12 @@ type spyQuotaRepo struct {
 	}
 }
 
-func (s *spyQuotaRepo) ReserveQuota(_ context.Context, userID string, op domain.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*domain.LLMUsageRecord, error) {
+func (s *spyQuotaRepo) ReserveQuota(_ context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reservations = append(s.reservations, struct {
 		UserID          string
-		Op              domain.LLMOperationType
+		Op              core.LLMOperationType
 		EstimatedTokens int
 		DailyLimit      int
 		MonthlyLimit    int
@@ -1336,25 +1336,25 @@ func (s *spyQuotaRepo) ReserveQuota(_ context.Context, userID string, op domain.
 		DailyLimit:      dailyLimit,
 		MonthlyLimit:    monthlyLimit,
 	})
-	return &domain.LLMUsageRecord{
+	return &core.LLMUsageRecord{
 		ID:              "res-test-1",
 		UserID:          userID,
 		Operation:       op,
 		EstimatedTokens: estimatedTokens,
-		Status:          domain.ReservationStatusPending,
+		Status:          core.ReservationStatusPending,
 	}, nil
 }
 
-func (s *spyQuotaRepo) GetQuota(_ context.Context, userID string) (*domain.TenantQuota, error) {
-	return &domain.TenantQuota{UserID: userID}, nil
+func (s *spyQuotaRepo) GetQuota(_ context.Context, userID string) (*core.TenantQuota, error) {
+	return &core.TenantQuota{UserID: userID}, nil
 }
 
-func (s *spyQuotaRepo) CommitUsage(_ context.Context, reservationID string, usage domain.TokenUsage) error {
+func (s *spyQuotaRepo) CommitUsage(_ context.Context, reservationID string, usage core.TokenUsage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.commits = append(s.commits, struct {
 		ReservationID string
-		Usage         domain.TokenUsage
+		Usage         core.TokenUsage
 	}{
 		ReservationID: reservationID,
 		Usage:         usage,
@@ -1375,7 +1375,7 @@ func (s *spyQuotaRepo) ReleaseQuota(_ context.Context, reservationID string, rea
 	return nil
 }
 
-func (s *spyQuotaRepo) ListUsageRecords(_ context.Context, _ string, _ int) ([]domain.LLMUsageRecord, error) {
+func (s *spyQuotaRepo) ListUsageRecords(_ context.Context, _ string, _ int) ([]core.LLMUsageRecord, error) {
 	return nil, nil
 }
 
@@ -1384,7 +1384,7 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 	defaultUser := "user-custom-quota"
 	store := newSeededBranchStore(ctx, defaultUser)
 
-	b := &domain.Branch{
+	b := &core.Branch{
 		ID:                 "branch-quota-test",
 		UserID:             defaultUser,
 		Name:               "DevOps Lead",
@@ -1396,11 +1396,11 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 		t.Fatalf("failed to create branch: %v", err)
 	}
 
-	vQuota1 := &domain.BranchVersion{
+	vQuota1 := &core.BranchVersion{
 		ID:               "ver-quota-ats-1",
 		BranchID:         b.ID,
 		MainRevisionUsed: 1,
-		Status:           domain.VersionStatusCompleted,
+		Status:           core.VersionStatusCompleted,
 		MarkdownOutput:   "# DevOps Resume\nGo, Kubernetes, Terraform",
 	}
 	if err := store.CreateVersion(ctx, vQuota1); err != nil {
@@ -1410,11 +1410,11 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 		t.Fatalf("failed to complete vQuota1: %v", err)
 	}
 
-	vQuota2 := &domain.BranchVersion{
+	vQuota2 := &core.BranchVersion{
 		ID:               "ver-quota-ats-2",
 		BranchID:         b.ID,
 		MainRevisionUsed: 1,
-		Status:           domain.VersionStatusCompleted,
+		Status:           core.VersionStatusCompleted,
 		MarkdownOutput:   "# DevOps Resume v2\nGo, Kubernetes, Terraform",
 	}
 	if err := store.CreateVersion(ctx, vQuota2); err != nil {
@@ -1426,7 +1426,7 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 
 	stubLLM := &stubATSSimulator{
 		stubLLMService: stubLLMService{
-			gapReport: &domain.GapReport{OverallMatchSummary: "Quota test gap report"},
+			gapReport: &core.GapReport{OverallMatchSummary: "Quota test gap report"},
 		},
 	}
 
@@ -1465,7 +1465,7 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 		}
 
 		// 4. SimulateATS
-		_, err = svc.SimulateATS(ctx, defaultUser, b.ID, &domain.ATSSimulationOptions{VersionID: vQuota1.ID})
+		_, err = svc.SimulateATS(ctx, defaultUser, b.ID, &core.ATSSimulationOptions{VersionID: vQuota1.ID})
 		if err != nil {
 			t.Fatalf("SimulateATS failed: %v", err)
 		}
@@ -1518,7 +1518,7 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 			t.Fatalf("AnalyzeGaps failed: %v", err)
 		}
 
-		_, err = svcDefault.SimulateATS(ctx, defaultUser, b.ID, &domain.ATSSimulationOptions{VersionID: vQuota2.ID})
+		_, err = svcDefault.SimulateATS(ctx, defaultUser, b.ID, &core.ATSSimulationOptions{VersionID: vQuota2.ID})
 		if err != nil {
 			t.Fatalf("SimulateATS failed: %v", err)
 		}
@@ -1544,14 +1544,14 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 type stubATSSimulator struct {
 	stubLLMService
 	mu      sync.Mutex
-	atsResp *domain.ATSSimulationResponse
+	atsResp *core.ATSSimulationResponse
 	atsErr  error
 	delay   time.Duration
 	calls   int
-	lastReq domain.ATSSimulationRequest
+	lastReq core.ATSSimulationRequest
 }
 
-func (s *stubATSSimulator) SimulateATS(_ context.Context, req domain.ATSSimulationRequest) (*domain.ATSSimulationResponse, error) {
+func (s *stubATSSimulator) SimulateATS(_ context.Context, req core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
 	if s.delay > 0 {
 		time.Sleep(s.delay)
 	}
@@ -1566,24 +1566,24 @@ func (s *stubATSSimulator) SimulateATS(_ context.Context, req domain.ATSSimulati
 		cp := *s.atsResp
 		return &cp, nil
 	}
-	return &domain.ATSSimulationResponse{
-		Score: domain.ATSScore{
+	return &core.ATSSimulationResponse{
+		Score: core.ATSScore{
 			ExtractionConfidenceScore: 93.0,
 			JobMatchingScore:          87.0,
 			FormatUsed:                req.FormatUsed,
 			ExtractionSummary:         "High confidence extraction",
 			MatchingSummary:           "Strong job match",
 		},
-		Usage: domain.TokenUsage{TotalTokens: 400},
+		Usage: core.TokenUsage{TotalTokens: 400},
 	}, nil
 }
 
 type failingSnapshotProfileRepo struct {
-	domain.ProfileRepository
+	core.ProfileRepository
 	snapErr error
 }
 
-func (f *failingSnapshotProfileRepo) GetSnapshot(ctx context.Context, userID string) (*domain.MainProfileSnapshot, error) {
+func (f *failingSnapshotProfileRepo) GetSnapshot(ctx context.Context, userID string) (*core.MainProfileSnapshot, error) {
 	if f.snapErr != nil {
 		return nil, f.snapErr
 	}
@@ -1611,13 +1611,13 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 
 		_, err = env.svc.SimulateATS(ctx, env.defaultUser, defaultBranchID, nil)
-		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+		if !errors.Is(err, core.ErrDefaultBranchImmutable) {
 			t.Errorf("expected ErrDefaultBranchImmutable for default branch, got %v", err)
 		}
 	})
 
 	t.Run("Rejects tailored branch when Job Description is missing", func(t *testing.T) {
-		noJDBranch := &domain.Branch{
+		noJDBranch := &core.Branch{
 			ID:                 "branch-no-jd",
 			UserID:             env.defaultUser,
 			Name:               "No JD Branch",
@@ -1630,7 +1630,7 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 
 		_, err := env.svc.SimulateATS(ctx, env.defaultUser, noJDBranch.ID, nil)
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation when job description is missing, got %v", err)
 		}
 	})
@@ -1645,19 +1645,19 @@ func TestService_SimulateATS(t *testing.T) {
 			t.Fatalf("UpdateBranch failed: %v", err)
 		}
 
-		pendingVer := &domain.BranchVersion{
+		pendingVer := &core.BranchVersion{
 			ID:       "ver-pending-ats",
 			BranchID: env.branchID,
-			Status:   domain.VersionStatusPending,
+			Status:   core.VersionStatusPending,
 		}
 		if err := env.branchRepo.CreateVersion(ctx, pendingVer); err != nil {
 			t.Fatalf("CreateVersion failed: %v", err)
 		}
 
-		_, err = env.svc.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+		_, err = env.svc.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: pendingVer.ID,
 		})
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation for pending version, got %v", err)
 		}
 	})
@@ -1676,13 +1676,13 @@ func TestService_SimulateATS(t *testing.T) {
 		svc := branch.NewService(branch.Config{
 			BranchRepo:   env.branchRepo,
 			ProfileRepo:  env.profileRepo,
-			TemplateRepo: env.branchRepo.(domain.TemplateRepository),
+			TemplateRepo: env.branchRepo.(core.TemplateRepository),
 			Renderer:     renderer.NewTemplateRenderer(),
 			LLMService:   sim,
 		})
 
 		// First trigger on v1 succeeds
-		score, err := svc.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+		score, err := svc.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			Format: "markdown",
 		})
 		if err != nil {
@@ -1697,7 +1697,7 @@ func TestService_SimulateATS(t *testing.T) {
 
 		// Second trigger on the same version (v1) must fail with ErrConflict (triggers once per tailored version)
 		_, err = svc.SimulateATS(ctx, env.defaultUser, env.branchID, nil)
-		if !errors.Is(err, domain.ErrConflict) {
+		if !errors.Is(err, core.ErrConflict) {
 			t.Errorf("expected ErrConflict on duplicate ATS trigger for same version, got %v", err)
 		}
 		if sim.calls != 1 {
@@ -1714,11 +1714,11 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 
 		// Create and complete v2 (newly tailored version has nil ATSScore)
-		v2 := &domain.BranchVersion{
+		v2 := &core.BranchVersion{
 			ID:               "ver-ats-switch-2",
 			BranchID:         env.branchID,
 			MainRevisionUsed: 2,
-			Status:           domain.VersionStatusCompleted,
+			Status:           core.VersionStatusCompleted,
 			MarkdownOutput:   "# Tailored v2\n## Summary\nCloud architect",
 			HTMLOutput:       "<h1>Tailored v2</h1>",
 			PlainTextOutput:  "Tailored v2",
@@ -1751,20 +1751,20 @@ func TestService_SimulateATS(t *testing.T) {
 	})
 
 	t.Run("Rejects unsupported Format with ErrValidation", func(t *testing.T) {
-		_, err := env.svc.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+		_, err := env.svc.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			Format: "docx",
 		})
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation for unsupported format 'docx', got %v", err)
 		}
 	})
 
 	t.Run("Propagates GetSnapshot error to prevent cleartext PII transmission", func(t *testing.T) {
-		vSnap := &domain.BranchVersion{
+		vSnap := &core.BranchVersion{
 			ID:               "ver-ats-snap-err",
 			BranchID:         env.branchID,
 			MainRevisionUsed: 2,
-			Status:           domain.VersionStatusCompleted,
+			Status:           core.VersionStatusCompleted,
 			MarkdownOutput:   "# Jane Doe\nGo Engineer",
 		}
 		if err := env.branchRepo.CreateVersion(ctx, vSnap); err != nil {
@@ -1784,7 +1784,7 @@ func TestService_SimulateATS(t *testing.T) {
 			LLMService: sim,
 		})
 
-		_, err := svcSnapErr.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+		_, err := svcSnapErr.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vSnap.ID,
 		})
 		if err == nil || !strings.Contains(err.Error(), "failed to load profile snapshot") {
@@ -1796,11 +1796,11 @@ func TestService_SimulateATS(t *testing.T) {
 	})
 
 	t.Run("Commits quota usage (including 800 fallback tokens) and releases quota on LLM failure", func(t *testing.T) {
-		vQuotaCommit := &domain.BranchVersion{
+		vQuotaCommit := &core.BranchVersion{
 			ID:               "ver-ats-quota-commit",
 			BranchID:         env.branchID,
 			MainRevisionUsed: 2,
-			Status:           domain.VersionStatusCompleted,
+			Status:           core.VersionStatusCompleted,
 			MarkdownOutput:   "# Jane Doe\nGo Engineer",
 		}
 		if err := env.branchRepo.CreateVersion(ctx, vQuotaCommit); err != nil {
@@ -1812,12 +1812,12 @@ func TestService_SimulateATS(t *testing.T) {
 
 		spyQuota := &spyQuotaRepo{}
 		simZeroTokens := &stubATSSimulator{
-			atsResp: &domain.ATSSimulationResponse{
-				Score: domain.ATSScore{
+			atsResp: &core.ATSSimulationResponse{
+				Score: core.ATSScore{
 					ExtractionConfidenceScore: 90.0,
 					JobMatchingScore:          85.0,
 				},
-				Usage: domain.TokenUsage{TotalTokens: 0},
+				Usage: core.TokenUsage{TotalTokens: 0},
 			},
 		}
 		svcQuota := branch.NewService(branch.Config{
@@ -1827,7 +1827,7 @@ func TestService_SimulateATS(t *testing.T) {
 			LLMService:  simZeroTokens,
 		})
 
-		if _, err := svcQuota.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+		if _, err := svcQuota.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vQuotaCommit.ID,
 		}); err != nil {
 			t.Fatalf("SimulateATS failed: %v", err)
@@ -1837,11 +1837,11 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 
 		// Now test LLM failure releases quota reservation
-		vQuotaFail := &domain.BranchVersion{
+		vQuotaFail := &core.BranchVersion{
 			ID:               "ver-ats-quota-fail",
 			BranchID:         env.branchID,
 			MainRevisionUsed: 2,
-			Status:           domain.VersionStatusCompleted,
+			Status:           core.VersionStatusCompleted,
 			MarkdownOutput:   "# Jane Doe\nGo Engineer",
 		}
 		if err := env.branchRepo.CreateVersion(ctx, vQuotaFail); err != nil {
@@ -1859,7 +1859,7 @@ func TestService_SimulateATS(t *testing.T) {
 			LLMService:  simErr,
 		})
 
-		if _, err := svcQuotaFail.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+		if _, err := svcQuotaFail.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vQuotaFail.ID,
 		}); err == nil {
 			t.Fatal("expected error from failing LLM simulator")
@@ -1870,15 +1870,15 @@ func TestService_SimulateATS(t *testing.T) {
 	})
 
 	t.Run("Renders missing HTML format on the fly when only MarkdownOutput is cached", func(t *testing.T) {
-		vPartial := &domain.BranchVersion{
+		vPartial := &core.BranchVersion{
 			ID:                "ver-ats-partial-render",
 			BranchID:          env.branchID,
 			MainRevisionUsed:  2,
-			Status:            domain.VersionStatusCompleted,
+			Status:            core.VersionStatusCompleted,
 			TemplateSetIDUsed: renderer.TemplateStandardCleanID,
 			MarkdownOutput:    "# Cached Markdown Only",
 			HTMLOutput:        "",
-			TailoredContent: &domain.TailoredContent{
+			TailoredContent: &core.TailoredContent{
 				Summary: "Distributed systems architect",
 			},
 		}
@@ -1893,12 +1893,12 @@ func TestService_SimulateATS(t *testing.T) {
 		svcRender := branch.NewService(branch.Config{
 			BranchRepo:   env.branchRepo,
 			ProfileRepo:  env.profileRepo,
-			TemplateRepo: env.branchRepo.(domain.TemplateRepository),
+			TemplateRepo: env.branchRepo.(core.TemplateRepository),
 			Renderer:     renderer.NewTemplateRenderer(),
 			LLMService:   sim,
 		})
 
-		score, err := svcRender.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+		score, err := svcRender.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vPartial.ID,
 			Format:    "html",
 		})
@@ -1914,22 +1914,22 @@ func TestService_SimulateATS(t *testing.T) {
 	})
 
 	t.Run("Falls back deterministically when LLMService is nil and formats Projects and Certifications", func(t *testing.T) {
-		vDet := &domain.BranchVersion{
+		vDet := &core.BranchVersion{
 			ID:               "ver-ats-deterministic",
 			BranchID:         env.branchID,
 			MainRevisionUsed: 2,
-			Status:           domain.VersionStatusCompleted,
-			TailoredContent: &domain.TailoredContent{
+			Status:           core.VersionStatusCompleted,
+			TailoredContent: &core.TailoredContent{
 				Summary: "Distributed Go and Kubernetes engineer",
-				Projects: []domain.TailoredProject{
+				Projects: []core.TailoredProject{
 					{
 						Name:    "RaftKV",
 						Role:    "Creator",
 						Summary: "Consensus store in Go",
-						Bullets: []domain.TailoredBullet{{Text: "Implemented Raft leader election"}},
+						Bullets: []core.TailoredBullet{{Text: "Implemented Raft leader election"}},
 					},
 				},
-				Certifications: []domain.TailoredCert{
+				Certifications: []core.TailoredCert{
 					{
 						Name:   "Certified Kubernetes Administrator",
 						Issuer: "CNCF",
@@ -1950,7 +1950,7 @@ func TestService_SimulateATS(t *testing.T) {
 			LLMService:  nil,
 		})
 
-		score, err := svcDet.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+		score, err := svcDet.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vDet.ID,
 		})
 		if err != nil {
@@ -1965,11 +1965,11 @@ func TestService_SimulateATS(t *testing.T) {
 	})
 
 	t.Run("Rejects concurrent in-flight SimulateATS requests for the same version with ErrConflict", func(t *testing.T) {
-		vConc := &domain.BranchVersion{
+		vConc := &core.BranchVersion{
 			ID:               "ver-ats-concurrent",
 			BranchID:         env.branchID,
 			MainRevisionUsed: 2,
-			Status:           domain.VersionStatusCompleted,
+			Status:           core.VersionStatusCompleted,
 			MarkdownOutput:   "# Concurrent Test\nGo and Kubernetes",
 		}
 		if err := env.branchRepo.CreateVersion(ctx, vConc); err != nil {
@@ -1994,7 +1994,7 @@ func TestService_SimulateATS(t *testing.T) {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
-				_, errs[idx] = svcConc.SimulateATS(ctx, env.defaultUser, env.branchID, &domain.ATSSimulationOptions{
+				_, errs[idx] = svcConc.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 					VersionID: vConc.ID,
 				})
 			}(i)
@@ -2006,7 +2006,7 @@ func TestService_SimulateATS(t *testing.T) {
 		for _, e := range errs {
 			if e == nil {
 				successCount++
-			} else if errors.Is(e, domain.ErrConflict) {
+			} else if errors.Is(e, core.ErrConflict) {
 				conflictCount++
 			} else {
 				t.Errorf("unexpected error in concurrent SimulateATS: %v", e)

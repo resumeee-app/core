@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 const defaultOpenAIBaseURL = "https://api.openai.com"
 
-// OpenAIProvider implements domain.LLMClient for OpenAI models.
+// OpenAIProvider implements core.LLMClient for OpenAI models.
 type OpenAIProvider struct {
 	apiKey       string
 	baseURL      string
@@ -46,9 +46,9 @@ func (p *OpenAIProvider) DefaultModel() string {
 }
 
 // Models returns the default model option for OpenAI.
-func (p *OpenAIProvider) Models() []domain.ModelOption {
+func (p *OpenAIProvider) Models() []core.ModelOption {
 	def := p.DefaultModel()
-	return []domain.ModelOption{
+	return []core.ModelOption{
 		{
 			Provider:    ProviderOpenAI,
 			Model:       def,
@@ -59,7 +59,7 @@ func (p *OpenAIProvider) Models() []domain.ModelOption {
 }
 
 // Complete executes a completion request against the OpenAI v1/chat/completions API.
-func (p *OpenAIProvider) Complete(ctx context.Context, req domain.LLMCompletionRequest) (*domain.LLMCompletionResponse, error) {
+func (p *OpenAIProvider) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
 		model = p.DefaultModel()
@@ -133,7 +133,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req domain.LLMCompletionR
 
 	rawBody := string(bodyBytes)
 	if err := checkStatusError("openai", resp.StatusCode, bodyBytes); err != nil {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, err
@@ -154,20 +154,20 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req domain.LLMCompletionR
 
 	var openAIResp openAIResponse
 	if err := json.Unmarshal(bodyBytes, &openAIResp); err != nil {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, fmt.Errorf("%w: malformed openai response: %v", ErrInvalidResponse, err)
 	}
 
 	if len(openAIResp.Choices) == 0 {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, fmt.Errorf("%w: no choices returned by openai", ErrInvalidResponse)
 	}
 
-	usage := domain.TokenUsage{
+	usage := core.TokenUsage{
 		PromptTokens:     openAIResp.Usage.PromptTokens,
 		CompletionTokens: openAIResp.Usage.CompletionTokens,
 		TotalTokens:      openAIResp.Usage.TotalTokens,
@@ -176,7 +176,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req domain.LLMCompletionR
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 
-	return &domain.LLMCompletionResponse{
+	return &core.LLMCompletionResponse{
 		Text:       strings.TrimSpace(openAIResp.Choices[0].Message.Content),
 		RawBody:    rawBody,
 		StatusCode: resp.StatusCode,

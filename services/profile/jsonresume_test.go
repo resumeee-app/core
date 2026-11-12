@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/services/profile"
 )
 
-func setupTestService(t *testing.T) (profile.Service, domain.ProfileRepository, domain.BranchRepository) {
+func setupTestService(t *testing.T) (profile.Service, core.ProfileRepository, core.BranchRepository) {
 	t.Helper()
 	store := newFakeProfileStore()
 	svc := profile.NewService(store, store)
@@ -267,12 +267,12 @@ func TestJSONResume_SchemaValidationAndParsing(t *testing.T) {
 		ctx := context.Background()
 
 		_, err := svc.ImportJSONResume(ctx, "user-1", []byte(""))
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation for empty payload, got %v", err)
 		}
 
 		_, err = svc.ImportJSONResume(ctx, "user-1", []byte("{not-json}"))
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation for malformed JSON, got %v", err)
 		}
 	})
@@ -330,7 +330,7 @@ func TestJSONResume_EntityAndPolymorphicFactMapping(t *testing.T) {
 
 	// Check Fact 1: "Architected middle-out compression engine in Go and C"
 	fact1 := exp.Facts[0]
-	if fact1.OwnerType != domain.OwnerTypeWorkExperience || fact1.OwnerID != exp.ID {
+	if fact1.OwnerType != core.OwnerTypeWorkExperience || fact1.OwnerID != exp.ID {
 		t.Errorf("fact1 polymorphic association invalid: ownerType=%s, ownerID=%s", fact1.OwnerType, fact1.OwnerID)
 	}
 	if len(fact1.Skills) == 0 || fact1.Skills[0].Name != "Go" {
@@ -360,7 +360,7 @@ func TestJSONResume_EntityAndPolymorphicFactMapping(t *testing.T) {
 		t.Fatalf("expected 2 child facts for project, got %d", len(proj.Facts))
 	}
 	projFact1 := proj.Facts[0]
-	if projFact1.OwnerType != domain.OwnerTypeProject || projFact1.OwnerID != proj.ID {
+	if projFact1.OwnerType != core.OwnerTypeProject || projFact1.OwnerID != proj.ID {
 		t.Errorf("projFact1 polymorphic association invalid: ownerType=%s, ownerID=%s", projFact1.OwnerType, projFact1.OwnerID)
 	}
 	if len(projFact1.Skills) == 0 || projFact1.Skills[0].Name != "Go" {
@@ -382,7 +382,7 @@ func TestJSONResume_EntityAndPolymorphicFactMapping(t *testing.T) {
 
 	// 7. Verify Skill matching word boundary precision
 	// "Go" must NOT match "Google" or "going"
-	testMatcherSkills := []domain.Skill{
+	testMatcherSkills := []core.Skill{
 		{ID: "sk-go", Name: "Go", Keywords: []string{"Golang"}},
 	}
 	snapWithGo, err := profile.ToSnapshot(&profile.JSONResume{
@@ -603,7 +603,7 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 	}
 
 	// 3. Create a branch synced with current MainRevision (2)
-	branch := &domain.Branch{
+	branch := &core.Branch{
 		ID:                     "br-test-stale",
 		UserID:                 userID,
 		Name:                   "Staff Systems Engineer",
@@ -653,26 +653,26 @@ func TestJSONResume_ServiceImportAndAtomicRevisionBump(t *testing.T) {
 }
 
 func TestJSONResume_ExportFromTailored(t *testing.T) {
-	baseProfile := &domain.Profile{
+	baseProfile := &core.Profile{
 		FullName: "Tailored Candidate",
 		Headline: "Distributed Systems Specialist",
 		Email:    "tailored@example.com",
 		Summary:  "Base career summary that should be overridden.",
-		Location: domain.Location{
+		Location: core.Location{
 			City: "Austin",
 		},
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "GitHub", Username: "tailored", URL: "https://github.com/tailored"},
 		},
 	}
 
-	endDate := domain.NewDate(2024, 1, 1)
-	startDateExp := domain.NewDate(2021, 1, 1)
-	startDateEdu := domain.NewDate(2017, 9, 1)
-	certDate := domain.NewDate(2023, 8, 1)
-	tailoredContent := &domain.TailoredContent{
+	endDate := core.NewDate(2024, 1, 1)
+	startDateExp := core.NewDate(2021, 1, 1)
+	startDateEdu := core.NewDate(2017, 9, 1)
+	certDate := core.NewDate(2023, 8, 1)
+	tailoredContent := &core.TailoredContent{
 		Summary: "Tailored summary targeting Cloud Infrastructure Architect role.",
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category: "Cloud & Distributed Systems",
 				Skills:   []string{"Go", "Kubernetes", "gRPC", "Raft"},
@@ -682,7 +682,7 @@ func TestJSONResume_ExportFromTailored(t *testing.T) {
 				Skills:   []string{"PostgreSQL", "RocksDB", "Redis"},
 			},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme Cloud",
@@ -690,24 +690,24 @@ func TestJSONResume_ExportFromTailored(t *testing.T) {
 				StartDate:      startDateExp,
 				EndDate:        &endDate,
 				DutiesSummary:  "Architected distributed control planes.",
-				Location:       domain.Location{City: "Austin, TX"},
-				Bullets: []domain.TailoredBullet{
+				Location:       core.Location{City: "Austin, TX"},
+				Bullets: []core.TailoredBullet{
 					{Text: "Designed multi-region Raft cluster achieving 99.999% availability."},
 					{Text: "Eliminated cross-AZ egress costs by 35% through topology-aware routing."},
 				},
 			},
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{
 				SourceEntityID: "proj-1",
 				Name:           "FastQueue",
 				Summary:        "Low latency message broker written in Go.",
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{Text: "Processed 1.2M messages/sec with sub-millisecond p99 latency."},
 				},
 			},
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{
 				SourceEntityID: "edu-1",
 				Institution:    "MIT",
@@ -717,7 +717,7 @@ func TestJSONResume_ExportFromTailored(t *testing.T) {
 				EndDate:        &endDate,
 			},
 		},
-		Certifications: []domain.TailoredCert{
+		Certifications: []core.TailoredCert{
 			{
 				SourceEntityID: "cert-1",
 				Name:           "AWS Certified Solutions Architect - Professional",
@@ -798,7 +798,7 @@ func TestProfileService_ExportJSONResume_WithVersionID(t *testing.T) {
 	}
 
 	// 3. Create a Branch and a BranchVersion with TailoredContent
-	branch := &domain.Branch{
+	branch := &core.Branch{
 		ID:                     "br-tailored-exp",
 		UserID:                 userID,
 		Name:                   "Specialist Branch",
@@ -810,21 +810,21 @@ func TestProfileService_ExportJSONResume_WithVersionID(t *testing.T) {
 	}
 
 	tailoredSummary := "Custom tailored summary for high-performance computing."
-	version := &domain.BranchVersion{
+	version := &core.BranchVersion{
 		ID:               "ver-tailored-1",
 		BranchID:         branch.ID,
 		VersionNumber:    1,
-		Status:           domain.VersionStatusCompleted,
+		Status:           core.VersionStatusCompleted,
 		MainRevisionUsed: 1,
-		TailoredContent: &domain.TailoredContent{
+		TailoredContent: &core.TailoredContent{
 			Summary: tailoredSummary,
-			Experiences: []domain.TailoredExperience{
+			Experiences: []core.TailoredExperience{
 				{
 					SourceEntityID: "exp-1",
 					Company:        "Pied Piper Tailored",
 					RoleTitle:      "Chief Compression Officer",
-					StartDate:      domain.NewDate(2014, 1, 1),
-					Bullets: []domain.TailoredBullet{
+					StartDate:      core.NewDate(2014, 1, 1),
+					Bullets: []core.TailoredBullet{
 						{Text: "Tailored bullet for HPC workloads."},
 					},
 				},
@@ -851,16 +851,16 @@ func TestProfileService_ExportJSONResume_WithVersionID(t *testing.T) {
 		t.Errorf("unexpected tailored highlights: %+v", tailoredExport.Work[0].Highlights)
 	}
 
-	// 5. Querying non-existent version_id returns domain.ErrNotFound
+	// 5. Querying non-existent version_id returns core.ErrNotFound
 	invalidVerID := "ver-non-existent"
 	_, err = svc.ExportJSONResume(ctx, userID, &invalidVerID)
-	if !errors.Is(err, domain.ErrNotFound) {
+	if !errors.Is(err, core.ErrNotFound) {
 		t.Errorf("expected ErrNotFound for nonexistent version_id, got %v", err)
 	}
 
 	// 6. Cross-tenant access: Querying valid version_id with different user returns ErrNotFound
 	_, err = svc.ExportJSONResume(ctx, "different-user-id", &verID)
-	if !errors.Is(err, domain.ErrNotFound) {
+	if !errors.Is(err, core.ErrNotFound) {
 		t.Errorf("expected ErrNotFound for other user's version_id, got %v", err)
 	}
 }
@@ -1037,13 +1037,13 @@ func TestJSONResume_EndDatePresentHandling(t *testing.T) {
 	}
 
 	// 3. Verify Export from TailoredContent as well
-	tailored := &domain.TailoredContent{
-		Experiences: []domain.TailoredExperience{
+	tailored := &core.TailoredContent{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Ongoing Corp",
 				RoleTitle:      "Senior Dev",
-				StartDate:      domain.NewDate(2022, 1, 15),
+				StartDate:      core.NewDate(2022, 1, 15),
 				EndDate:        nil, // ongoing
 			},
 		},

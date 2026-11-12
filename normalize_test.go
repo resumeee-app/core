@@ -1,4 +1,4 @@
-package domain_test
+package core_test
 
 import (
 	"go/parser"
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // TestDomainPurity_ZeroGORMImports verifies that internal/domain contains zero imports of gorm.io/gorm.
@@ -18,9 +18,9 @@ func TestDomainPurity_ZeroGORMImports(t *testing.T) {
 		t.Fatalf("failed to get current working directory: %v", err)
 	}
 
-	// Find internal/domain dir
+	// Find core root dir (or internal/domain in monorepo)
 	domainDir := wd
-	if filepath.Base(domainDir) != "domain" {
+	if _, err := os.Stat(filepath.Join(domainDir, "core.go")); err != nil && filepath.Base(domainDir) != "domain" {
 		domainDir = filepath.Join(wd, "internal", "domain")
 	}
 
@@ -50,17 +50,17 @@ func TestDomainPurity_ZeroGORMImports(t *testing.T) {
 	}
 }
 
-// TestNormalizableInterface verifies that domain entities implement domain.Normalizable.
+// TestNormalizableInterface verifies that domain entities implement core.Normalizable.
 func TestNormalizableInterface(t *testing.T) {
-	var _ domain.Normalizable = (*domain.TailoringStrategy)(nil)
-	var _ domain.Normalizable = (*domain.TargetResume)(nil)
-	var _ domain.Normalizable = (*domain.ResumeVersion)(nil)
+	var _ core.Normalizable = (*core.TailoringStrategy)(nil)
+	var _ core.Normalizable = (*core.TargetResume)(nil)
+	var _ core.Normalizable = (*core.ResumeVersion)(nil)
 }
 
 // TestTailoringStrategy_Normalize verifies pure Go normalization for TailoringStrategy.
 func TestTailoringStrategy_Normalize(t *testing.T) {
 	theme := "theme-1"
-	strat := &domain.TailoringStrategy{
+	strat := &core.TailoringStrategy{
 		Language:         "",
 		SuggestedThemeID: &theme,
 	}
@@ -69,15 +69,15 @@ func TestTailoringStrategy_Normalize(t *testing.T) {
 		t.Fatalf("unexpected normalization error: %v", err)
 	}
 
-	if strat.Language != domain.DefaultLanguage {
-		t.Errorf("expected language %s, got %s", domain.DefaultLanguage, strat.Language)
+	if strat.Language != core.DefaultLanguage {
+		t.Errorf("expected language %s, got %s", core.DefaultLanguage, strat.Language)
 	}
 	if strat.TemplateSetID != "theme-1" {
 		t.Errorf("expected TemplateSetID 'theme-1', got %s", strat.TemplateSetID)
 	}
 
 	// Reverse sync
-	strat2 := &domain.TailoringStrategy{
+	strat2 := &core.TailoringStrategy{
 		TemplateSetID: "theme-2",
 	}
 	if err := strat2.Normalize(); err != nil {
@@ -91,7 +91,7 @@ func TestTailoringStrategy_Normalize(t *testing.T) {
 // TestTargetResume_Normalize verifies pure Go normalization for TargetResume.
 func TestTargetResume_Normalize(t *testing.T) {
 	presetID := "preset-1"
-	resume := &domain.TargetResume{
+	resume := &core.TargetResume{
 		PresetID:           &presetID,
 		BranchInstructions: "Focus on distributed systems",
 	}
@@ -109,7 +109,7 @@ func TestTargetResume_Normalize(t *testing.T) {
 
 	// Reverse sync
 	stratID := "strat-2"
-	resume2 := &domain.TargetResume{
+	resume2 := &core.TargetResume{
 		TailoringStrategyID: &stratID,
 		CustomDirectives:    "Directives 2",
 	}
@@ -126,7 +126,7 @@ func TestTargetResume_Normalize(t *testing.T) {
 
 // TestResumeVersion_Normalize verifies pure Go normalization for ResumeVersion.
 func TestResumeVersion_Normalize(t *testing.T) {
-	ver := &domain.ResumeVersion{
+	ver := &core.ResumeVersion{
 		BranchID: "branch-1",
 	}
 
@@ -138,7 +138,7 @@ func TestResumeVersion_Normalize(t *testing.T) {
 		t.Errorf("expected ResumeID 'branch-1', got %s", ver.ResumeID)
 	}
 
-	ver2 := &domain.ResumeVersion{
+	ver2 := &core.ResumeVersion{
 		ResumeID: "branch-2",
 	}
 	if err := ver2.Normalize(); err != nil {

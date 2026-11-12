@@ -1,4 +1,4 @@
-package domain
+package core
 
 import (
 	"fmt"
@@ -371,7 +371,7 @@ func (s TailoringStrategy) IsBuiltIn() bool {
 	return strings.HasPrefix(s.ID, "builtin-") || s.UserID == SystemUserID
 }
 
-// TemplateSetName returns an empty string on domain.TailoringStrategy, allowing view models to override it.
+// TemplateSetName returns an empty string on core.TailoringStrategy, allowing view models to override it.
 func (s TailoringStrategy) TemplateSetName() string {
 	return ""
 }
@@ -476,7 +476,7 @@ func (b *TargetResume) IsStaleRevision(currentMainRevision int64) bool {
 	return b.LastSyncedMainRevision < currentMainRevision
 }
 
-// PresetName returns an empty string on domain.TargetResume, allowing view models to override it.
+// PresetName returns an empty string on core.TargetResume, allowing view models to override it.
 func (b TargetResume) PresetName() string {
 	return ""
 }

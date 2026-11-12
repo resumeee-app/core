@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/memory"
 )
 
@@ -21,12 +21,12 @@ func setupTestStore(t *testing.T) *memory.Store {
 // TestMemoryStore_Interfaces verifies that memory.Store satisfies domain and repository interfaces.
 func TestMemoryStore_Interfaces(t *testing.T) {
 	store := setupTestStore(t)
-	var _ domain.Store = store
-	var _ domain.ProfileRepository = store
-	var _ domain.BranchRepository = store
-	var _ domain.TemplateRepository = store
-	var _ domain.PresetRepository = store
-	var _ domain.PDFParseJobRepository = store
+	var _ core.Store = store
+	var _ core.ProfileRepository = store
+	var _ core.BranchRepository = store
+	var _ core.TemplateRepository = store
+	var _ core.PresetRepository = store
+	var _ core.PDFParseJobRepository = store
 
 	if store.Profile() == nil || store.Branch() == nil || store.Preset() == nil || store.Template() == nil || store.PDFJob() == nil {
 		t.Fatal("expected non-nil repositories from store getters")
@@ -42,7 +42,7 @@ func TestProfileRepository_MainRevisionIncrements(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-rev-test"
 
-	prof := &domain.Profile{
+	prof := &core.Profile{
 		ID:       "prof-1",
 		UserID:   userID,
 		FullName: "Initial User",
@@ -54,12 +54,12 @@ func TestProfileRepository_MainRevisionIncrements(t *testing.T) {
 		t.Errorf("expected initial main revision 1, got %d", prof.MainRevision)
 	}
 
-	exp := &domain.WorkExperience{
+	exp := &core.WorkExperience{
 		ID:        "exp-1",
 		UserID:    userID,
 		Company:   "Acme Corp",
 		RoleTitle: "Staff Engineer",
-		StartDate: domain.NewDate(2024, 1, 1),
+		StartDate: core.NewDate(2024, 1, 1),
 	}
 	if err := store.CreateExperience(ctx, exp); err != nil {
 		t.Fatalf("failed to create experience: %v", err)
@@ -88,41 +88,41 @@ func TestProfileRepository_FactsAndSnapshot(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-facts-test"
 
-	prof := &domain.Profile{ID: "prof-facts", UserID: userID, FullName: "Facts Engineer"}
+	prof := &core.Profile{ID: "prof-facts", UserID: userID, FullName: "Facts Engineer"}
 	if err := store.UpsertProfile(ctx, prof); err != nil {
 		t.Fatalf("upsert profile: %v", err)
 	}
 
-	skill1 := &domain.Skill{ID: "sk-go", UserID: userID, Name: "Go"}
+	skill1 := &core.Skill{ID: "sk-go", UserID: userID, Name: "Go"}
 	if err := store.CreateSkill(ctx, skill1); err != nil {
 		t.Fatalf("create skill: %v", err)
 	}
 
-	exp := &domain.WorkExperience{
+	exp := &core.WorkExperience{
 		ID:        "exp-poly",
 		UserID:    userID,
 		Company:   "Cloud Scale Inc",
 		RoleTitle: "Backend Lead",
-		StartDate: domain.NewDate(2023, 1, 1),
-		Skills:    []domain.Skill{*skill1},
+		StartDate: core.NewDate(2023, 1, 1),
+		Skills:    []core.Skill{*skill1},
 	}
 	if err := store.CreateExperience(ctx, exp); err != nil {
 		t.Fatalf("create exp: %v", err)
 	}
 
-	fact := &domain.Fact{
+	fact := &core.Fact{
 		ID:        "fact-poly-1",
 		UserID:    userID,
 		OwnerID:   exp.ID,
-		OwnerType: domain.OwnerTypeWorkExperience,
+		OwnerType: core.OwnerTypeWorkExperience,
 		Statement: "Architected real-time microservices handling 50k QPS",
-		Skills:    []domain.Skill{*skill1},
+		Skills:    []core.Skill{*skill1},
 	}
 	if err := store.CreateFact(ctx, fact); err != nil {
 		t.Fatalf("create fact: %v", err)
 	}
 
-	facts, err := store.ListFactsByOwner(ctx, userID, string(domain.OwnerTypeWorkExperience), exp.ID)
+	facts, err := store.ListFactsByOwner(ctx, userID, string(core.OwnerTypeWorkExperience), exp.ID)
 	if err != nil {
 		t.Fatalf("list facts: %v", err)
 	}
@@ -151,39 +151,39 @@ func TestProfileRepository_ReplaceCareerGraph(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-replace-test"
 
-	prof := &domain.Profile{ID: "prof-rep", UserID: userID, FullName: "Graph Engineer"}
+	prof := &core.Profile{ID: "prof-rep", UserID: userID, FullName: "Graph Engineer"}
 	if err := store.UpsertProfile(ctx, prof); err != nil {
 		t.Fatalf("upsert profile: %v", err)
 	}
 
-	sk1 := &domain.Skill{ID: "sk-old", UserID: userID, Name: "OldSkill"}
+	sk1 := &core.Skill{ID: "sk-old", UserID: userID, Name: "OldSkill"}
 	if err := store.CreateSkill(ctx, sk1); err != nil {
 		t.Fatalf("create old skill: %v", err)
 	}
 
-	newSkill := domain.Skill{ID: "sk-new", UserID: userID, Name: "NewSkill"}
-	newExp := domain.WorkExperience{
+	newSkill := core.Skill{ID: "sk-new", UserID: userID, Name: "NewSkill"}
+	newExp := core.WorkExperience{
 		ID:        "exp-new",
 		UserID:    userID,
 		Company:   "NewCo",
 		RoleTitle: "Director",
-		StartDate: domain.NewDate(2024, 6, 1),
-		Skills:    []domain.Skill{newSkill},
+		StartDate: core.NewDate(2024, 6, 1),
+		Skills:    []core.Skill{newSkill},
 	}
-	newFact := domain.Fact{
+	newFact := core.Fact{
 		ID:        "fact-new",
 		UserID:    userID,
 		OwnerID:   newExp.ID,
-		OwnerType: domain.OwnerTypeWorkExperience,
+		OwnerType: core.OwnerTypeWorkExperience,
 		Statement: "Expanded engineering team from 10 to 50",
-		Skills:    []domain.Skill{newSkill},
+		Skills:    []core.Skill{newSkill},
 	}
 
-	snap := &domain.MainProfileSnapshot{
+	snap := &core.MainProfileSnapshot{
 		Profile:      *prof,
-		Skills:       []domain.Skill{newSkill},
-		Experiences:  []domain.WorkExperience{newExp},
-		Facts:        []domain.Fact{newFact},
+		Skills:       []core.Skill{newSkill},
+		Experiences:  []core.WorkExperience{newExp},
+		Facts:        []core.Fact{newFact},
 		MainRevision: 10,
 	}
 
@@ -214,8 +214,8 @@ func TestPresetRepository_Immutability(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-preset-test"
 
-	builtin := &domain.Preset{
-		ID:                 domain.Preset1PageTechResumeID,
+	builtin := &core.Preset{
+		ID:                 core.Preset1PageTechResumeID,
 		UserID:             userID,
 		Name:               "Builtin Tech",
 		SystemInstructions: "Focus on tech metrics",
@@ -226,16 +226,16 @@ func TestPresetRepository_Immutability(t *testing.T) {
 
 	builtin.Name = "Attempted Mutation"
 	err := store.UpdatePreset(ctx, builtin)
-	if !errors.Is(err, domain.ErrStrategyImmutable) {
+	if !errors.Is(err, core.ErrStrategyImmutable) {
 		t.Errorf("expected ErrStrategyImmutable on update, got: %v", err)
 	}
 
 	err = store.DeletePreset(ctx, userID, builtin.ID)
-	if !errors.Is(err, domain.ErrStrategyImmutable) {
+	if !errors.Is(err, core.ErrStrategyImmutable) {
 		t.Errorf("expected ErrStrategyImmutable on delete, got: %v", err)
 	}
 
-	custom := &domain.Preset{
+	custom := &core.Preset{
 		ID:                 "custom-preset-1",
 		UserID:             userID,
 		Name:               "Custom Preset",
@@ -259,7 +259,7 @@ func TestPresetRepository_LanguageDefaulting(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-lang-test"
 
-	preset := &domain.Preset{
+	preset := &core.Preset{
 		ID:                 "preset-lang-default",
 		UserID:             userID,
 		Name:               "Default Language Preset",
@@ -274,8 +274,8 @@ func TestPresetRepository_LanguageDefaulting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get preset: %v", err)
 	}
-	if fetched.Language != domain.DefaultLanguage {
-		t.Errorf("expected default language %q on create, got: %q", domain.DefaultLanguage, fetched.Language)
+	if fetched.Language != core.DefaultLanguage {
+		t.Errorf("expected default language %q on create, got: %q", core.DefaultLanguage, fetched.Language)
 	}
 
 	// Update with explicit language
@@ -300,8 +300,8 @@ func TestPresetRepository_LanguageDefaulting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get preset after empty language update: %v", err)
 	}
-	if fetched3.Language != domain.DefaultLanguage {
-		t.Errorf("expected default language %q when updated with empty string, got: %q", domain.DefaultLanguage, fetched3.Language)
+	if fetched3.Language != core.DefaultLanguage {
+		t.Errorf("expected default language %q when updated with empty string, got: %q", core.DefaultLanguage, fetched3.Language)
 	}
 }
 
@@ -313,7 +313,7 @@ func TestTemplateRepository_Validation(t *testing.T) {
 
 	// In the decoupled architecture, syntax validation belongs to domain/services,
 	// while memory.Store persists template records directly.
-	invalidTmpl := &domain.TemplateSet{
+	invalidTmpl := &core.TemplateSet{
 		ID:               "raw-syntax-tmpl",
 		UserID:           userID,
 		Name:             "Raw Syntax",
@@ -321,14 +321,14 @@ func TestTemplateRepository_Validation(t *testing.T) {
 		MarkdownTemplate: "# Resume",
 		TextTemplate:     "Plain text",
 	}
-	if err := (domain.DefaultTemplateValidator{}).Validate(invalidTmpl); err == nil {
+	if err := (core.DefaultTemplateValidator{}).Validate(invalidTmpl); err == nil {
 		t.Fatal("expected domain validation error on invalid template syntax, got nil")
 	}
 	if err := store.CreateTemplate(ctx, invalidTmpl); err != nil {
 		t.Fatalf("expected memory store to persist template record without validation: %v", err)
 	}
 
-	validTmpl := &domain.TemplateSet{
+	validTmpl := &core.TemplateSet{
 		ID:               "valid-tmpl",
 		UserID:           userID,
 		Name:             "Valid Template",
@@ -355,16 +355,16 @@ func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-branch-test"
 
-	p := &domain.Profile{ID: "prof-br", UserID: userID, FullName: "Branch Engineer", MainRevision: 3}
+	p := &core.Profile{ID: "prof-br", UserID: userID, FullName: "Branch Engineer", MainRevision: 3}
 	if err := store.UpsertProfile(ctx, p); err != nil {
 		t.Fatalf("upsert profile: %v", err)
 	}
 
-	branch := &domain.Branch{
+	branch := &core.Branch{
 		ID:                     "br-test-1",
 		UserID:                 userID,
 		Name:                   "Tech Resume Branch",
-		TemplateSetID:          domain.TemplateStandardCleanID,
+		TemplateSetID:          core.TemplateStandardCleanID,
 		LastSyncedMainRevision: 1,
 	}
 	if err := store.CreateBranch(ctx, branch); err != nil {
@@ -379,10 +379,10 @@ func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
 		t.Errorf("expected branch to be stale because last synced (1) < main revision (3)")
 	}
 
-	v1 := &domain.BranchVersion{
+	v1 := &core.BranchVersion{
 		ID:               "ver-1",
 		BranchID:         branch.ID,
-		Status:           domain.VersionStatusProcessing,
+		Status:           core.VersionStatusProcessing,
 		MainRevisionUsed: 3,
 	}
 	if err := store.CreateVersion(ctx, v1); err != nil {
@@ -392,10 +392,10 @@ func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
 		t.Errorf("expected version number 1, got %d", v1.VersionNumber)
 	}
 
-	v2 := &domain.BranchVersion{
+	v2 := &core.BranchVersion{
 		ID:               "ver-2",
 		BranchID:         branch.ID,
-		Status:           domain.VersionStatusPending,
+		Status:           core.VersionStatusPending,
 		MainRevisionUsed: 3,
 	}
 	if err := store.CreateVersion(ctx, v2); err != nil {
@@ -431,7 +431,7 @@ func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get v1: %v", err)
 	}
-	if interruptedV1.Status != domain.VersionStatusFailed {
+	if interruptedV1.Status != core.VersionStatusFailed {
 		t.Errorf("expected v1 to fail after interruption, got %s", interruptedV1.Status)
 	}
 	if !strings.Contains(interruptedV1.ErrorMessage, "server reboot") {
@@ -445,10 +445,10 @@ func TestPDFParseJobRepository_Lifecycle(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-pdf-test"
 
-	job := &domain.PDFParseJob{
+	job := &core.PDFParseJob{
 		ID:       "pdf-job-1",
 		UserID:   userID,
-		Status:   domain.PDFParseJobStatusPending,
+		Status:   core.PDFParseJobStatusPending,
 		Filename: "resume.pdf",
 		Provider: "gemini",
 		Model:    "gemini-3.8-flash",
@@ -461,11 +461,11 @@ func TestPDFParseJobRepository_Lifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
-	if got.Status != domain.PDFParseJobStatusPending {
+	if got.Status != core.PDFParseJobStatusPending {
 		t.Errorf("expected status pending, got %s", got.Status)
 	}
 
-	if err := store.UpdateJobStatus(ctx, job.ID, domain.PDFParseJobStatusProcessing, nil, ""); err != nil {
+	if err := store.UpdateJobStatus(ctx, job.ID, core.PDFParseJobStatusProcessing, nil, ""); err != nil {
 		t.Fatalf("update to processing: %v", err)
 	}
 
@@ -477,7 +477,7 @@ func TestPDFParseJobRepository_Lifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get job after crash: %v", err)
 	}
-	if crashed.Status != domain.PDFParseJobStatusFailed {
+	if crashed.Status != core.PDFParseJobStatusFailed {
 		t.Errorf("expected failed status, got %s", crashed.Status)
 	}
 	if !strings.Contains(crashed.ErrorMessage, "worker crash") {
@@ -535,7 +535,7 @@ func TestMemoryStore_ConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-race"
 
-	prof := &domain.Profile{ID: "prof-race", UserID: userID, FullName: "Race Tester"}
+	prof := &core.Profile{ID: "prof-race", UserID: userID, FullName: "Race Tester"}
 	if err := store.UpsertProfile(ctx, prof); err != nil {
 		t.Fatalf("upsert profile: %v", err)
 	}
@@ -551,12 +551,12 @@ func TestMemoryStore_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
 				expID := fmt.Sprintf("exp-%d-%d", w, j)
-				exp := &domain.WorkExperience{
+				exp := &core.WorkExperience{
 					ID:        expID,
 					UserID:    userID,
 					Company:   fmt.Sprintf("Company-%d", w),
 					RoleTitle: "Dev",
-					StartDate: domain.NewDate(2024, 1, 1),
+					StartDate: core.NewDate(2024, 1, 1),
 				}
 				if err := store.CreateExperience(ctx, exp); err != nil {
 					errCh <- fmt.Errorf("create experience error: %w", err)
@@ -594,7 +594,7 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 	userID := "user-deep-copy"
 
 	// 1. Profile metadata isolation
-	prof := &domain.Profile{
+	prof := &core.Profile{
 		ID:       "prof-dc",
 		UserID:   userID,
 		FullName: "Original Name",
@@ -618,7 +618,7 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 	}
 
 	// 2. Skill keywords isolation
-	skill := &domain.Skill{
+	skill := &core.Skill{
 		ID:       "sk-dc",
 		UserID:   userID,
 		Name:     "Go",
@@ -642,7 +642,7 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 	}
 
 	// 3. Branch pinned entity IDs isolation
-	branch := &domain.Branch{
+	branch := &core.Branch{
 		ID:              "br-dc",
 		UserID:          userID,
 		Name:            "Deep Copy Branch",
@@ -661,10 +661,10 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 	}
 
 	// 4. PDF parse job result isolation
-	job := &domain.PDFParseJob{
+	job := &core.PDFParseJob{
 		ID:     "job-dc",
 		UserID: userID,
-		Status: domain.PDFParseJobStatusPending,
+		Status: core.PDFParseJobStatusPending,
 		Result: map[string]any{"summary": "original text"},
 	}
 	if err := store.CreateJob(ctx, job); err != nil {
@@ -693,42 +693,42 @@ func TestMemoryStore_ErrorSentinels(t *testing.T) {
 		}{
 			{"GetProfile", func() error { _, err := store.GetProfile(ctx, "nonexistent"); return err }},
 			{"GetSkill", func() error { _, err := store.GetSkill(ctx, userID, "nonexistent"); return err }},
-			{"UpdateSkill", func() error { return store.UpdateSkill(ctx, &domain.Skill{ID: "none", UserID: userID}) }},
+			{"UpdateSkill", func() error { return store.UpdateSkill(ctx, &core.Skill{ID: "none", UserID: userID}) }},
 			{"DeleteSkill", func() error { return store.DeleteSkill(ctx, userID, "none") }},
 			{"GetExperience", func() error { _, err := store.GetExperience(ctx, userID, "none"); return err }},
-			{"UpdateExperience", func() error { return store.UpdateExperience(ctx, &domain.WorkExperience{ID: "none", UserID: userID}) }},
+			{"UpdateExperience", func() error { return store.UpdateExperience(ctx, &core.WorkExperience{ID: "none", UserID: userID}) }},
 			{"DeleteExperience", func() error { return store.DeleteExperience(ctx, userID, "none") }},
 			{"GetProject", func() error { _, err := store.GetProject(ctx, userID, "none"); return err }},
-			{"UpdateProject", func() error { return store.UpdateProject(ctx, &domain.Project{ID: "none", UserID: userID}) }},
+			{"UpdateProject", func() error { return store.UpdateProject(ctx, &core.Project{ID: "none", UserID: userID}) }},
 			{"DeleteProject", func() error { return store.DeleteProject(ctx, userID, "none") }},
 			{"GetEducation", func() error { _, err := store.GetEducation(ctx, userID, "none"); return err }},
-			{"UpdateEducation", func() error { return store.UpdateEducation(ctx, &domain.Education{ID: "none", UserID: userID}) }},
+			{"UpdateEducation", func() error { return store.UpdateEducation(ctx, &core.Education{ID: "none", UserID: userID}) }},
 			{"DeleteEducation", func() error { return store.DeleteEducation(ctx, userID, "none") }},
 			{"GetCertification", func() error { _, err := store.GetCertification(ctx, userID, "none"); return err }},
-			{"UpdateCertification", func() error { return store.UpdateCertification(ctx, &domain.Certification{ID: "none", UserID: userID}) }},
+			{"UpdateCertification", func() error { return store.UpdateCertification(ctx, &core.Certification{ID: "none", UserID: userID}) }},
 			{"DeleteCertification", func() error { return store.DeleteCertification(ctx, userID, "none") }},
 			{"GetFact", func() error { _, err := store.GetFact(ctx, userID, "none"); return err }},
-			{"UpdateFact", func() error { return store.UpdateFact(ctx, &domain.Fact{ID: "none", UserID: userID}) }},
+			{"UpdateFact", func() error { return store.UpdateFact(ctx, &core.Fact{ID: "none", UserID: userID}) }},
 			{"DeleteFact", func() error { return store.DeleteFact(ctx, userID, "none") }},
 			{"GetPreset", func() error { _, err := store.GetPreset(ctx, userID, "none"); return err }},
-			{"UpdatePreset", func() error { return store.UpdatePreset(ctx, &domain.Preset{ID: "none", UserID: userID}) }},
+			{"UpdatePreset", func() error { return store.UpdatePreset(ctx, &core.Preset{ID: "none", UserID: userID}) }},
 			{"DeletePreset", func() error { return store.DeletePreset(ctx, userID, "none") }},
 			{"GetTemplate", func() error { _, err := store.GetTemplate(ctx, userID, "none"); return err }},
 			{"DeleteTemplate", func() error { return store.DeleteTemplate(ctx, userID, "none") }},
 			{"GetBranch", func() error { _, err := store.GetBranch(ctx, userID, "none"); return err }},
-			{"UpdateBranch", func() error { return store.UpdateBranch(ctx, &domain.Branch{ID: "none", UserID: userID}) }},
+			{"UpdateBranch", func() error { return store.UpdateBranch(ctx, &core.Branch{ID: "none", UserID: userID}) }},
 			{"DeleteBranch", func() error { return store.DeleteBranch(ctx, userID, "none") }},
 			{"GetVersion", func() error { _, err := store.GetVersion(ctx, "none", "none"); return err }},
 			{"GetVersionByNumber", func() error { _, err := store.GetVersionByNumber(ctx, "none", 1); return err }},
-			{"UpdateVersionStatus", func() error { return store.UpdateVersionStatus(ctx, "none", domain.VersionStatusCompleted, "") }},
-			{"CompleteVersion", func() error { return store.CompleteVersion(ctx, &domain.BranchVersion{ID: "none", BranchID: "none"}) }},
+			{"UpdateVersionStatus", func() error { return store.UpdateVersionStatus(ctx, "none", core.VersionStatusCompleted, "") }},
+			{"CompleteVersion", func() error { return store.CompleteVersion(ctx, &core.BranchVersion{ID: "none", BranchID: "none"}) }},
 			{"GetJob", func() error { _, err := store.GetJob(ctx, userID, "none"); return err }},
-			{"UpdateJobStatus", func() error { return store.UpdateJobStatus(ctx, "none", domain.PDFParseJobStatusCompleted, nil, "") }},
+			{"UpdateJobStatus", func() error { return store.UpdateJobStatus(ctx, "none", core.PDFParseJobStatusCompleted, nil, "") }},
 		}
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
 				err := tc.call()
-				if !errors.Is(err, domain.ErrNotFound) {
+				if !errors.Is(err, core.ErrNotFound) {
 					t.Errorf("%s: expected ErrNotFound, got: %v", tc.name, err)
 				}
 			})
@@ -736,31 +736,31 @@ func TestMemoryStore_ErrorSentinels(t *testing.T) {
 	})
 
 	t.Run("ErrConflict", func(t *testing.T) {
-		sk := &domain.Skill{ID: "sk-dup", UserID: userID, Name: "Duplicate"}
+		sk := &core.Skill{ID: "sk-dup", UserID: userID, Name: "Duplicate"}
 		if err := store.CreateSkill(ctx, sk); err != nil {
 			t.Fatalf("initial create: %v", err)
 		}
-		if err := store.CreateSkill(ctx, sk); !errors.Is(err, domain.ErrConflict) {
+		if err := store.CreateSkill(ctx, sk); !errors.Is(err, core.ErrConflict) {
 			t.Errorf("expected ErrConflict on duplicate skill, got: %v", err)
 		}
 	})
 
 	t.Run("ErrDefaultBranchImmutable", func(t *testing.T) {
-		defBranch := &domain.Branch{ID: "br-def", UserID: userID, IsDefault: true}
+		defBranch := &core.Branch{ID: "br-def", UserID: userID, IsDefault: true}
 		if err := store.CreateBranch(ctx, defBranch); err != nil {
 			t.Fatalf("create branch: %v", err)
 		}
 		err := store.DeleteBranch(ctx, userID, defBranch.ID)
-		if !errors.Is(err, domain.ErrDefaultBranchImmutable) {
+		if !errors.Is(err, core.ErrDefaultBranchImmutable) {
 			t.Errorf("expected ErrDefaultBranchImmutable on deleting default branch, got: %v", err)
 		}
 	})
 
 	t.Run("ErrValidation", func(t *testing.T) {
-		if err := store.CreateJob(ctx, nil); !errors.Is(err, domain.ErrValidation) {
+		if err := store.CreateJob(ctx, nil); !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation on nil job, got: %v", err)
 		}
-		if err := store.CreatePreset(ctx, nil); !errors.Is(err, domain.ErrValidation) {
+		if err := store.CreatePreset(ctx, nil); !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation on nil preset, got: %v", err)
 		}
 	})
@@ -781,16 +781,16 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	}
 
 	// 2. ReserveQuota success
-	rec, err := store.ReserveQuota(ctx, userID, domain.OperationResumeTailoring, 1500, 2, 5000)
+	rec, err := store.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 1500, 2, 5000)
 	if err != nil {
 		t.Fatalf("failed to reserve quota: %v", err)
 	}
-	if rec.Status != domain.ReservationStatusPending || rec.EstimatedTokens != 1500 {
+	if rec.Status != core.ReservationStatusPending || rec.EstimatedTokens != 1500 {
 		t.Fatalf("unexpected record: %+v", rec)
 	}
 
 	// 3. CommitUsage
-	usage := domain.TokenUsage{
+	usage := core.TokenUsage{
 		PromptTokens:     500,
 		CompletionTokens: 1200,
 		TotalTokens:      1700,
@@ -804,19 +804,19 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to list usage records: %v", err)
 	}
-	if len(records) != 1 || records[0].Status != domain.ReservationStatusCommitted || records[0].TotalTokens != 1700 {
+	if len(records) != 1 || records[0].Status != core.ReservationStatusCommitted || records[0].TotalTokens != 1700 {
 		t.Fatalf("unexpected records: %+v", records)
 	}
 
 	// 4. Reserve second quota reaching daily limit
-	rec2, err := store.ReserveQuota(ctx, userID, domain.OperationGapAnalysis, 1000, 2, 5000)
+	rec2, err := store.ReserveQuota(ctx, userID, core.OperationGapAnalysis, 1000, 2, 5000)
 	if err != nil {
 		t.Fatalf("failed to reserve second quota: %v", err)
 	}
 
 	// 5. Third reservation fails with ErrQuotaExceeded
-	_, err = store.ReserveQuota(ctx, userID, domain.OperationPDFParse, 500, 2, 5000)
-	if !errors.Is(err, domain.ErrQuotaExceeded) {
+	_, err = store.ReserveQuota(ctx, userID, core.OperationPDFParse, 500, 2, 5000)
+	if !errors.Is(err, core.ErrQuotaExceeded) {
 		t.Fatalf("expected ErrQuotaExceeded on exceeding daily request limit, got %v", err)
 	}
 
@@ -826,7 +826,7 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	}
 
 	// 7. Verify reservation can now succeed after release
-	rec3, err := store.ReserveQuota(ctx, userID, domain.OperationPDFParse, 500, 2, 5000)
+	rec3, err := store.ReserveQuota(ctx, userID, core.OperationPDFParse, 500, 2, 5000)
 	if err != nil {
 		t.Fatalf("expected reservation to succeed after release, got %v", err)
 	}
@@ -835,7 +835,7 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	}
 
 	// 8. Releasing non-existent reservation returns ErrNotFound
-	if err := store.ReleaseQuota(ctx, "non-existent-id", "err"); !errors.Is(err, domain.ErrNotFound) {
+	if err := store.ReleaseQuota(ctx, "non-existent-id", "err"); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for unknown reservation, got %v", err)
 	}
 }
@@ -845,7 +845,7 @@ func TestMemoryStore_GlobalSkillsAndImmutability(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Seed global skill
-	globalSkill := &domain.Skill{
+	globalSkill := &core.Skill{
 		ID:       "global-golang",
 		UserID:   "system",
 		Name:     "Go",
@@ -857,7 +857,7 @@ func TestMemoryStore_GlobalSkillsAndImmutability(t *testing.T) {
 	}
 
 	// 2. User skill
-	userSkill := &domain.Skill{
+	userSkill := &core.Skill{
 		ID:       "user-skill-1",
 		UserID:   "user-a",
 		Name:     "Docker",
@@ -878,17 +878,17 @@ func TestMemoryStore_GlobalSkillsAndImmutability(t *testing.T) {
 	}
 
 	// 4. Deleting global skill returns ErrGlobalSkillImmutable
-	if err := store.DeleteSkill(ctx, "user-a", "global-golang"); !errors.Is(err, domain.ErrGlobalSkillImmutable) {
+	if err := store.DeleteSkill(ctx, "user-a", "global-golang"); !errors.Is(err, core.ErrGlobalSkillImmutable) {
 		t.Fatalf("expected ErrGlobalSkillImmutable when deleting global skill, got %v", err)
 	}
 
 	// 5. Deleting another user's skill returns ErrForbidden
-	if err := store.DeleteSkill(ctx, "user-b", "user-skill-1"); !errors.Is(err, domain.ErrForbidden) {
+	if err := store.DeleteSkill(ctx, "user-b", "user-skill-1"); !errors.Is(err, core.ErrForbidden) {
 		t.Fatalf("expected ErrForbidden when deleting another tenant's skill, got %v", err)
 	}
 
 	// 6. Deleting non-existent skill returns ErrNotFound
-	if err := store.DeleteSkill(ctx, "user-a", "unknown-skill"); !errors.Is(err, domain.ErrNotFound) {
+	if err := store.DeleteSkill(ctx, "user-a", "unknown-skill"); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for unknown skill, got %v", err)
 	}
 
@@ -904,38 +904,38 @@ func TestMemoryStore_CleanupCompletedJobs(t *testing.T) {
 	now := time.Now().UTC()
 
 	completedAt := now.Add(-48 * time.Hour)
-	oldCompleted := &domain.PDFParseJob{
+	oldCompleted := &core.PDFParseJob{
 		ID:          "job-old-completed",
 		UserID:      "user-1",
-		Status:      domain.PDFParseJobStatusCompleted,
+		Status:      core.PDFParseJobStatusCompleted,
 		CreatedAt:   now.Add(-48 * time.Hour),
 		UpdatedAt:   now.Add(-48 * time.Hour),
 		CompletedAt: &completedAt,
 	}
-	oldFailed := &domain.PDFParseJob{
+	oldFailed := &core.PDFParseJob{
 		ID:          "job-old-failed",
 		UserID:      "user-1",
-		Status:      domain.PDFParseJobStatusFailed,
+		Status:      core.PDFParseJobStatusFailed,
 		CreatedAt:   now.Add(-48 * time.Hour),
 		UpdatedAt:   now.Add(-48 * time.Hour),
 		CompletedAt: &completedAt,
 	}
-	recentCompleted := &domain.PDFParseJob{
+	recentCompleted := &core.PDFParseJob{
 		ID:        "job-recent-completed",
 		UserID:    "user-1",
-		Status:    domain.PDFParseJobStatusCompleted,
+		Status:    core.PDFParseJobStatusCompleted,
 		CreatedAt: now.Add(-1 * time.Hour),
 		UpdatedAt: now.Add(-1 * time.Hour),
 	}
-	oldPending := &domain.PDFParseJob{
+	oldPending := &core.PDFParseJob{
 		ID:        "job-old-pending",
 		UserID:    "user-1",
-		Status:    domain.PDFParseJobStatusPending,
+		Status:    core.PDFParseJobStatusPending,
 		CreatedAt: now.Add(-48 * time.Hour),
 		UpdatedAt: now.Add(-48 * time.Hour),
 	}
 
-	for _, j := range []*domain.PDFParseJob{oldCompleted, oldFailed, recentCompleted, oldPending} {
+	for _, j := range []*core.PDFParseJob{oldCompleted, oldFailed, recentCompleted, oldPending} {
 		if err := store.CreateJob(ctx, j); err != nil {
 			t.Fatalf("failed to create job %s: %v", j.ID, err)
 		}
@@ -954,10 +954,10 @@ func TestMemoryStore_CleanupCompletedJobs(t *testing.T) {
 		t.Errorf("expected recent completed job to be preserved, got error: %v", err)
 	}
 	// Old completed and failed must be gone
-	if _, err := store.GetJob(ctx, "user-1", "job-old-completed"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := store.GetJob(ctx, "user-1", "job-old-completed"); !errors.Is(err, core.ErrNotFound) {
 		t.Errorf("expected old completed job to be purged, got %v", err)
 	}
-	if _, err := store.GetJob(ctx, "user-1", "job-old-failed"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := store.GetJob(ctx, "user-1", "job-old-failed"); !errors.Is(err, core.ErrNotFound) {
 		t.Errorf("expected old failed job to be purged, got %v", err)
 	}
 }
@@ -967,7 +967,7 @@ func TestMemoryStore_TemplateImmutability(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed built-in template
-	builtIn := &domain.TemplateSet{
+	builtIn := &core.TemplateSet{
 		ID:               "builtin-standard",
 		UserID:           "system",
 		Name:             "Builtin Standard",
@@ -981,7 +981,7 @@ func TestMemoryStore_TemplateImmutability(t *testing.T) {
 	}
 
 	// User custom template
-	custom := &domain.TemplateSet{
+	custom := &core.TemplateSet{
 		ID:               "custom-tmpl-1",
 		UserID:           "user-a",
 		Name:             "Custom Template",
@@ -998,13 +998,13 @@ func TestMemoryStore_TemplateImmutability(t *testing.T) {
 		mutation := *builtIn
 		mutation.Name = "Poisoned Name"
 		mutation.UserID = "user-a"
-		if err := store.UpdateTemplate(ctx, &mutation); !errors.Is(err, domain.ErrStrategyImmutable) {
+		if err := store.UpdateTemplate(ctx, &mutation); !errors.Is(err, core.ErrStrategyImmutable) {
 			t.Fatalf("expected ErrStrategyImmutable when updating built-in template, got %v", err)
 		}
 	})
 
 	t.Run("Delete built-in template returns ErrStrategyImmutable", func(t *testing.T) {
-		if err := store.DeleteTemplate(ctx, "user-a", "builtin-standard"); !errors.Is(err, domain.ErrStrategyImmutable) {
+		if err := store.DeleteTemplate(ctx, "user-a", "builtin-standard"); !errors.Is(err, core.ErrStrategyImmutable) {
 			t.Fatalf("expected ErrStrategyImmutable when deleting built-in template, got %v", err)
 		}
 	})
@@ -1012,13 +1012,13 @@ func TestMemoryStore_TemplateImmutability(t *testing.T) {
 	t.Run("Update another user's template returns ErrForbidden", func(t *testing.T) {
 		mutation := *custom
 		mutation.UserID = "user-b"
-		if err := store.UpdateTemplate(ctx, &mutation); !errors.Is(err, domain.ErrForbidden) {
+		if err := store.UpdateTemplate(ctx, &mutation); !errors.Is(err, core.ErrForbidden) {
 			t.Fatalf("expected ErrForbidden when updating another user's template, got %v", err)
 		}
 	})
 
 	t.Run("Delete another user's template returns ErrForbidden", func(t *testing.T) {
-		if err := store.DeleteTemplate(ctx, "user-b", "custom-tmpl-1"); !errors.Is(err, domain.ErrForbidden) {
+		if err := store.DeleteTemplate(ctx, "user-b", "custom-tmpl-1"); !errors.Is(err, core.ErrForbidden) {
 			t.Fatalf("expected ErrForbidden when deleting another user's template, got %v", err)
 		}
 	})
@@ -1029,27 +1029,27 @@ func TestMemoryStore_UserRepository(t *testing.T) {
 	store := setupTestStore(t)
 
 	t.Run("Validation failure on nil user or empty ID", func(t *testing.T) {
-		if err := store.UpsertUser(ctx, nil); !errors.Is(err, domain.ErrValidation) {
+		if err := store.UpsertUser(ctx, nil); !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation for nil user, got %v", err)
 		}
-		if err := store.UpsertUser(ctx, &domain.User{ID: ""}); !errors.Is(err, domain.ErrValidation) {
+		if err := store.UpsertUser(ctx, &core.User{ID: ""}); !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation for empty ID, got %v", err)
 		}
 	})
 
 	t.Run("GetUser not found returns ErrNotFound", func(t *testing.T) {
 		_, err := store.GetUser(ctx, "non-existent")
-		if !errors.Is(err, domain.ErrNotFound) {
+		if !errors.Is(err, core.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
 
 	t.Run("Create user and retrieve", func(t *testing.T) {
-		u := &domain.User{
+		u := &core.User{
 			ID:       "mem-user-1",
 			Email:    "mem1@example.com",
 			FullName: "Memory User 1",
-			Role:     domain.UserRoleUser,
+			Role:     core.UserRoleUser,
 			Tier:     "free",
 			IsActive: true,
 		}
@@ -1064,17 +1064,17 @@ func TestMemoryStore_UserRepository(t *testing.T) {
 		if retrieved.Email != "mem1@example.com" {
 			t.Errorf("expected mem1@example.com, got %q", retrieved.Email)
 		}
-		if retrieved.Role != domain.UserRoleUser {
+		if retrieved.Role != core.UserRoleUser {
 			t.Errorf("expected user role, got %q", retrieved.Role)
 		}
 	})
 
 	t.Run("Preserve existing admin role on conflict", func(t *testing.T) {
-		adminUser := &domain.User{
+		adminUser := &core.User{
 			ID:       "admin-user-mem",
 			Email:    "admin@resumeee.io",
 			FullName: "Admin Mem",
-			Role:     domain.UserRoleAdmin,
+			Role:     core.UserRoleAdmin,
 			Tier:     "enterprise",
 			IsActive: true,
 		}
@@ -1082,11 +1082,11 @@ func TestMemoryStore_UserRepository(t *testing.T) {
 			t.Fatalf("failed to create admin user: %v", err)
 		}
 
-		demoteAttempt := &domain.User{
+		demoteAttempt := &core.User{
 			ID:       "admin-user-mem",
 			Email:    "admin.new@resumeee.io",
 			FullName: "Admin Mem Updated",
-			Role:     domain.UserRoleUser,
+			Role:     core.UserRoleUser,
 			Tier:     "free",
 			IsActive: true,
 		}
@@ -1098,8 +1098,8 @@ func TestMemoryStore_UserRepository(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to retrieve user: %v", err)
 		}
-		if retrieved.Role != domain.UserRoleAdmin {
-			t.Errorf("expected role to remain %q, got %q", domain.UserRoleAdmin, retrieved.Role)
+		if retrieved.Role != core.UserRoleAdmin {
+			t.Errorf("expected role to remain %q, got %q", core.UserRoleAdmin, retrieved.Role)
 		}
 		if retrieved.Email != "admin.new@resumeee.io" {
 			t.Errorf("expected email to be updated to admin.new@resumeee.io, got %q", retrieved.Email)
@@ -1114,7 +1114,7 @@ func TestMemoryStore_GapReportPropagation(t *testing.T) {
 	score88 := 88.0
 
 	t.Run("CompleteVersion propagates GapReport and match score to parent branch", func(t *testing.T) {
-		b := &domain.Branch{
+		b := &core.Branch{
 			ID:            "br-mem-gap-1",
 			UserID:        userID,
 			Name:          "Distributed Systems Lead",
@@ -1124,22 +1124,22 @@ func TestMemoryStore_GapReportPropagation(t *testing.T) {
 			t.Fatalf("failed to create branch: %v", err)
 		}
 
-		v := &domain.BranchVersion{
+		v := &core.BranchVersion{
 			ID:               "ver-mem-gap-1",
 			BranchID:         b.ID,
 			MainRevisionUsed: 2,
-			Status:           domain.VersionStatusProcessing,
+			Status:           core.VersionStatusProcessing,
 		}
 		if err := store.CreateVersion(ctx, v); err != nil {
 			t.Fatalf("failed to create version: %v", err)
 		}
 
-		v.Status = domain.VersionStatusCompleted
-		v.GapReport = &domain.GapReport{
+		v.Status = core.VersionStatusCompleted
+		v.GapReport = &core.GapReport{
 			OverallMatchSummary: "Solid engineering match",
 			MatchScore:          &score88,
-			MissingRequirements: []domain.GapItem{
-				{Requirement: "Raft consensus protocol", Importance: domain.GapImportanceCritical},
+			MissingRequirements: []core.GapItem{
+				{Requirement: "Raft consensus protocol", Importance: core.GapImportanceCritical},
 			},
 		}
 
@@ -1160,7 +1160,7 @@ func TestMemoryStore_GapReportPropagation(t *testing.T) {
 	})
 
 	t.Run("CompleteVersion persists nil when version.GapReport is nil", func(t *testing.T) {
-		b := &domain.Branch{
+		b := &core.Branch{
 			ID:            "br-mem-nil",
 			UserID:        userID,
 			Name:          "Untailored Memory Variant",
@@ -1170,11 +1170,11 @@ func TestMemoryStore_GapReportPropagation(t *testing.T) {
 			t.Fatalf("failed to create branch: %v", err)
 		}
 
-		v := &domain.BranchVersion{
+		v := &core.BranchVersion{
 			ID:               "ver-mem-nil-1",
 			BranchID:         b.ID,
 			MainRevisionUsed: 1,
-			Status:           domain.VersionStatusCompleted,
+			Status:           core.VersionStatusCompleted,
 			GapReport:        nil,
 		}
 		if err := store.CreateVersion(ctx, v); err != nil {
@@ -1203,7 +1203,7 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 	userID := "user-mem-ats-1"
 
 	t.Run("UpdateVersionATSScore persists on version and propagates to parent branch when active", func(t *testing.T) {
-		b := &domain.Branch{
+		b := &core.Branch{
 			ID:            "br-mem-ats-1",
 			UserID:        userID,
 			Name:          "ATS Memory Lead",
@@ -1213,11 +1213,11 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 			t.Fatalf("failed to create branch: %v", err)
 		}
 
-		v1 := &domain.BranchVersion{
+		v1 := &core.BranchVersion{
 			ID:               "ver-mem-ats-1",
 			BranchID:         b.ID,
 			MainRevisionUsed: 1,
-			Status:           domain.VersionStatusCompleted,
+			Status:           core.VersionStatusCompleted,
 		}
 		if err := store.CreateVersion(ctx, v1); err != nil {
 			t.Fatalf("failed to create v1: %v", err)
@@ -1226,7 +1226,7 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 			t.Fatalf("failed to complete v1: %v", err)
 		}
 
-		ats1 := &domain.ATSScore{
+		ats1 := &core.ATSScore{
 			ExtractionConfidenceScore: 94.0,
 			JobMatchingScore:          86.0,
 			FormatUsed:                "markdown",
@@ -1252,15 +1252,15 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 		}
 
 		// Attempting to overwrite an already-evaluated version's ATSScore returns ErrConflict
-		if err := store.UpdateVersionATSScore(ctx, v1.ID, &domain.ATSScore{ExtractionConfidenceScore: 50, JobMatchingScore: 50}); !errors.Is(err, domain.ErrConflict) {
+		if err := store.UpdateVersionATSScore(ctx, v1.ID, &core.ATSScore{ExtractionConfidenceScore: 50, JobMatchingScore: 50}); !errors.Is(err, core.ErrConflict) {
 			t.Errorf("expected ErrConflict when updating already-scored version, got %v", err)
 		}
 
-		v2 := &domain.BranchVersion{
+		v2 := &core.BranchVersion{
 			ID:               "ver-mem-ats-2",
 			BranchID:         b.ID,
 			MainRevisionUsed: 2,
-			Status:           domain.VersionStatusCompleted,
+			Status:           core.VersionStatusCompleted,
 		}
 		if err := store.CreateVersion(ctx, v2); err != nil {
 			t.Fatalf("failed to create v2: %v", err)
@@ -1279,8 +1279,8 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 	})
 
 	t.Run("UpdateVersionATSScore returns ErrNotFound for nonexistent version", func(t *testing.T) {
-		err := store.UpdateVersionATSScore(ctx, "nonexistent-ver", &domain.ATSScore{ExtractionConfidenceScore: 90, JobMatchingScore: 80})
-		if !errors.Is(err, domain.ErrNotFound) {
+		err := store.UpdateVersionATSScore(ctx, "nonexistent-ver", &core.ATSScore{ExtractionConfidenceScore: 90, JobMatchingScore: 80})
+		if !errors.Is(err, core.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})

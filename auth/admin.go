@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // AdminAuthProvider implements auth.Provider for single-user local administration deployments.
@@ -59,7 +59,7 @@ func (p *AdminAuthProvider) DefaultUserID() string {
 }
 
 // AuthenticateRequest extracts the tenant user ID from the X-User-ID header or falls back to defaultUserID.
-func (p *AdminAuthProvider) AuthenticateRequest(r *http.Request) (*domain.TokenInfo, error) {
+func (p *AdminAuthProvider) AuthenticateRequest(r *http.Request) (*core.TokenInfo, error) {
 	uid := "default"
 	if p != nil && p.defaultUserID != "" {
 		uid = p.defaultUserID
@@ -69,15 +69,15 @@ func (p *AdminAuthProvider) AuthenticateRequest(r *http.Request) (*domain.TokenI
 			uid = headerUID
 		}
 	}
-	return &domain.TokenInfo{
+	return &core.TokenInfo{
 		UID:   uid,
 		Admin: true,
-		Role:  string(domain.UserRoleAdmin),
+		Role:  string(core.UserRoleAdmin),
 	}, nil
 }
 
 // VerifyIDToken decodes the provided token string as a user identifier or falls back to defaultUserID.
-func (p *AdminAuthProvider) VerifyIDToken(ctx context.Context, token string) (*domain.TokenInfo, error) {
+func (p *AdminAuthProvider) VerifyIDToken(ctx context.Context, token string) (*core.TokenInfo, error) {
 	uid := strings.TrimSpace(token)
 	if uid == "" {
 		if p != nil && p.defaultUserID != "" {
@@ -86,9 +86,9 @@ func (p *AdminAuthProvider) VerifyIDToken(ctx context.Context, token string) (*d
 			uid = "default"
 		}
 	}
-	return &domain.TokenInfo{
+	return &core.TokenInfo{
 		UID:   uid,
 		Admin: true,
-		Role:  string(domain.UserRoleAdmin),
+		Role:  string(core.UserRoleAdmin),
 	}, nil
 }

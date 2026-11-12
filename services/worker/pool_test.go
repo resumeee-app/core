@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/services/profile"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 	"github.com/resumeee-app/resumeee-core/memory"
@@ -26,12 +26,12 @@ type mockLLM struct {
 	failErrMsg   string
 	shouldPanic  bool
 	panicVal     any
-	customResp   *domain.GenerationResponse
+	customResp   *core.GenerationResponse
 	requestCount int
 	capturedCtx  context.Context
 }
 
-func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
 	m.mu.Lock()
 	m.requestCount++
 	m.capturedCtx = ctx
@@ -78,9 +78,9 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req domain.Generat
 		}
 	}
 
-	var bullets []domain.TailoredBullet
+	var bullets []core.TailoredBullet
 	if factID != "" {
-		bullets = []domain.TailoredBullet{
+		bullets = []core.TailoredBullet{
 			{
 				Text:           "Engineered high-throughput streaming systems.",
 				SourceFactIDs:  []string{factID},
@@ -89,31 +89,31 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req domain.Generat
 		}
 	}
 
-	var experiences []domain.TailoredExperience
+	var experiences []core.TailoredExperience
 	if expID != "" {
-		experiences = []domain.TailoredExperience{
+		experiences = []core.TailoredExperience{
 			{
 				SourceEntityID: expID,
 				Company:        "Test Corp",
 				RoleTitle:      "Lead Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
+				StartDate:      core.NewDate(2020, 1, 1),
 				Bullets:        bullets,
 			},
 		}
 	}
 
-	return &domain.GenerationResponse{
-		TailoredContent: domain.TailoredContent{
+	return &core.GenerationResponse{
+		TailoredContent: core.TailoredContent{
 			Summary:     "Seasoned engineer specializing in scalable backend systems.",
 			Experiences: experiences,
 		},
-		GapReport: domain.GapReport{
+		GapReport: core.GapReport{
 			OverallMatchSummary: "Candidate strongly matches requirements.",
 		},
 	}, nil
 }
 
-func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error) {
+func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
@@ -123,12 +123,12 @@ func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req domain.Generation
 
 type testWorkerEnv struct {
 	db           any
-	profileRepo  domain.ProfileRepository
-	presetRepo   domain.PresetRepository
-	templateRepo domain.TemplateRepository
-	branchRepo   domain.BranchRepository
+	profileRepo  core.ProfileRepository
+	presetRepo   core.PresetRepository
+	templateRepo core.TemplateRepository
+	branchRepo   core.BranchRepository
 	validator    *validator.Validator
-	renderer     domain.TemplateRenderer
+	renderer     core.TemplateRenderer
 	llm          *mockLLM
 	defaultUser  string
 	branchID     string
@@ -152,7 +152,7 @@ func setupTestWorkerEnv(t *testing.T) *testWorkerEnv {
 	rend := renderer.NewTemplateRenderer()
 	llmService := &mockLLM{}
 
-	branch := domain.Branch{
+	branch := core.Branch{
 		ID:            "branch-" + uuid.New().String(),
 		UserID:        defaultUser,
 		Name:          "Backend Staff Engineer",
@@ -202,10 +202,10 @@ func TestPool_ParallelExecution(t *testing.T) {
 	versionIDs := make([]string, numJobs)
 
 	for i := 0; i < numJobs; i++ {
-		ver := &domain.BranchVersion{
+		ver := &core.BranchVersion{
 			ID:                 fmt.Sprintf("ver-parallel-%d", i),
 			BranchID:           env.branchID,
-			Status:             domain.VersionStatusPending,
+			Status:             core.VersionStatusPending,
 			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
@@ -232,13 +232,13 @@ func TestPool_ParallelExecution(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to get version %s: %v", vID, err)
 			}
-			if ver.Status == domain.VersionStatusCompleted {
+			if ver.Status == core.VersionStatusCompleted {
 				if ver.HTMLOutput == "" || ver.MarkdownOutput == "" || ver.PlainTextOutput == "" {
 					t.Fatalf("expected rendered outputs on version %s, got empty", vID)
 				}
 				break
 			}
-			if ver.Status == domain.VersionStatusFailed {
+			if ver.Status == core.VersionStatusFailed {
 				t.Fatalf("job %s unexpectedly failed: %s", vID, ver.ErrorMessage)
 			}
 			if time.Now().After(deadline) {
@@ -268,10 +268,10 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 	defer cancel()
 
 	// Seed version 1 so it successfully reaches GenerateTailoredResume and blocks
-	v1 := &domain.BranchVersion{
+	v1 := &core.BranchVersion{
 		ID:                 "ver-block-1",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
+		Status:             core.VersionStatusPending,
 		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
@@ -317,7 +317,7 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		ver, err := env.branchRepo.GetVersion(ctx, env.branchID, v1.ID)
-		if err == nil && ver.Status == domain.VersionStatusProcessing {
+		if err == nil && ver.Status == core.VersionStatusProcessing {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -338,11 +338,11 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 		t.Fatalf("failed to enqueue job 3: %v", err)
 	}
 
-	// 4th job: queue is full, must return domain.ErrQueueFull immediately without blocking
+	// 4th job: queue is full, must return core.ErrQueueFull immediately without blocking
 	j4 := worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-overflow"}
 	err := pool.Enqueue(j4)
-	if !errors.Is(err, domain.ErrQueueFull) {
-		t.Fatalf("expected domain.ErrQueueFull, got %v", err)
+	if !errors.Is(err, core.ErrQueueFull) {
+		t.Fatalf("expected core.ErrQueueFull, got %v", err)
 	}
 }
 
@@ -350,18 +350,18 @@ type blockingMockLLM struct {
 	unblock chan struct{}
 }
 
-func (m *blockingMockLLM) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+func (m *blockingMockLLM) GenerateTailoredResume(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
 	select {
 	case <-m.unblock:
-		return &domain.GenerationResponse{
-			TailoredContent: domain.TailoredContent{Summary: "Done"},
+		return &core.GenerationResponse{
+			TailoredContent: core.TailoredContent{Summary: "Done"},
 		}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 }
 
-func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error) {
+func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
@@ -392,10 +392,10 @@ func TestPool_GracefulShutdownAndDrain(t *testing.T) {
 	const jobsCount = 4
 	versionIDs := make([]string, jobsCount)
 	for i := 0; i < jobsCount; i++ {
-		ver := &domain.BranchVersion{
+		ver := &core.BranchVersion{
 			ID:                 fmt.Sprintf("ver-drain-%d", i),
 			BranchID:           env.branchID,
-			Status:             domain.VersionStatusPending,
+			Status:             core.VersionStatusPending,
 			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
@@ -433,15 +433,15 @@ func TestPool_GracefulShutdownAndDrain(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get version %s: %v", vID, err)
 		}
-		if ver.Status != domain.VersionStatusCompleted {
+		if ver.Status != core.VersionStatusCompleted {
 			t.Errorf("expected version %s to be completed after drain, got %s", vID, ver.Status)
 		}
 	}
 
 	// Enqueue after Stop should be rejected
 	err := pool.Enqueue(worker.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: "ver-post-stop"})
-	if !errors.Is(err, domain.ErrQueueFull) {
-		t.Errorf("expected domain.ErrQueueFull after pool stop, got %v", err)
+	if !errors.Is(err, core.ErrQueueFull) {
+		t.Errorf("expected core.ErrQueueFull after pool stop, got %v", err)
 	}
 }
 
@@ -451,10 +451,10 @@ func TestPool_StartupCrashRecovery(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed versions lingering in pending and processing states
-	vPending := &domain.BranchVersion{
+	vPending := &core.BranchVersion{
 		ID:                 "ver-lingering-pending",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
+		Status:             core.VersionStatusPending,
 		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
@@ -462,10 +462,10 @@ func TestPool_StartupCrashRecovery(t *testing.T) {
 		t.Fatalf("failed to create pending version: %v", err)
 	}
 
-	vProcessing := &domain.BranchVersion{
+	vProcessing := &core.BranchVersion{
 		ID:                 "ver-lingering-processing",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusProcessing,
+		Status:             core.VersionStatusProcessing,
 		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
@@ -485,7 +485,7 @@ func TestPool_StartupCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get version %s: %v", id, err)
 		}
-		if ver.Status != domain.VersionStatusFailed {
+		if ver.Status != core.VersionStatusFailed {
 			t.Errorf("expected version %s to be failed, got %s", id, ver.Status)
 		}
 		if ver.ErrorMessage != crashReason {
@@ -520,10 +520,10 @@ func TestPool_LLMErrorTransition(t *testing.T) {
 	pool.Start(ctx)
 	defer pool.Stop()
 
-	ver := &domain.BranchVersion{
+	ver := &core.BranchVersion{
 		ID:                 "ver-llm-fail",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
+		Status:             core.VersionStatusPending,
 		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
@@ -542,7 +542,7 @@ func TestPool_LLMErrorTransition(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get version: %v", err)
 		}
-		if v.Status == domain.VersionStatusFailed {
+		if v.Status == core.VersionStatusFailed {
 			if v.ErrorMessage == "" {
 				t.Errorf("expected error message on failed version")
 			}
@@ -560,16 +560,16 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 	env := setupTestWorkerEnv(t)
 
 	// Inject tailored content citing a fabricated fact ID
-	env.llm.customResp = &domain.GenerationResponse{
-		TailoredContent: domain.TailoredContent{
+	env.llm.customResp = &core.GenerationResponse{
+		TailoredContent: core.TailoredContent{
 			Summary: "Valid summary",
-			Experiences: []domain.TailoredExperience{
+			Experiences: []core.TailoredExperience{
 				{
 					SourceEntityID: "non-existent-exp-id",
 					Company:        "Fake Corp",
 					RoleTitle:      "Phantom Engineer",
-					StartDate:      domain.NewDate(2020, 1, 1),
-					Bullets: []domain.TailoredBullet{
+					StartDate:      core.NewDate(2020, 1, 1),
+					Bullets: []core.TailoredBullet{
 						{
 							Text:          "Did impossible things",
 							SourceFactIDs: []string{"fabricated-fact-1"},
@@ -578,7 +578,7 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 				},
 			},
 		},
-		GapReport: domain.GapReport{OverallMatchSummary: "Moderate match"},
+		GapReport: core.GapReport{OverallMatchSummary: "Moderate match"},
 	}
 
 	pool := worker.NewPool(worker.PoolConfig{
@@ -598,10 +598,10 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 	pool.Start(ctx)
 	defer pool.Stop()
 
-	ver := &domain.BranchVersion{
+	ver := &core.BranchVersion{
 		ID:                 "ver-warn-1",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
+		Status:             core.VersionStatusPending,
 		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
@@ -619,13 +619,13 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get version: %v", err)
 		}
-		if v.Status == domain.VersionStatusCompletedWithWarnings {
+		if v.Status == core.VersionStatusCompletedWithWarnings {
 			if len(v.ValidationWarnings) == 0 {
 				t.Errorf("expected validation warnings, got none")
 			}
 			break
 		}
-		if v.Status == domain.VersionStatusFailed {
+		if v.Status == core.VersionStatusFailed {
 			t.Fatalf("job unexpectedly failed: %s", v.ErrorMessage)
 		}
 		if time.Now().After(deadline) {
@@ -640,20 +640,20 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 	ctx := context.Background()
 
 	// Create pending version and processing version
-	v1 := &domain.BranchVersion{
+	v1 := &core.BranchVersion{
 		ID:                 "ver-stale-pending",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
+		Status:             core.VersionStatusPending,
 		MainRevisionUsed: 1,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to create v1: %v", err)
 	}
 
-	v2 := &domain.BranchVersion{
+	v2 := &core.BranchVersion{
 		ID:                 "ver-stale-processing",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusProcessing,
+		Status:             core.VersionStatusProcessing,
 		MainRevisionUsed: 1,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
@@ -672,7 +672,7 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get v1: %v", err)
 	}
-	if refetched1.Status != domain.VersionStatusFailed {
+	if refetched1.Status != core.VersionStatusFailed {
 		t.Errorf("expected v1 status failed, got %s", refetched1.Status)
 	}
 	if refetched1.ErrorMessage != "server restart recovery test" {
@@ -683,7 +683,7 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get v2: %v", err)
 	}
-	if refetched2.Status != domain.VersionStatusFailed {
+	if refetched2.Status != core.VersionStatusFailed {
 		t.Errorf("expected v2 status failed, got %s", refetched2.Status)
 	}
 }
@@ -717,10 +717,10 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 	defer pool.Stop()
 
 	// 1. Enqueue job that panics
-	verPanic := &domain.BranchVersion{
+	verPanic := &core.BranchVersion{
 		ID:                 "ver-panic-1",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
+		Status:             core.VersionStatusPending,
 		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
@@ -739,7 +739,7 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get panic version: %v", err)
 		}
-		if v.Status == domain.VersionStatusFailed {
+		if v.Status == core.VersionStatusFailed {
 			if v.ErrorMessage == "" {
 				t.Errorf("expected non-empty error message on panic failure")
 			}
@@ -757,10 +757,10 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 	env.llm.panicVal = nil
 	env.llm.mu.Unlock()
 
-	verSuccess := &domain.BranchVersion{
+	verSuccess := &core.BranchVersion{
 		ID:                 "ver-success-2",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
+		Status:             core.VersionStatusPending,
 		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
@@ -779,10 +779,10 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get success version: %v", err)
 		}
-		if v.Status == domain.VersionStatusCompleted {
+		if v.Status == core.VersionStatusCompleted {
 			break
 		}
-		if v.Status == domain.VersionStatusFailed {
+		if v.Status == core.VersionStatusFailed {
 			t.Fatalf("second job unexpectedly failed: %s", v.ErrorMessage)
 		}
 		if time.Now().After(deadline) {
@@ -798,7 +798,7 @@ type mockResumeExtractor struct {
 	fail       bool
 	failErrMsg string
 	result     *profile.JSONResume
-	usage      domain.TokenUsage
+	usage      core.TokenUsage
 }
 
 func (m *mockResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*profile.JSONResume, error) {
@@ -806,7 +806,7 @@ func (m *mockResumeExtractor) ExtractResume(ctx context.Context, text, provider,
 	return res, err
 }
 
-func (m *mockResumeExtractor) ExtractResumeWithUsage(ctx context.Context, text, provider, model string) (*profile.JSONResume, domain.TokenUsage, error) {
+func (m *mockResumeExtractor) ExtractResumeWithUsage(ctx context.Context, text, provider, model string) (*profile.JSONResume, core.TokenUsage, error) {
 	m.mu.Lock()
 	delay := m.delay
 	fail := m.fail
@@ -819,11 +819,11 @@ func (m *mockResumeExtractor) ExtractResumeWithUsage(ctx context.Context, text, 
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return nil, domain.TokenUsage{}, ctx.Err()
+			return nil, core.TokenUsage{}, ctx.Err()
 		}
 	}
 	if fail {
-		return nil, domain.TokenUsage{}, errors.New(failErrMsg)
+		return nil, core.TokenUsage{}, errors.New(failErrMsg)
 	}
 	if result != nil {
 		return result, usage, nil
@@ -861,10 +861,10 @@ func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
 	defer pool.Stop()
 
 	jobID := "pdf-job-success-1"
-	job := &domain.PDFParseJob{
+	job := &core.PDFParseJob{
 		ID:        jobID,
 		UserID:    "user-1",
-		Status:    domain.PDFParseJobStatusPending,
+		Status:    core.PDFParseJobStatusPending,
 		Filename:  "hopper.pdf",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -892,7 +892,7 @@ func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get job failed: %v", err)
 		}
-		if j.Status == domain.PDFParseJobStatusCompleted {
+		if j.Status == core.PDFParseJobStatusCompleted {
 			if j.CompletedAt == nil {
 				t.Errorf("expected CompletedAt to be set")
 			}
@@ -906,7 +906,7 @@ func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
 			}
 			break
 		}
-		if j.Status == domain.PDFParseJobStatusFailed {
+		if j.Status == core.PDFParseJobStatusFailed {
 			t.Fatalf("pdf job unexpectedly failed: %s", j.ErrorMessage)
 		}
 		if time.Now().After(deadline) {
@@ -937,10 +937,10 @@ func TestWorkerPool_PDFParseJob_Failure(t *testing.T) {
 	defer pool.Stop()
 
 	jobID := "pdf-job-fail-1"
-	job := &domain.PDFParseJob{
+	job := &core.PDFParseJob{
 		ID:        jobID,
 		UserID:    "user-1",
-		Status:    domain.PDFParseJobStatusPending,
+		Status:    core.PDFParseJobStatusPending,
 		Filename:  "fail.pdf",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -965,13 +965,13 @@ func TestWorkerPool_PDFParseJob_Failure(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get job failed: %v", err)
 		}
-		if j.Status == domain.PDFParseJobStatusFailed {
+		if j.Status == core.PDFParseJobStatusFailed {
 			if !strings.Contains(j.ErrorMessage, "Failed to extract resume from document") {
 				t.Errorf("expected sanitized error message, got %q", j.ErrorMessage)
 			}
 			break
 		}
-		if j.Status == domain.PDFParseJobStatusCompleted {
+		if j.Status == core.PDFParseJobStatusCompleted {
 			t.Fatalf("expected job to fail, but it completed")
 		}
 		if time.Now().After(deadline) {
@@ -1004,10 +1004,10 @@ func TestWorkerPool_TailoringPipeline_LLMTimeout(t *testing.T) {
 	defer pool.Stop()
 
 	verID := "ver-timeout-check-1"
-	ver := domain.BranchVersion{
+	ver := core.BranchVersion{
 		ID:                 verID,
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
+		Status:             core.VersionStatusPending,
 		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 	}
@@ -1029,10 +1029,10 @@ func TestWorkerPool_TailoringPipeline_LLMTimeout(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get version failed: %v", err)
 		}
-		if v.Status == domain.VersionStatusCompleted {
+		if v.Status == core.VersionStatusCompleted {
 			break
 		}
-		if v.Status == domain.VersionStatusFailed {
+		if v.Status == core.VersionStatusFailed {
 			t.Fatalf("job failed: %s", v.ErrorMessage)
 		}
 		if time.Now().After(deadline) {
@@ -1106,10 +1106,10 @@ func TestPool_PerTenantConcurrencyCap(t *testing.T) {
 	for i := 0; i < jobCount; i++ {
 		jobID := fmt.Sprintf("job-cap-%d", i)
 		jobIDs[i] = jobID
-		job := &domain.PDFParseJob{
+		job := &core.PDFParseJob{
 			ID:        jobID,
 			UserID:    tenantID,
-			Status:    domain.PDFParseJobStatusPending,
+			Status:    core.PDFParseJobStatusPending,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		}
@@ -1128,10 +1128,10 @@ func TestPool_PerTenantConcurrencyCap(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to get job %s: %v", id, err)
 			}
-			if j.Status == domain.PDFParseJobStatusCompleted {
+			if j.Status == core.PDFParseJobStatusCompleted {
 				break
 			}
-			if j.Status == domain.PDFParseJobStatusFailed {
+			if j.Status == core.PDFParseJobStatusFailed {
 				t.Fatalf("job %s unexpectedly failed: %s", id, j.ErrorMessage)
 			}
 			if time.Now().After(deadline) {
@@ -1189,10 +1189,10 @@ func TestPool_NoisyNeighborFairShareAntiStarvation(t *testing.T) {
 	for i := 0; i < tenantAJobs; i++ {
 		jobID := fmt.Sprintf("job-tenant-a-%d", i)
 		tenantAJobIDs[i] = jobID
-		j := &domain.PDFParseJob{
+		j := &core.PDFParseJob{
 			ID:        jobID,
 			UserID:    tenantA,
-			Status:    domain.PDFParseJobStatusPending,
+			Status:    core.PDFParseJobStatusPending,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		}
@@ -1210,10 +1210,10 @@ func TestPool_NoisyNeighborFairShareAntiStarvation(t *testing.T) {
 	// Tenant B enqueues 1 fast job
 	tenantB := "tenant-b-fast"
 	tenantBJobID := "job-tenant-b-0"
-	jB := &domain.PDFParseJob{
+	jB := &core.PDFParseJob{
 		ID:        tenantBJobID,
 		UserID:    tenantB,
-		Status:    domain.PDFParseJobStatusPending,
+		Status:    core.PDFParseJobStatusPending,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -1232,7 +1232,7 @@ func TestPool_NoisyNeighborFairShareAntiStarvation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get tenant B job: %v", err)
 		}
-		if jb.Status == domain.PDFParseJobStatusCompleted {
+		if jb.Status == core.PDFParseJobStatusCompleted {
 			tenantBCompleted = true
 			break
 		}
@@ -1253,7 +1253,7 @@ func TestPool_NoisyNeighborFairShareAntiStarvation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get tenant A job %s: %v", id, err)
 		}
-		if ja.Status != domain.PDFParseJobStatusCompleted {
+		if ja.Status != core.PDFParseJobStatusCompleted {
 			remainingA++
 		}
 	}
@@ -1299,10 +1299,10 @@ func TestPool_MultiTenantRoundRobinOrdering(t *testing.T) {
 	for _, tID := range tenants {
 		for j := 1; j <= 2; j++ {
 			jobID := fmt.Sprintf("%s-job-%d", tID, j)
-			job := &domain.PDFParseJob{
+			job := &core.PDFParseJob{
 				ID:        jobID,
 				UserID:    tID,
-				Status:    domain.PDFParseJobStatusPending,
+				Status:    core.PDFParseJobStatusPending,
 				CreatedAt: time.Now(),
 				UpdatedAt: time.Now(),
 			}
@@ -1390,10 +1390,10 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 
 	// 1. Enqueue job 1 which will panic
 	job1ID := "panic-job-1"
-	j1 := &domain.PDFParseJob{
+	j1 := &core.PDFParseJob{
 		ID:        job1ID,
 		UserID:    tenantID,
-		Status:    domain.PDFParseJobStatusPending,
+		Status:    core.PDFParseJobStatusPending,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -1411,7 +1411,7 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get job 1: %v", err)
 		}
-		if job1.Status == domain.PDFParseJobStatusFailed {
+		if job1.Status == core.PDFParseJobStatusFailed {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1422,10 +1422,10 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 
 	// 2. Enqueue job 2 for the same tenant. If slot was leaked, this job would hang forever because MaxConcurrentPerTenant is 1!
 	job2ID := "panic-job-2"
-	j2 := &domain.PDFParseJob{
+	j2 := &core.PDFParseJob{
 		ID:        job2ID,
 		UserID:    tenantID,
-		Status:    domain.PDFParseJobStatusPending,
+		Status:    core.PDFParseJobStatusPending,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -1443,10 +1443,10 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get job 2: %v", err)
 		}
-		if job2.Status == domain.PDFParseJobStatusCompleted {
+		if job2.Status == core.PDFParseJobStatusCompleted {
 			break
 		}
-		if job2.Status == domain.PDFParseJobStatusFailed {
+		if job2.Status == core.PDFParseJobStatusFailed {
 			t.Fatalf("job 2 failed unexpectedly: %s", job2.ErrorMessage)
 		}
 		if time.Now().After(deadline) {
@@ -1468,17 +1468,17 @@ func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provi
 }
 
 type callbackLLM struct {
-	fn func(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error)
+	fn func(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error)
 }
 
-func (m *callbackLLM) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+func (m *callbackLLM) GenerateTailoredResume(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
 	if m.fn != nil {
 		return m.fn(ctx, req)
 	}
-	return &domain.GenerationResponse{TailoredContent: domain.TailoredContent{Summary: "OK"}}, nil
+	return &core.GenerationResponse{TailoredContent: core.TailoredContent{Summary: "OK"}}, nil
 }
 
-func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error) {
+func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
@@ -1496,7 +1496,7 @@ func TestPool_GenerationJob_PerTenantConcurrencyCap(t *testing.T) {
 	)
 
 	llm := &callbackLLM{
-		fn: func(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+		fn: func(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
 			activeMu.Lock()
 			current++
 			if current > peak {
@@ -1510,8 +1510,8 @@ func TestPool_GenerationJob_PerTenantConcurrencyCap(t *testing.T) {
 			current--
 			activeMu.Unlock()
 
-			return &domain.GenerationResponse{
-				TailoredContent: domain.TailoredContent{
+			return &core.GenerationResponse{
+				TailoredContent: core.TailoredContent{
 					Summary: "Test summary",
 				},
 			}, nil
@@ -1541,10 +1541,10 @@ func TestPool_GenerationJob_PerTenantConcurrencyCap(t *testing.T) {
 	for i := 0; i < jobCount; i++ {
 		vID := fmt.Sprintf("ver-gen-cap-%d", i)
 		versionIDs[i] = vID
-		ver := &domain.BranchVersion{
+		ver := &core.BranchVersion{
 			ID:                 vID,
 			BranchID:           env.branchID,
-			Status:             domain.VersionStatusPending,
+			Status:             core.VersionStatusPending,
 			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
@@ -1563,10 +1563,10 @@ func TestPool_GenerationJob_PerTenantConcurrencyCap(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to get version %s: %v", vID, err)
 			}
-			if ver.Status == domain.VersionStatusCompleted {
+			if ver.Status == core.VersionStatusCompleted {
 				break
 			}
-			if ver.Status == domain.VersionStatusFailed {
+			if ver.Status == core.VersionStatusFailed {
 				t.Fatalf("version %s failed: %s", vID, ver.ErrorMessage)
 			}
 			if time.Now().After(deadline) {
@@ -1615,12 +1615,12 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 	}
 
 	llm := &callbackLLM{
-		fn: func(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+		fn: func(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
 			trackStart()
 			time.Sleep(30 * time.Millisecond)
 			trackEnd()
-			return &domain.GenerationResponse{
-				TailoredContent: domain.TailoredContent{Summary: "Mixed gen"},
+			return &core.GenerationResponse{
+				TailoredContent: core.TailoredContent{Summary: "Mixed gen"},
 			}, nil
 		},
 	}
@@ -1665,10 +1665,10 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 	for i := 0; i < genCount; i++ {
 		vID := fmt.Sprintf("ver-mixed-%d", i)
 		versionIDs[i] = vID
-		ver := &domain.BranchVersion{
+		ver := &core.BranchVersion{
 			ID:                 vID,
 			BranchID:           env.branchID,
-			Status:             domain.VersionStatusPending,
+			Status:             core.VersionStatusPending,
 			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
@@ -1683,10 +1683,10 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 	for i := 0; i < pdfCount; i++ {
 		pID := fmt.Sprintf("pdf-mixed-%d", i)
 		pdfJobIDs[i] = pID
-		pj := &domain.PDFParseJob{
+		pj := &core.PDFParseJob{
 			ID:        pID,
 			UserID:    tenantID,
-			Status:    domain.PDFParseJobStatusPending,
+			Status:    core.PDFParseJobStatusPending,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		}
@@ -1705,7 +1705,7 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to get version %s: %v", vID, err)
 			}
-			if ver.Status == domain.VersionStatusCompleted {
+			if ver.Status == core.VersionStatusCompleted {
 				break
 			}
 			if time.Now().After(deadline) {
@@ -1721,7 +1721,7 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to get pdf job %s: %v", pID, err)
 			}
-			if pj.Status == domain.PDFParseJobStatusCompleted {
+			if pj.Status == core.PDFParseJobStatusCompleted {
 				break
 			}
 			if time.Now().After(deadline) {
@@ -1749,10 +1749,10 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 	pdfRepo := memory.New()
 
 	llm := &callbackLLM{
-		fn: func(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+		fn: func(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
 			time.Sleep(120 * time.Millisecond)
-			return &domain.GenerationResponse{
-				TailoredContent: domain.TailoredContent{Summary: "Slow gen"},
+			return &core.GenerationResponse{
+				TailoredContent: core.TailoredContent{Summary: "Slow gen"},
 			}, nil
 		},
 	}
@@ -1791,10 +1791,10 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 	for i := 0; i < countA; i++ {
 		vID := fmt.Sprintf("ver-slow-gen-%d", i)
 		versionIDs[i] = vID
-		ver := &domain.BranchVersion{
+		ver := &core.BranchVersion{
 			ID:                 vID,
 			BranchID:           env.branchID,
-			Status:             domain.VersionStatusPending,
+			Status:             core.VersionStatusPending,
 			MainRevisionUsed: 1,
 			TemplateSetIDUsed:  renderer.TemplateStandardCleanID,
 		}
@@ -1810,10 +1810,10 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 
 	tenantB := "tenant-b-fast-pdf"
 	fastJobID := "pdf-fast-job-1"
-	pj := &domain.PDFParseJob{
+	pj := &core.PDFParseJob{
 		ID:        fastJobID,
 		UserID:    tenantB,
-		Status:    domain.PDFParseJobStatusPending,
+		Status:    core.PDFParseJobStatusPending,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -1830,7 +1830,7 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get fast job: %v", err)
 		}
-		if jobB.Status == domain.PDFParseJobStatusCompleted {
+		if jobB.Status == core.PDFParseJobStatusCompleted {
 			break
 		}
 		if time.Now().After(deadlineB) {
@@ -1845,7 +1845,7 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get version %s: %v", vID, err)
 		}
-		if ver.Status != domain.VersionStatusCompleted {
+		if ver.Status != core.VersionStatusCompleted {
 			remainingA++
 		}
 	}
@@ -1870,7 +1870,7 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 				Name: "Usage Candidate",
 			},
 		},
-		usage: domain.TokenUsage{
+		usage: core.TokenUsage{
 			PromptTokens:     100,
 			CompletionTokens: 250,
 			TotalTokens:      350,
@@ -1889,16 +1889,16 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 	defer pool.Stop()
 
 	// Reserve quota first
-	rec, err := store.ReserveQuota(ctx, "user-quota-worker", domain.OperationPDFParse, 1000, 50, 1000000)
+	rec, err := store.ReserveQuota(ctx, "user-quota-worker", core.OperationPDFParse, 1000, 50, 1000000)
 	if err != nil {
 		t.Fatalf("failed to reserve quota: %v", err)
 	}
 
 	jobID := "pdf-job-usage-1"
-	job := &domain.PDFParseJob{
+	job := &core.PDFParseJob{
 		ID:        jobID,
 		UserID:    "user-quota-worker",
-		Status:    domain.PDFParseJobStatusPending,
+		Status:    core.PDFParseJobStatusPending,
 		Filename:  "usage.pdf",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -1925,10 +1925,10 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get job failed: %v", err)
 		}
-		if j.Status == domain.PDFParseJobStatusCompleted {
+		if j.Status == core.PDFParseJobStatusCompleted {
 			break
 		}
-		if j.Status == domain.PDFParseJobStatusFailed {
+		if j.Status == core.PDFParseJobStatusFailed {
 			t.Fatalf("pdf job unexpectedly failed: %s", j.ErrorMessage)
 		}
 		if time.Now().After(deadline) {
@@ -1952,18 +1952,18 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 
 	t.Run("branch reasoning_level is passed to generation request", func(t *testing.T) {
 		env := setupTestWorkerEnv(t)
-		var capturedReq domain.GenerationRequest
+		var capturedReq core.GenerationRequest
 		reqReceived := make(chan struct{}, 1)
 
 		llm := &callbackLLM{
-			fn: func(_ context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+			fn: func(_ context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
 				capturedReq = req
 				select {
 				case reqReceived <- struct{}{}:
 				default:
 				}
-				return &domain.GenerationResponse{
-					TailoredContent: domain.TailoredContent{Summary: "Tailored"},
+				return &core.GenerationResponse{
+					TailoredContent: core.TailoredContent{Summary: "Tailored"},
 				}, nil
 			},
 		}
@@ -1981,7 +1981,7 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		pool.Start(ctx)
 		defer pool.Stop()
 
-		preset := &domain.Preset{
+		preset := &core.Preset{
 			ID:                 "preset-reasoning-test",
 			UserID:             env.defaultUser,
 			Name:               "Test Preset",
@@ -1993,7 +1993,7 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 
 		// Seed branch with reasoning_level "high"
 		presetID := preset.ID
-		branch := &domain.Branch{
+		branch := &core.Branch{
 			ID:                  "branch-reasoning-override",
 			UserID:              env.defaultUser,
 			Name:                "Tailored Branch",
@@ -2007,11 +2007,11 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		}
 
 		versionID := "ver-reasoning-override"
-		ver := &domain.BranchVersion{
+		ver := &core.BranchVersion{
 			ID:                versionID,
 			UserID:            env.defaultUser,
 			BranchID:          branch.ID,
-			Status:            domain.VersionStatusPending,
+			Status:            core.VersionStatusPending,
 			TemplateSetIDUsed: "builtin-standard-clean",
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
@@ -2039,18 +2039,18 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 
 	t.Run("branch reasoning_level is used directly and empty when unset on branch", func(t *testing.T) {
 		env := setupTestWorkerEnv(t)
-		var capturedReq domain.GenerationRequest
+		var capturedReq core.GenerationRequest
 		reqReceived := make(chan struct{}, 1)
 
 		llm := &callbackLLM{
-			fn: func(_ context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+			fn: func(_ context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
 				capturedReq = req
 				select {
 				case reqReceived <- struct{}{}:
 				default:
 				}
-				return &domain.GenerationResponse{
-					TailoredContent: domain.TailoredContent{Summary: "Tailored"},
+				return &core.GenerationResponse{
+					TailoredContent: core.TailoredContent{Summary: "Tailored"},
 				}, nil
 			},
 		}
@@ -2068,7 +2068,7 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		pool.Start(ctx)
 		defer pool.Stop()
 
-		preset := &domain.Preset{
+		preset := &core.Preset{
 			ID:                 "preset-reasoning-fallback",
 			UserID:             env.defaultUser,
 			Name:               "Fallback Preset",
@@ -2079,7 +2079,7 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		}
 
 		presetID := preset.ID
-		branch := &domain.Branch{
+		branch := &core.Branch{
 			ID:                  "branch-reasoning-fallback",
 			UserID:              env.defaultUser,
 			Name:                "Fallback Branch",
@@ -2093,11 +2093,11 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		}
 
 		versionID := "ver-reasoning-fallback"
-		ver := &domain.BranchVersion{
+		ver := &core.BranchVersion{
 			ID:                versionID,
 			UserID:            env.defaultUser,
 			BranchID:          branch.ID,
-			Status:            domain.VersionStatusPending,
+			Status:            core.VersionStatusPending,
 			TemplateSetIDUsed: "builtin-standard-clean",
 		}
 		if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {

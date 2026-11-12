@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
@@ -37,8 +37,8 @@ func NewServiceAdapter(registry *Registry) *ServiceAdapter {
 //
 // Returns:
 //   - GenerationResponse containing tailored content, citations, and gap report, or an error.
-func (a *ServiceAdapter) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
-	var profile *domain.Profile
+func (a *ServiceAdapter) GenerateTailoredResume(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
+	var profile *core.Profile
 	if req.MainProfile != nil {
 		profile = &req.MainProfile.Profile
 	}
@@ -64,9 +64,9 @@ func (a *ServiceAdapter) GenerateTailoredResume(ctx context.Context, req domain.
 //   - req: GenerationRequest containing main profile and job requirements.
 //
 // Returns:
-//   - Populated and normalized *domain.GapReport, or an error.
-func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error) {
-	var profile *domain.Profile
+//   - Populated and normalized *core.GapReport, or an error.
+func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+	var profile *core.Profile
 	if req.MainProfile != nil {
 		profile = &req.MainProfile.Profile
 	}
@@ -84,7 +84,7 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req domain.Gen
 			if cErr == nil {
 				cleaned := ExtractJSON(text)
 				var wrapper struct {
-					GapReport *domain.GapReport `json:"gap_report"`
+					GapReport *core.GapReport `json:"gap_report"`
 				}
 				if err := json.Unmarshal([]byte(cleaned), &wrapper); err == nil && wrapper.GapReport != nil {
 					session := privacy.NewSessionFromRequest(req)
@@ -92,7 +92,7 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req domain.Gen
 					wrapper.GapReport.Normalize()
 					return wrapper.GapReport, nil
 				}
-				var direct domain.GapReport
+				var direct core.GapReport
 				if err := json.Unmarshal([]byte(cleaned), &direct); err == nil && (direct.OverallMatchSummary != "" || len(direct.MissingRequirements) > 0 || len(direct.IdentifiedGaps) > 0) {
 					session := privacy.NewSessionFromRequest(req)
 					session.DeobfuscateGapReport(&direct)
@@ -117,7 +117,7 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req domain.Gen
 type atsExtractionLLMOutput struct {
 	ExtractionConfidenceScore float64                      `json:"extraction_confidence_score"`
 	ExtractionSummary         string                       `json:"extraction_summary"`
-	ExtractedCandidate        domain.ATSExtractedCandidate `json:"extracted_candidate"`
+	ExtractedCandidate        core.ATSExtractedCandidate `json:"extracted_candidate"`
 }
 
 type atsMatchingLLMOutput struct {
@@ -130,19 +130,19 @@ type atsMatchingLLMOutput struct {
 //     producing an Extraction Confidence Score from 0 to 1 (converted to 0..100%).
 //  2. Stage 2 evaluates only the extracted candidate profile from Stage 1 against the job description,
 //     producing a Job Matching Score from 0 to 1 (converted to 0..100%).
-func (a *ServiceAdapter) SimulateATS(ctx context.Context, req domain.ATSSimulationRequest) (*domain.ATSSimulationResponse, error) {
-	formatUsed, err := domain.NormalizeATSFormat(req.FormatUsed)
+func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+	formatUsed, err := core.NormalizeATSFormat(req.FormatUsed)
 	if err != nil {
 		return nil, err
 	}
 	req.FormatUsed = formatUsed
 
-	var profile *domain.Profile
+	var profile *core.Profile
 	if req.MainProfile != nil {
 		profile = &req.MainProfile.Profile
 	}
 
-	genReq := domain.GenerationRequest{
+	genReq := core.GenerationRequest{
 		Model:          req.Model,
 		ReasoningLevel: req.ReasoningLevel,
 		MainProfile:    req.MainProfile,
@@ -154,15 +154,15 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req domain.ATSSimulati
 		return nil, err
 	}
 
-	completeStep := func(systemPrompt, userPrompt string) (string, domain.TokenUsage, error) {
+	completeStep := func(systemPrompt, userPrompt string) (string, core.TokenUsage, error) {
 		if rawUsage, ok := provider.(RawUsageCompleter); ok {
 			return rawUsage.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
 		}
 		if raw, ok := provider.(RawCompleter); ok {
 			text, cErr := raw.CompleteText(ctx, systemPrompt, userPrompt, model)
-			return text, domain.TokenUsage{}, cErr
+			return text, core.TokenUsage{}, cErr
 		}
-		return "", domain.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion for ATS simulation", ErrInvalidResponse, provider.Name())
+		return "", core.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion for ATS simulation", ErrInvalidResponse, provider.Name())
 	}
 
 	// Stage 1: ATS Content Extraction & Extraction Confidence Score
@@ -210,9 +210,9 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req domain.ATSSimulati
 
 	now := time.Now().UTC()
 	candidateCopy := parsedExtract.ExtractedCandidate
-	atsScore := domain.ATSScore{
-		ExtractionConfidenceScore: domain.ConvertATSRatioToPercent(parsedExtract.ExtractionConfidenceScore),
-		JobMatchingScore:          domain.ConvertATSRatioToPercent(parsedMatch.JobMatchingScore),
+	atsScore := core.ATSScore{
+		ExtractionConfidenceScore: core.ConvertATSRatioToPercent(parsedExtract.ExtractionConfidenceScore),
+		JobMatchingScore:          core.ConvertATSRatioToPercent(parsedMatch.JobMatchingScore),
 		FormatUsed:                formatUsed,
 		ExtractionSummary:         strings.TrimSpace(parsedExtract.ExtractionSummary),
 		MatchingSummary:           strings.TrimSpace(parsedMatch.MatchingSummary),
@@ -225,13 +225,13 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req domain.ATSSimulati
 	}
 	atsScore.Normalize()
 
-	totalUsage := domain.TokenUsage{
+	totalUsage := core.TokenUsage{
 		PromptTokens:     usage1.PromptTokens + usage2.PromptTokens,
 		CompletionTokens: usage1.CompletionTokens + usage2.CompletionTokens,
 		TotalTokens:      usage1.TotalTokens + usage2.TotalTokens,
 	}
 
-	return &domain.ATSSimulationResponse{
+	return &core.ATSSimulationResponse{
 		Score: atsScore,
 		Usage: totalUsage,
 	}, nil

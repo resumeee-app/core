@@ -9,13 +9,13 @@ import (
 
 	"github.com/ledongthuc/pdf"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 type defaultPDFExtractor struct{}
 
 // NewExtractor constructs a pure-Go PDF text extractor based on ledongthuc/pdf.
-func NewExtractor() domain.PDFTextExtractor {
+func NewExtractor() core.PDFTextExtractor {
 	return &defaultPDFExtractor{}
 }
 
@@ -23,7 +23,7 @@ func NewExtractor() domain.PDFTextExtractor {
 // and enforces domain validation boundaries.
 func (e *defaultPDFExtractor) ExtractText(ctx context.Context, r io.ReaderAt, size int64) (string, error) {
 	if r == nil || size <= 0 {
-		return "", fmt.Errorf("%w: empty file payload", domain.ErrValidation)
+		return "", fmt.Errorf("%w: empty file payload", core.ErrValidation)
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -34,19 +34,19 @@ func (e *defaultPDFExtractor) ExtractText(ctx context.Context, r io.ReaderAt, si
 	header := make([]byte, 5)
 	n, err := r.ReadAt(header, 0)
 	if err != nil && err != io.EOF {
-		return "", fmt.Errorf("%w: unable to read file header: %v", domain.ErrValidation, err)
+		return "", fmt.Errorf("%w: unable to read file header: %v", core.ErrValidation, err)
 	}
 	if n < 4 || !bytes.HasPrefix(header[:n], []byte("%PDF")) {
-		return "", fmt.Errorf("%w: file header does not contain %%PDF-", domain.ErrValidation)
+		return "", fmt.Errorf("%w: file header does not contain %%PDF-", core.ErrValidation)
 	}
 
 	reader, err := pdf.NewReader(r, size)
 	if err != nil {
-		return "", fmt.Errorf("%w: invalid or corrupted PDF document: %v", domain.ErrValidation, err)
+		return "", fmt.Errorf("%w: invalid or corrupted PDF document: %v", core.ErrValidation, err)
 	}
 
 	if reader.NumPage() > 10 {
-		return "", fmt.Errorf("%w: PDF exceeds maximum page limit (10 pages)", domain.ErrValidation)
+		return "", fmt.Errorf("%w: PDF exceeds maximum page limit (10 pages)", core.ErrValidation)
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -55,14 +55,14 @@ func (e *defaultPDFExtractor) ExtractText(ctx context.Context, r io.ReaderAt, si
 
 	plainTextReader, err := reader.GetPlainText()
 	if err != nil {
-		return "", fmt.Errorf("%w: failed to read plain text from PDF: %v", domain.ErrValidation, err)
+		return "", fmt.Errorf("%w: failed to read plain text from PDF: %v", core.ErrValidation, err)
 	}
 
 	// Bound decompressed text to 1 MB to prevent decompression bombs and memory exhaustion
 	limitedReader := io.LimitReader(plainTextReader, 1<<20)
 	rawBytes, err := io.ReadAll(limitedReader)
 	if err != nil {
-		return "", fmt.Errorf("%w: failed to read plain text stream: %v", domain.ErrValidation, err)
+		return "", fmt.Errorf("%w: failed to read plain text stream: %v", core.ErrValidation, err)
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -71,7 +71,7 @@ func (e *defaultPDFExtractor) ExtractText(ctx context.Context, r io.ReaderAt, si
 
 	text := strings.TrimSpace(string(rawBytes))
 	if text == "" {
-		return "", fmt.Errorf("%w: PDF contains no extractable text", domain.ErrValidation)
+		return "", fmt.Errorf("%w: PDF contains no extractable text", core.ErrValidation)
 	}
 
 	return text, nil

@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 const defaultGeminiBaseURL = "https://generativelanguage.googleapis.com"
 
-// GeminiProvider implements domain.LLMClient for Google Gemini models.
+// GeminiProvider implements core.LLMClient for Google Gemini models.
 type GeminiProvider struct {
 	apiKey       string
 	baseURL      string
@@ -46,9 +46,9 @@ func (p *GeminiProvider) DefaultModel() string {
 }
 
 // Models returns the default model option for Google Gemini.
-func (p *GeminiProvider) Models() []domain.ModelOption {
+func (p *GeminiProvider) Models() []core.ModelOption {
 	def := p.DefaultModel()
-	return []domain.ModelOption{
+	return []core.ModelOption{
 		{
 			Provider:    ProviderGemini,
 			Model:       def,
@@ -59,7 +59,7 @@ func (p *GeminiProvider) Models() []domain.ModelOption {
 }
 
 // Complete executes a completion request against the Google Gemini Generative Language API.
-func (p *GeminiProvider) Complete(ctx context.Context, req domain.LLMCompletionRequest) (*domain.LLMCompletionResponse, error) {
+func (p *GeminiProvider) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
 		model = p.DefaultModel()
@@ -128,7 +128,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req domain.LLMCompletionR
 
 	rawBody := string(bodyBytes)
 	if resp.StatusCode != http.StatusOK {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, parseGeminiError(resp.StatusCode, bodyBytes)
@@ -151,20 +151,20 @@ func (p *GeminiProvider) Complete(ctx context.Context, req domain.LLMCompletionR
 
 	var geminiResp geminiResponse
 	if err := json.Unmarshal(bodyBytes, &geminiResp); err != nil {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, fmt.Errorf("%w: malformed gemini response: %v", ErrInvalidResponse, err)
 	}
 
 	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, fmt.Errorf("%w: no candidates returned by gemini", ErrInvalidResponse)
 	}
 
-	usage := domain.TokenUsage{
+	usage := core.TokenUsage{
 		PromptTokens:     geminiResp.UsageMetadata.PromptTokenCount,
 		CompletionTokens: geminiResp.UsageMetadata.CandidatesTokenCount,
 		TotalTokens:      geminiResp.UsageMetadata.TotalTokenCount,
@@ -173,7 +173,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req domain.LLMCompletionR
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 
-	return &domain.LLMCompletionResponse{
+	return &core.LLMCompletionResponse{
 		Text:       strings.TrimSpace(geminiResp.Candidates[0].Content.Parts[0].Text),
 		RawBody:    rawBody,
 		StatusCode: resp.StatusCode,

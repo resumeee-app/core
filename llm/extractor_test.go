@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 )
 
@@ -105,7 +105,7 @@ func TestResumeExtractor_Table(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected validation error for empty text, got nil")
 		}
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation, got: %v", err)
 		}
 	})
@@ -120,7 +120,7 @@ func TestResumeExtractor_Table(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected validation error for malformed JSON, got nil")
 		}
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation, got: %v", err)
 		}
 	})
@@ -135,7 +135,7 @@ func TestResumeExtractor_Table(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for empty LLM response, got nil")
 		}
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation, got: %v", err)
 		}
 	})
@@ -190,14 +190,14 @@ func TestResumeExtractor_Table(t *testing.T) {
 
 type stubUsageCompleter struct {
 	response string
-	usage    domain.TokenUsage
+	usage    core.TokenUsage
 }
 
 func (s *stubUsageCompleter) Complete(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, error) {
 	return s.response, nil
 }
 
-func (s *stubUsageCompleter) CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, domain.TokenUsage, error) {
+func (s *stubUsageCompleter) CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, core.TokenUsage, error) {
 	return s.response, s.usage, nil
 }
 
@@ -207,7 +207,7 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 	t.Run("UsageCompleter propagates actual token usage", func(t *testing.T) {
 		completer := &stubUsageCompleter{
 			response: minimalJSON,
-			usage: domain.TokenUsage{
+			usage: core.TokenUsage{
 				PromptTokens:     150,
 				CompletionTokens: 250,
 				TotalTokens:      400,

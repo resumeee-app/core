@@ -1,4 +1,4 @@
-package domain_test
+package core_test
 
 import (
 	"go/parser"
@@ -11,7 +11,6 @@ import (
 
 // allowedCorePackages lists the relative subpackages permitted within the resumeee-core package set.
 var allowedCoreSubpackages = []string{
-	"domain",
 	"validator",
 	"privacy",
 	"branch",
@@ -50,10 +49,10 @@ func TestCorePackageSet_ImportBoundaries(t *testing.T) {
 				coreDirs = append(coreDirs, dir)
 			}
 		}
-	} else if _, err := os.Stat(filepath.Join(repoRoot, "domain")); err == nil {
-		// Extracted core repo layout: domain, validator, privacy, services/branch, services/profile, services/renderer
+	} else if _, err := os.Stat(filepath.Join(repoRoot, "core.go")); err == nil {
+		// Extracted core repo layout: root (.), validator, privacy, services/branch, services/profile, services/renderer
 		extractedSubdirs := []string{
-			"domain",
+			".",
 			"validator",
 			"privacy",
 			filepath.Join("services", "branch"),

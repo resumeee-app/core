@@ -12,7 +12,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 var dateParseLayouts = []string{
@@ -36,12 +36,12 @@ func extractDateString(val any) (string, bool) {
 		return "", false
 	}
 	switch v := val.(type) {
-	case domain.Date:
+	case core.Date:
 		if v.IsZero() {
 			return "", false
 		}
 		return v.String(), true
-	case *domain.Date:
+	case *core.Date:
 		if v == nil || v.IsZero() {
 			return "", false
 		}
@@ -125,7 +125,7 @@ func formatDate(layout string, dateVal any) string {
 }
 
 // formatDateRange formats a start and end date interval with an optional present label.
-// It accepts any supported date types (domain.Date, *domain.Date, time.Time, *time.Time, string).
+// It accepts any supported date types (core.Date, *core.Date, time.Time, *time.Time, string).
 func formatDateRange(start any, end any, presentLabel string) string {
 	if strings.TrimSpace(presentLabel) == "" {
 		presentLabel = "Present"

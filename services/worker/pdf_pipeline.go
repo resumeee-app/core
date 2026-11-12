@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 )
 
@@ -34,7 +34,7 @@ func (p *Pool) processPDFJob(ctx context.Context, task PDFParseJobTask) {
 	}
 
 	// 1. Transition job status to processing
-	if err := p.pdfJobRepo.UpdateJobStatus(ctx, task.JobID, domain.PDFParseJobStatusProcessing, nil, ""); err != nil {
+	if err := p.pdfJobRepo.UpdateJobStatus(ctx, task.JobID, core.PDFParseJobStatusProcessing, nil, ""); err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to update pdf job status to processing", "job_id", task.JobID, "err", err)
 		}
@@ -62,7 +62,7 @@ func (p *Pool) processPDFJob(ctx context.Context, task PDFParseJobTask) {
 		userErrMsg := "Failed to extract resume from document. Please ensure the PDF contains valid text."
 		if errors.Is(err, context.DeadlineExceeded) {
 			userErrMsg = "Resume extraction timed out after 10 minutes. Please try again with a shorter document."
-		} else if errors.Is(err, domain.ErrValidation) {
+		} else if errors.Is(err, core.ErrValidation) {
 			userErrMsg = "Document validation failed during extraction: " + err.Error()
 		}
 		if p.quotaRepo != nil && task.ReservationID != "" {
@@ -77,7 +77,7 @@ func (p *Pool) processPDFJob(ctx context.Context, task PDFParseJobTask) {
 	}
 
 	// 3. Mark job completed with candidate JSONResume result
-	if err := p.pdfJobRepo.UpdateJobStatus(ctx, task.JobID, domain.PDFParseJobStatusCompleted, extracted, ""); err != nil {
+	if err := p.pdfJobRepo.UpdateJobStatus(ctx, task.JobID, core.PDFParseJobStatusCompleted, extracted, ""); err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to update pdf job status to completed", "job_id", task.JobID, "err", err)
 		}
@@ -92,7 +92,7 @@ func (p *Pool) failPDFJob(ctx context.Context, jobID, reason string) {
 	}
 	failCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := p.pdfJobRepo.UpdateJobStatus(failCtx, jobID, domain.PDFParseJobStatusFailed, nil, reason); err != nil {
+	if err := p.pdfJobRepo.UpdateJobStatus(failCtx, jobID, core.PDFParseJobStatusFailed, nil, reason); err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to record pdf job failure", "job_id", jobID, "err", err)
 		}

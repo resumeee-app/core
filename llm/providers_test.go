@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 var sampleTestSchema = map[string]any{
@@ -56,7 +56,7 @@ func TestGeminiProvider_Complete_StructuredAndText(t *testing.T) {
 			t.Errorf("expected single default model %q, got %+v", defaultGeminiModel, prov.Models())
 		}
 
-		resp, err := prov.Complete(context.Background(), domain.LLMCompletionRequest{
+		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
 			Model:          "gemini-3.8-pro",
 			SystemPrompt:   "sys",
 			UserPrompt:     "user",
@@ -92,7 +92,7 @@ func TestGeminiProvider_Complete_StructuredAndText(t *testing.T) {
 		if len(prov.Models()) != 1 || prov.Models()[0].Model != "gemini-custom" {
 			t.Errorf("expected single custom default model 'gemini-custom', got %+v", prov.Models())
 		}
-		resp, err := prov.Complete(context.Background(), domain.LLMCompletionRequest{
+		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
 			SystemPrompt: "sys",
 			UserPrompt:   "user",
 		})
@@ -131,7 +131,7 @@ func TestGeminiProvider_Complete_StructuredAndText(t *testing.T) {
 				defer srv.Close()
 
 				prov := NewGeminiProvider("key", WithBaseURL(srv.URL))
-				resp, err := prov.Complete(context.Background(), domain.LLMCompletionRequest{
+				resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
 					SystemPrompt: "sys",
 					UserPrompt:   "usr",
 				})
@@ -174,7 +174,7 @@ func TestOpenAIProvider_Complete_StructuredAndText(t *testing.T) {
 			t.Errorf("expected single default model %q, got %+v", defaultOpenAIModel, prov.Models())
 		}
 
-		resp, err := prov.Complete(context.Background(), domain.LLMCompletionRequest{
+		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
 			SystemPrompt:   "sys",
 			UserPrompt:     "user",
 			ResponseSchema: sampleTestSchema,
@@ -198,7 +198,7 @@ func TestOpenAIProvider_Complete_StructuredAndText(t *testing.T) {
 		defer srv.Close()
 
 		prov := NewOpenAIProvider("key", WithBaseURL(srv.URL))
-		_, err := prov.Complete(context.Background(), domain.LLMCompletionRequest{UserPrompt: "hi"})
+		_, err := prov.Complete(context.Background(), core.LLMCompletionRequest{UserPrompt: "hi"})
 		if !errors.Is(err, ErrInvalidResponse) {
 			t.Errorf("expected ErrInvalidResponse, got %v", err)
 		}
@@ -230,7 +230,7 @@ func TestAnthropicProvider_Complete_StructuredAndText(t *testing.T) {
 			t.Errorf("expected single default model %q, got %+v", defaultAnthropicModel, prov.Models())
 		}
 
-		resp, err := prov.Complete(context.Background(), domain.LLMCompletionRequest{
+		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
 			SystemPrompt:   "sys",
 			UserPrompt:     "user",
 			ResponseSchema: sampleTestSchema,
@@ -257,7 +257,7 @@ func TestAnthropicProvider_Complete_StructuredAndText(t *testing.T) {
 		defer srv.Close()
 
 		prov := NewAnthropicProvider("test-anthropic-key", WithBaseURL(srv.URL))
-		resp, err := prov.Complete(context.Background(), domain.LLMCompletionRequest{
+		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
 			SystemPrompt: "sys",
 			UserPrompt:   "user",
 		})
@@ -277,7 +277,7 @@ func TestAnthropicProvider_Complete_StructuredAndText(t *testing.T) {
 		defer srv.Close()
 
 		prov := NewAnthropicProvider("key", WithBaseURL(srv.URL))
-		_, err := prov.Complete(context.Background(), domain.LLMCompletionRequest{
+		_, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
 			UserPrompt:     "user",
 			ResponseSchema: sampleTestSchema,
 		})
@@ -318,7 +318,7 @@ func TestCompatProvider_Complete_StructuredAndText(t *testing.T) {
 		t.Errorf("unexpected compat models: %+v", prov.Models())
 	}
 
-	resp, err := prov.Complete(context.Background(), domain.LLMCompletionRequest{
+	resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
 		SystemPrompt:   "sys",
 		UserPrompt:     "user",
 		ResponseSchema: sampleTestSchema,
@@ -354,7 +354,7 @@ func TestRegisterClients_DefaultModelPerProvider(t *testing.T) {
 		}
 	}
 
-	defProv, _, err := reg.Resolve(domain.GenerationRequest{}, nil, nil)
+	defProv, _, err := reg.Resolve(core.GenerationRequest{}, nil, nil)
 	if err != nil || defProv.Name() != ProviderOpenAI {
 		t.Errorf("expected default provider %q, got %v (err=%v)", ProviderOpenAI, defProv, err)
 	}

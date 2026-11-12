@@ -3,16 +3,16 @@ package worker
 import (
 	"context"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/services/profile"
 	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 // GenerationJob encapsulates the parameters of an asynchronous resume generation task.
-type GenerationJob = domain.GenerationJob
+type GenerationJob = core.GenerationJob
 
 // JobEnqueuer defines the contract for enqueuing generation jobs into the worker pool.
-type JobEnqueuer = domain.JobEnqueuer
+type JobEnqueuer = core.JobEnqueuer
 
 // PDFParseJobTask encapsulates the parameters of an asynchronous PDF resume parsing task.
 type PDFParseJobTask struct {
@@ -35,14 +35,14 @@ type ResumeExtractor interface {
 }
 
 // LLMService abstracts multi-provider prompt generation and structured response.
-type LLMService = domain.LLMService
+type LLMService = core.LLMService
 
 // ProvenanceValidator audits tailored content against career snapshots and exclusion lists.
 type ProvenanceValidator interface {
-	Validate(content *domain.TailoredContent, snapshot *domain.MainProfileSnapshot, branch *domain.Branch) (*validator.ValidationResult, error)
+	Validate(content *core.TailoredContent, snapshot *core.MainProfileSnapshot, branch *core.Branch) (*validator.ValidationResult, error)
 }
 
 // TemplateRenderer executes multi-format Go templates.
 type TemplateRenderer interface {
-	Render(ctx context.Context, tmpl *domain.TemplateSet, profile *domain.Profile, content *domain.TailoredContent) (*domain.RenderOutput, error)
+	Render(ctx context.Context, tmpl *core.TemplateSet, profile *core.Profile, content *core.TailoredContent) (*core.RenderOutput, error)
 }

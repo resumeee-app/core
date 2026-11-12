@@ -9,39 +9,39 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/privacy"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 )
 
 type fakeBranchStore struct {
 	mu           sync.Mutex
-	profiles     map[string]*domain.Profile
-	experiences  map[string]*domain.WorkExperience
-	skills       map[string]*domain.Skill
-	facts        map[string]*domain.Fact
-	branches     map[string]*domain.Branch
-	versions     map[string]*domain.BranchVersion
-	presets      map[string]*domain.Preset
-	templates    map[string]*domain.TemplateSet
-	usageRecords map[string]*domain.LLMUsageRecord
+	profiles     map[string]*core.Profile
+	experiences  map[string]*core.WorkExperience
+	skills       map[string]*core.Skill
+	facts        map[string]*core.Fact
+	branches     map[string]*core.Branch
+	versions     map[string]*core.BranchVersion
+	presets      map[string]*core.Preset
+	templates    map[string]*core.TemplateSet
+	usageRecords map[string]*core.LLMUsageRecord
 }
 
 func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchStore {
 	s := &fakeBranchStore{
-		profiles:     make(map[string]*domain.Profile),
-		experiences:  make(map[string]*domain.WorkExperience),
-		skills:       make(map[string]*domain.Skill),
-		facts:        make(map[string]*domain.Fact),
-		branches:     make(map[string]*domain.Branch),
-		versions:     make(map[string]*domain.BranchVersion),
-		presets:      make(map[string]*domain.Preset),
-		templates:    make(map[string]*domain.TemplateSet),
-		usageRecords: make(map[string]*domain.LLMUsageRecord),
+		profiles:     make(map[string]*core.Profile),
+		experiences:  make(map[string]*core.WorkExperience),
+		skills:       make(map[string]*core.Skill),
+		facts:        make(map[string]*core.Fact),
+		branches:     make(map[string]*core.Branch),
+		versions:     make(map[string]*core.BranchVersion),
+		presets:      make(map[string]*core.Preset),
+		templates:    make(map[string]*core.TemplateSet),
+		usageRecords: make(map[string]*core.LLMUsageRecord),
 	}
 
 	// 1. Seed Profile
-	s.profiles[defaultUserID] = &domain.Profile{
+	s.profiles[defaultUserID] = &core.Profile{
 		UserID:       defaultUserID,
 		FullName:     "Default User",
 		MainRevision: 1,
@@ -54,7 +54,7 @@ func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchSt
 	}
 
 	// 3. Seed Default Preset
-	s.presets["preset-1"] = &domain.Preset{
+	s.presets["preset-1"] = &core.Preset{
 		ID:                 "preset-1",
 		UserID:             defaultUserID,
 		Name:               "Default Technical",
@@ -62,11 +62,11 @@ func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchSt
 	}
 
 	// 4. Seed Default Branch
-	defaultBranchID := domain.DefaultBranchID(defaultUserID)
-	defaultBranch := domain.Branch{
+	defaultBranchID := core.DefaultBranchID(defaultUserID)
+	defaultBranch := core.Branch{
 		ID:                     defaultBranchID,
 		UserID:                 defaultUserID,
-		Name:                   domain.DefaultBranchName,
+		Name:                   core.DefaultBranchName,
 		IsDefault:              true,
 		TemplateSetID:          renderer.TemplateStandardCleanID,
 		LastSyncedMainRevision: 1,
@@ -80,13 +80,13 @@ func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchSt
 
 // --- BranchRepository ---
 
-func (s *fakeBranchStore) CreateBranch(_ context.Context, branch *domain.Branch) error {
+func (s *fakeBranchStore) CreateBranch(_ context.Context, branch *core.Branch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, existing := range s.branches {
 		if existing.UserID == branch.UserID && existing.Name == branch.Name {
-			return fmt.Errorf("%w: branch with name %q already exists", domain.ErrConflict, branch.Name)
+			return fmt.Errorf("%w: branch with name %q already exists", core.ErrConflict, branch.Name)
 		}
 	}
 
@@ -98,13 +98,13 @@ func (s *fakeBranchStore) CreateBranch(_ context.Context, branch *domain.Branch)
 	return nil
 }
 
-func (s *fakeBranchStore) GetBranch(_ context.Context, userID, id string) (*domain.Branch, error) {
+func (s *fakeBranchStore) GetBranch(_ context.Context, userID, id string) (*core.Branch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	b, ok := s.branches[id]
 	if !ok || (userID != "" && b.UserID != userID) {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	cp := *b
 	var mainRev int64 = 1
@@ -115,7 +115,7 @@ func (s *fakeBranchStore) GetBranch(_ context.Context, userID, id string) (*doma
 	return &cp, nil
 }
 
-func (s *fakeBranchStore) ListBranches(_ context.Context, userID string) ([]domain.Branch, error) {
+func (s *fakeBranchStore) ListBranches(_ context.Context, userID string) ([]core.Branch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -124,7 +124,7 @@ func (s *fakeBranchStore) ListBranches(_ context.Context, userID string) ([]doma
 		mainRev = p.MainRevision
 	}
 
-	var res []domain.Branch
+	var res []core.Branch
 	for _, b := range s.branches {
 		if b.UserID == userID {
 			cp := *b
@@ -135,13 +135,13 @@ func (s *fakeBranchStore) ListBranches(_ context.Context, userID string) ([]doma
 	return res, nil
 }
 
-func (s *fakeBranchStore) UpdateBranch(_ context.Context, branch *domain.Branch) error {
+func (s *fakeBranchStore) UpdateBranch(_ context.Context, branch *core.Branch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, existing := range s.branches {
 		if existing.UserID == branch.UserID && existing.Name == branch.Name && existing.ID != branch.ID {
-			return fmt.Errorf("%w: branch with name %q already exists", domain.ErrConflict, branch.Name)
+			return fmt.Errorf("%w: branch with name %q already exists", core.ErrConflict, branch.Name)
 		}
 	}
 
@@ -156,7 +156,7 @@ func (s *fakeBranchStore) DeleteBranch(_ context.Context, userID, id string) err
 
 	b, ok := s.branches[id]
 	if !ok || b.UserID != userID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	delete(s.branches, id)
 	for vid, v := range s.versions {
@@ -167,7 +167,7 @@ func (s *fakeBranchStore) DeleteBranch(_ context.Context, userID, id string) err
 	return nil
 }
 
-func (s *fakeBranchStore) CreateVersion(_ context.Context, version *domain.BranchVersion) error {
+func (s *fakeBranchStore) CreateVersion(_ context.Context, version *core.BranchVersion) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -196,19 +196,19 @@ func (s *fakeBranchStore) CreateVersion(_ context.Context, version *domain.Branc
 	return nil
 }
 
-func (s *fakeBranchStore) GetVersion(_ context.Context, branchID, versionID string) (*domain.BranchVersion, error) {
+func (s *fakeBranchStore) GetVersion(_ context.Context, branchID, versionID string) (*core.BranchVersion, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	v, ok := s.versions[versionID]
 	if !ok || (branchID != "" && v.BranchID != branchID) {
-		return nil, fmt.Errorf("%w: version %s", domain.ErrNotFound, versionID)
+		return nil, fmt.Errorf("%w: version %s", core.ErrNotFound, versionID)
 	}
 	cp := *v
 	return &cp, nil
 }
 
-func (s *fakeBranchStore) GetVersionByNumber(_ context.Context, branchID string, versionNumber int) (*domain.BranchVersion, error) {
+func (s *fakeBranchStore) GetVersionByNumber(_ context.Context, branchID string, versionNumber int) (*core.BranchVersion, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -218,10 +218,10 @@ func (s *fakeBranchStore) GetVersionByNumber(_ context.Context, branchID string,
 			return &cp, nil
 		}
 	}
-	return nil, domain.ErrNotFound
+	return nil, core.ErrNotFound
 }
 
-func (s *fakeBranchStore) GetVersionsByIDs(_ context.Context, versionIDs []string) ([]domain.BranchVersion, error) {
+func (s *fakeBranchStore) GetVersionsByIDs(_ context.Context, versionIDs []string) ([]core.BranchVersion, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -230,7 +230,7 @@ func (s *fakeBranchStore) GetVersionsByIDs(_ context.Context, versionIDs []strin
 		idMap[id] = true
 	}
 
-	var res []domain.BranchVersion
+	var res []core.BranchVersion
 	for _, v := range s.versions {
 		if idMap[v.ID] {
 			res = append(res, *v)
@@ -239,11 +239,11 @@ func (s *fakeBranchStore) GetVersionsByIDs(_ context.Context, versionIDs []strin
 	return res, nil
 }
 
-func (s *fakeBranchStore) ListVersions(_ context.Context, branchID string) ([]domain.BranchVersion, error) {
+func (s *fakeBranchStore) ListVersions(_ context.Context, branchID string) ([]core.BranchVersion, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var res []domain.BranchVersion
+	var res []core.BranchVersion
 	for _, v := range s.versions {
 		if v.BranchID == branchID {
 			res = append(res, *v)
@@ -255,20 +255,20 @@ func (s *fakeBranchStore) ListVersions(_ context.Context, branchID string) ([]do
 	return res, nil
 }
 
-func (s *fakeBranchStore) UpdateVersionStatus(_ context.Context, versionID string, status domain.VersionStatus, errMsg string) error {
+func (s *fakeBranchStore) UpdateVersionStatus(_ context.Context, versionID string, status core.VersionStatus, errMsg string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	v, ok := s.versions[versionID]
 	if !ok {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	v.Status = status
 	v.ErrorMessage = errMsg
 	return nil
 }
 
-func (s *fakeBranchStore) CompleteVersion(_ context.Context, version *domain.BranchVersion) error {
+func (s *fakeBranchStore) CompleteVersion(_ context.Context, version *core.BranchVersion) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -278,7 +278,7 @@ func (s *fakeBranchStore) CompleteVersion(_ context.Context, version *domain.Bra
 	}
 	version.BranchID = parentID
 	version.ResumeID = parentID
-	version.Status = domain.VersionStatusCompleted
+	version.Status = core.VersionStatusCompleted
 	now := time.Now().UTC()
 	version.CompletedAt = &now
 	cp := *version
@@ -304,13 +304,13 @@ func (s *fakeBranchStore) CompleteVersion(_ context.Context, version *domain.Bra
 	return nil
 }
 
-func (s *fakeBranchStore) UpdateVersionATSScore(_ context.Context, versionID string, atsScore *domain.ATSScore) error {
+func (s *fakeBranchStore) UpdateVersionATSScore(_ context.Context, versionID string, atsScore *core.ATSScore) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	v, ok := s.versions[versionID]
 	if !ok {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	v.ATSScore = atsScore
 
@@ -328,8 +328,8 @@ func (s *fakeBranchStore) FailInterruptedVersions(_ context.Context, reason stri
 	defer s.mu.Unlock()
 
 	for _, v := range s.versions {
-		if v.Status == domain.VersionStatusPending || v.Status == domain.VersionStatusProcessing {
-			v.Status = domain.VersionStatusFailed
+		if v.Status == core.VersionStatusPending || v.Status == core.VersionStatusProcessing {
+			v.Status = core.VersionStatusFailed
 			v.ErrorMessage = reason
 		}
 	}
@@ -338,19 +338,19 @@ func (s *fakeBranchStore) FailInterruptedVersions(_ context.Context, reason stri
 
 // --- ProfileRepository ---
 
-func (s *fakeBranchStore) GetProfile(_ context.Context, userID string) (*domain.Profile, error) {
+func (s *fakeBranchStore) GetProfile(_ context.Context, userID string) (*core.Profile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	p, ok := s.profiles[userID]
 	if !ok {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	cp := *p
 	return &cp, nil
 }
 
-func (s *fakeBranchStore) UpsertProfile(_ context.Context, profile *domain.Profile) error {
+func (s *fakeBranchStore) UpsertProfile(_ context.Context, profile *core.Profile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -370,26 +370,26 @@ func (s *fakeBranchStore) IncrementMainRevision(_ context.Context, userID string
 
 	p, ok := s.profiles[userID]
 	if !ok {
-		return 0, domain.ErrNotFound
+		return 0, core.ErrNotFound
 	}
 	p.MainRevision++
 	return p.MainRevision, nil
 }
 
-func (s *fakeBranchStore) GetSnapshot(_ context.Context, userID string) (*domain.MainProfileSnapshot, error) {
+func (s *fakeBranchStore) GetSnapshot(_ context.Context, userID string) (*core.MainProfileSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	prof, ok := s.profiles[userID]
 	if !ok {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 
-	var exps []domain.WorkExperience
+	var exps []core.WorkExperience
 	for _, e := range s.experiences {
 		if e.UserID == userID {
 			cp := *e
-			var expFacts []domain.Fact
+			var expFacts []core.Fact
 			for _, f := range s.facts {
 				if f.UserID == userID && f.OwnerID == e.ID {
 					expFacts = append(expFacts, *f)
@@ -400,21 +400,21 @@ func (s *fakeBranchStore) GetSnapshot(_ context.Context, userID string) (*domain
 		}
 	}
 
-	var skills []domain.Skill
+	var skills []core.Skill
 	for _, sk := range s.skills {
 		if sk.UserID == userID {
 			skills = append(skills, *sk)
 		}
 	}
 
-	var facts []domain.Fact
+	var facts []core.Fact
 	for _, f := range s.facts {
 		if f.UserID == userID {
 			facts = append(facts, *f)
 		}
 	}
 
-	return &domain.MainProfileSnapshot{
+	return &core.MainProfileSnapshot{
 		Profile:      *prof,
 		MainRevision: prof.MainRevision,
 		Experiences:  exps,
@@ -424,11 +424,11 @@ func (s *fakeBranchStore) GetSnapshot(_ context.Context, userID string) (*domain
 	}, nil
 }
 
-func (s *fakeBranchStore) ReplaceCareerGraph(_ context.Context, _ string, _ *domain.MainProfileSnapshot) error {
+func (s *fakeBranchStore) ReplaceCareerGraph(_ context.Context, _ string, _ *core.MainProfileSnapshot) error {
 	return nil
 }
 
-func (s *fakeBranchStore) CreateExperience(_ context.Context, exp *domain.WorkExperience) error {
+func (s *fakeBranchStore) CreateExperience(_ context.Context, exp *core.WorkExperience) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -440,19 +440,19 @@ func (s *fakeBranchStore) CreateExperience(_ context.Context, exp *domain.WorkEx
 	return nil
 }
 
-func (s *fakeBranchStore) GetExperience(_ context.Context, _, id string) (*domain.WorkExperience, error) {
+func (s *fakeBranchStore) GetExperience(_ context.Context, _, id string) (*core.WorkExperience, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	e, ok := s.experiences[id]
 	if !ok {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	cp := *e
 	return &cp, nil
 }
 
-func (s *fakeBranchStore) UpdateExperience(_ context.Context, exp *domain.WorkExperience) error {
+func (s *fakeBranchStore) UpdateExperience(_ context.Context, exp *core.WorkExperience) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -469,11 +469,11 @@ func (s *fakeBranchStore) DeleteExperience(_ context.Context, _, id string) erro
 	return nil
 }
 
-func (s *fakeBranchStore) ListExperiences(_ context.Context, userID string) ([]domain.WorkExperience, error) {
+func (s *fakeBranchStore) ListExperiences(_ context.Context, userID string) ([]core.WorkExperience, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var res []domain.WorkExperience
+	var res []core.WorkExperience
 	for _, e := range s.experiences {
 		if e.UserID == userID {
 			res = append(res, *e)
@@ -482,7 +482,7 @@ func (s *fakeBranchStore) ListExperiences(_ context.Context, userID string) ([]d
 	return res, nil
 }
 
-func (s *fakeBranchStore) CreateSkill(_ context.Context, skill *domain.Skill) error {
+func (s *fakeBranchStore) CreateSkill(_ context.Context, skill *core.Skill) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -494,19 +494,19 @@ func (s *fakeBranchStore) CreateSkill(_ context.Context, skill *domain.Skill) er
 	return nil
 }
 
-func (s *fakeBranchStore) GetSkill(_ context.Context, _, id string) (*domain.Skill, error) {
+func (s *fakeBranchStore) GetSkill(_ context.Context, _, id string) (*core.Skill, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	sk, ok := s.skills[id]
 	if !ok {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	cp := *sk
 	return &cp, nil
 }
 
-func (s *fakeBranchStore) UpdateSkill(_ context.Context, skill *domain.Skill) error {
+func (s *fakeBranchStore) UpdateSkill(_ context.Context, skill *core.Skill) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -523,11 +523,11 @@ func (s *fakeBranchStore) DeleteSkill(_ context.Context, _, id string) error {
 	return nil
 }
 
-func (s *fakeBranchStore) ListSkills(_ context.Context, userID string) ([]domain.Skill, error) {
+func (s *fakeBranchStore) ListSkills(_ context.Context, userID string) ([]core.Skill, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var res []domain.Skill
+	var res []core.Skill
 	for _, sk := range s.skills {
 		if sk.UserID == userID {
 			res = append(res, *sk)
@@ -536,11 +536,11 @@ func (s *fakeBranchStore) ListSkills(_ context.Context, userID string) ([]domain
 	return res, nil
 }
 
-func (s *fakeBranchStore) ListGlobalSkills(_ context.Context) ([]domain.Skill, error) {
+func (s *fakeBranchStore) ListGlobalSkills(_ context.Context) ([]core.Skill, error) {
 	return nil, nil
 }
 
-func (s *fakeBranchStore) CreateFact(_ context.Context, fact *domain.Fact) error {
+func (s *fakeBranchStore) CreateFact(_ context.Context, fact *core.Fact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -552,19 +552,19 @@ func (s *fakeBranchStore) CreateFact(_ context.Context, fact *domain.Fact) error
 	return nil
 }
 
-func (s *fakeBranchStore) GetFact(_ context.Context, _, id string) (*domain.Fact, error) {
+func (s *fakeBranchStore) GetFact(_ context.Context, _, id string) (*core.Fact, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	f, ok := s.facts[id]
 	if !ok {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	cp := *f
 	return &cp, nil
 }
 
-func (s *fakeBranchStore) UpdateFact(_ context.Context, fact *domain.Fact) error {
+func (s *fakeBranchStore) UpdateFact(_ context.Context, fact *core.Fact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -581,11 +581,11 @@ func (s *fakeBranchStore) DeleteFact(_ context.Context, _, id string) error {
 	return nil
 }
 
-func (s *fakeBranchStore) ListFactsByOwner(_ context.Context, userID, ownerType, ownerID string) ([]domain.Fact, error) {
+func (s *fakeBranchStore) ListFactsByOwner(_ context.Context, userID, ownerType, ownerID string) ([]core.Fact, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var res []domain.Fact
+	var res []core.Fact
 	for _, f := range s.facts {
 		if f.UserID == userID && string(f.OwnerType) == ownerType && f.OwnerID == ownerID {
 			res = append(res, *f)
@@ -594,55 +594,55 @@ func (s *fakeBranchStore) ListFactsByOwner(_ context.Context, userID, ownerType,
 	return res, nil
 }
 
-func (s *fakeBranchStore) ListProjects(_ context.Context, _ string) ([]domain.Project, error) {
+func (s *fakeBranchStore) ListProjects(_ context.Context, _ string) ([]core.Project, error) {
 	return nil, nil
 }
-func (s *fakeBranchStore) GetProject(_ context.Context, _, _ string) (*domain.Project, error) {
-	return nil, domain.ErrNotFound
+func (s *fakeBranchStore) GetProject(_ context.Context, _, _ string) (*core.Project, error) {
+	return nil, core.ErrNotFound
 }
-func (s *fakeBranchStore) CreateProject(_ context.Context, _ *domain.Project) error { return nil }
-func (s *fakeBranchStore) UpdateProject(_ context.Context, _ *domain.Project) error { return nil }
+func (s *fakeBranchStore) CreateProject(_ context.Context, _ *core.Project) error { return nil }
+func (s *fakeBranchStore) UpdateProject(_ context.Context, _ *core.Project) error { return nil }
 func (s *fakeBranchStore) DeleteProject(_ context.Context, _, _ string) error       { return nil }
 
-func (s *fakeBranchStore) ListEducation(_ context.Context, _ string) ([]domain.Education, error) {
+func (s *fakeBranchStore) ListEducation(_ context.Context, _ string) ([]core.Education, error) {
 	return nil, nil
 }
-func (s *fakeBranchStore) GetEducation(_ context.Context, _, _ string) (*domain.Education, error) {
-	return nil, domain.ErrNotFound
+func (s *fakeBranchStore) GetEducation(_ context.Context, _, _ string) (*core.Education, error) {
+	return nil, core.ErrNotFound
 }
-func (s *fakeBranchStore) CreateEducation(_ context.Context, _ *domain.Education) error { return nil }
-func (s *fakeBranchStore) UpdateEducation(_ context.Context, _ *domain.Education) error { return nil }
+func (s *fakeBranchStore) CreateEducation(_ context.Context, _ *core.Education) error { return nil }
+func (s *fakeBranchStore) UpdateEducation(_ context.Context, _ *core.Education) error { return nil }
 func (s *fakeBranchStore) DeleteEducation(_ context.Context, _, _ string) error         { return nil }
 
-func (s *fakeBranchStore) ListCertifications(_ context.Context, _ string) ([]domain.Certification, error) {
+func (s *fakeBranchStore) ListCertifications(_ context.Context, _ string) ([]core.Certification, error) {
 	return nil, nil
 }
-func (s *fakeBranchStore) GetCertification(_ context.Context, _, _ string) (*domain.Certification, error) {
-	return nil, domain.ErrNotFound
+func (s *fakeBranchStore) GetCertification(_ context.Context, _, _ string) (*core.Certification, error) {
+	return nil, core.ErrNotFound
 }
-func (s *fakeBranchStore) CreateCertification(_ context.Context, _ *domain.Certification) error {
+func (s *fakeBranchStore) CreateCertification(_ context.Context, _ *core.Certification) error {
 	return nil
 }
-func (s *fakeBranchStore) UpdateCertification(_ context.Context, _ *domain.Certification) error {
+func (s *fakeBranchStore) UpdateCertification(_ context.Context, _ *core.Certification) error {
 	return nil
 }
 func (s *fakeBranchStore) DeleteCertification(_ context.Context, _, _ string) error { return nil }
 
 // --- PresetRepository ---
 
-func (s *fakeBranchStore) GetPreset(_ context.Context, userID, id string) (*domain.Preset, error) {
+func (s *fakeBranchStore) GetPreset(_ context.Context, userID, id string) (*core.Preset, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	p, ok := s.presets[id]
 	if !ok || (p.UserID != "" && p.UserID != userID) {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	cp := *p
 	return &cp, nil
 }
 
-func (s *fakeBranchStore) CreatePreset(_ context.Context, preset *domain.Preset) error {
+func (s *fakeBranchStore) CreatePreset(_ context.Context, preset *core.Preset) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -654,11 +654,11 @@ func (s *fakeBranchStore) CreatePreset(_ context.Context, preset *domain.Preset)
 	return nil
 }
 
-func (s *fakeBranchStore) ListPresets(_ context.Context, userID string) ([]domain.Preset, error) {
+func (s *fakeBranchStore) ListPresets(_ context.Context, userID string) ([]core.Preset, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var res []domain.Preset
+	var res []core.Preset
 	for _, p := range s.presets {
 		if p.UserID == userID || p.UserID == "" {
 			res = append(res, *p)
@@ -667,7 +667,7 @@ func (s *fakeBranchStore) ListPresets(_ context.Context, userID string) ([]domai
 	return res, nil
 }
 
-func (s *fakeBranchStore) UpdatePreset(_ context.Context, preset *domain.Preset) error {
+func (s *fakeBranchStore) UpdatePreset(_ context.Context, preset *core.Preset) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -686,19 +686,19 @@ func (s *fakeBranchStore) DeletePreset(_ context.Context, _, id string) error {
 
 // --- TemplateRepository ---
 
-func (s *fakeBranchStore) GetTemplate(_ context.Context, userID, id string) (*domain.TemplateSet, error) {
+func (s *fakeBranchStore) GetTemplate(_ context.Context, userID, id string) (*core.TemplateSet, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	t, ok := s.templates[id]
 	if !ok || (!t.IsBuiltIn && t.UserID != "" && t.UserID != userID) {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	cp := *t
 	return &cp, nil
 }
 
-func (s *fakeBranchStore) CreateTemplate(_ context.Context, tmpl *domain.TemplateSet) error {
+func (s *fakeBranchStore) CreateTemplate(_ context.Context, tmpl *core.TemplateSet) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -710,11 +710,11 @@ func (s *fakeBranchStore) CreateTemplate(_ context.Context, tmpl *domain.Templat
 	return nil
 }
 
-func (s *fakeBranchStore) ListTemplates(_ context.Context, userID string) ([]domain.TemplateSet, error) {
+func (s *fakeBranchStore) ListTemplates(_ context.Context, userID string) ([]core.TemplateSet, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var res []domain.TemplateSet
+	var res []core.TemplateSet
 	for _, t := range s.templates {
 		if t.IsBuiltIn || t.UserID == userID {
 			res = append(res, *t)
@@ -723,7 +723,7 @@ func (s *fakeBranchStore) ListTemplates(_ context.Context, userID string) ([]dom
 	return res, nil
 }
 
-func (s *fakeBranchStore) UpdateTemplate(_ context.Context, tmpl *domain.TemplateSet) error {
+func (s *fakeBranchStore) UpdateTemplate(_ context.Context, tmpl *core.TemplateSet) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -742,36 +742,36 @@ func (s *fakeBranchStore) DeleteTemplate(_ context.Context, _, id string) error 
 
 // --- QuotaRepository ---
 
-func (s *fakeBranchStore) GetQuota(_ context.Context, userID string) (*domain.TenantQuota, error) {
-	return &domain.TenantQuota{
+func (s *fakeBranchStore) GetQuota(_ context.Context, userID string) (*core.TenantQuota, error) {
+	return &core.TenantQuota{
 		UserID:            userID,
 		DailyRequestLimit: 50,
 		MonthlyTokenLimit: 1000000,
 	}, nil
 }
 
-func (s *fakeBranchStore) ReserveQuota(_ context.Context, userID string, op domain.LLMOperationType, estimatedTokens, _, _ int) (*domain.LLMUsageRecord, error) {
+func (s *fakeBranchStore) ReserveQuota(_ context.Context, userID string, op core.LLMOperationType, estimatedTokens, _, _ int) (*core.LLMUsageRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rec := &domain.LLMUsageRecord{
+	rec := &core.LLMUsageRecord{
 		ID:              "res-" + uuid.New().String(),
 		UserID:          userID,
 		Operation:       op,
 		EstimatedTokens: estimatedTokens,
-		Status:          domain.ReservationStatusPending,
+		Status:          core.ReservationStatusPending,
 		CreatedAt:       time.Now().UTC(),
 	}
 	s.usageRecords[rec.ID] = rec
 	return rec, nil
 }
 
-func (s *fakeBranchStore) CommitUsage(_ context.Context, reservationID string, usage domain.TokenUsage) error {
+func (s *fakeBranchStore) CommitUsage(_ context.Context, reservationID string, usage core.TokenUsage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if rec, ok := s.usageRecords[reservationID]; ok {
-		rec.Status = domain.ReservationStatusCommitted
+		rec.Status = core.ReservationStatusCommitted
 		rec.PromptTokens = usage.PromptTokens
 		rec.CompletionTokens = usage.CompletionTokens
 		rec.TotalTokens = usage.TotalTokens
@@ -784,17 +784,17 @@ func (s *fakeBranchStore) ReleaseQuota(_ context.Context, reservationID string, 
 	defer s.mu.Unlock()
 
 	if rec, ok := s.usageRecords[reservationID]; ok {
-		rec.Status = domain.ReservationStatusReleased
+		rec.Status = core.ReservationStatusReleased
 		rec.ErrorMessage = errMsg
 	}
 	return nil
 }
 
-func (s *fakeBranchStore) ListUsageRecords(_ context.Context, userID string, _ int) ([]domain.LLMUsageRecord, error) {
+func (s *fakeBranchStore) ListUsageRecords(_ context.Context, userID string, _ int) ([]core.LLMUsageRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var res []domain.LLMUsageRecord
+	var res []core.LLMUsageRecord
 	for _, r := range s.usageRecords {
 		if r.UserID == userID {
 			res = append(res, *r)
@@ -807,7 +807,7 @@ func (s *fakeBranchStore) ListUsageRecords(_ context.Context, userID string, _ i
 
 type fakePromptCompiler struct{}
 
-func (f *fakePromptCompiler) CompilePrompt(req domain.GenerationRequest) (*domain.PromptPreview, error) {
+func (f *fakePromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.PromptPreview, error) {
 	session := privacy.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
 
@@ -826,15 +826,15 @@ func (f *fakePromptCompiler) CompilePrompt(req domain.GenerationRequest) (*domai
 		req.TargetLanguage,
 	)
 
-	return &domain.PromptPreview{
+	return &core.PromptPreview{
 		SystemPrompt: sysPrompt,
 		UserPrompt:   userPrompt,
 	}, nil
 }
 
-var _ domain.BranchRepository = (*fakeBranchStore)(nil)
-var _ domain.ProfileRepository = (*fakeBranchStore)(nil)
-var _ domain.PresetRepository = (*fakeBranchStore)(nil)
-var _ domain.TemplateRepository = (*fakeBranchStore)(nil)
-var _ domain.QuotaRepository = (*fakeBranchStore)(nil)
-var _ domain.PromptCompiler = (*fakePromptCompiler)(nil)
+var _ core.BranchRepository = (*fakeBranchStore)(nil)
+var _ core.ProfileRepository = (*fakeBranchStore)(nil)
+var _ core.PresetRepository = (*fakeBranchStore)(nil)
+var _ core.TemplateRepository = (*fakeBranchStore)(nil)
+var _ core.QuotaRepository = (*fakeBranchStore)(nil)
+var _ core.PromptCompiler = (*fakePromptCompiler)(nil)

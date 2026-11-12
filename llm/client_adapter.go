@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 const (
@@ -25,20 +25,20 @@ const (
 // ModelCatalogProvider is implemented by providers that expose their default model and model catalog.
 type ModelCatalogProvider interface {
 	DefaultModel() string
-	Models() []domain.ModelOption
+	Models() []core.ModelOption
 }
 
-// ClientProvider wraps a pure transport domain.LLMClient with prompt compilation,
+// ClientProvider wraps a pure transport core.LLMClient with prompt compilation,
 // JSON schema attachment, structured observability logging, prompt debugging, and domain response unmarshaling.
 type ClientProvider struct {
-	client         domain.LLMClient
+	client         core.LLMClient
 	defaultModel   string
 	logger         *slog.Logger
 	promptDebugger PromptDebugger
 }
 
-// NewClientProvider wraps a transport-only domain.LLMClient into a full domain.LLMProvider and RawUsageCompleter.
-func NewClientProvider(client domain.LLMClient, opts ...Option) *ClientProvider {
+// NewClientProvider wraps a transport-only core.LLMClient into a full core.LLMProvider and RawUsageCompleter.
+func NewClientProvider(client core.LLMClient, opts ...Option) *ClientProvider {
 	fallbackModel := "default"
 	if client != nil && strings.TrimSpace(client.DefaultModel()) != "" {
 		fallbackModel = client.DefaultModel()
@@ -75,7 +75,7 @@ func (p *ClientProvider) DefaultModel() string {
 }
 
 // Models returns the model catalog supported by the underlying transport client.
-func (p *ClientProvider) Models() []domain.ModelOption {
+func (p *ClientProvider) Models() []core.ModelOption {
 	if p == nil || p.client == nil {
 		return nil
 	}
@@ -84,7 +84,7 @@ func (p *ClientProvider) Models() []domain.ModelOption {
 
 // GenerateTailoredResume compiles the tailoring prompts and output JSON schema in core,
 // dispatches the transport request to the underlying LLMClient, and unmarshals the structured domain response.
-func (p *ClientProvider) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (genResp *domain.GenerationResponse, retErr error) {
+func (p *ClientProvider) GenerateTailoredResume(ctx context.Context, req core.GenerationRequest) (genResp *core.GenerationResponse, retErr error) {
 	if p == nil || p.client == nil {
 		return nil, ErrNoProviders
 	}
@@ -107,7 +107,7 @@ func (p *ClientProvider) GenerateTailoredResume(ctx context.Context, req domain.
 		logLLMResponse(ctx, p.logger, trace, statusCode, rawResp, retErr)
 	}()
 
-	compResp, err := p.client.Complete(ctx, domain.LLMCompletionRequest{
+	compResp, err := p.client.Complete(ctx, core.LLMCompletionRequest{
 		Model:          model,
 		SystemPrompt:   prompts.SystemPrompt,
 		UserPrompt:     prompts.UserPrompt,
@@ -137,7 +137,7 @@ func (p *ClientProvider) GenerateTailoredResume(ctx context.Context, req domain.
 		return nil, retErr
 	}
 
-	var parsed domain.GenerationResponse
+	var parsed core.GenerationResponse
 	if err := json.Unmarshal([]byte(cleanJSON), &parsed); err != nil {
 		retErr = fmt.Errorf("%w: failed to unmarshal generation response: %v", ErrInvalidResponse, err)
 		return nil, retErr
@@ -157,9 +157,9 @@ func (p *ClientProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 }
 
 // CompleteTextWithUsage dispatches an unstructured/raw text completion request to the underlying LLMClient.
-func (p *ClientProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt, userPrompt, model string) (text string, usage domain.TokenUsage, retErr error) {
+func (p *ClientProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt, userPrompt, model string) (text string, usage core.TokenUsage, retErr error) {
 	if p == nil || p.client == nil {
-		return "", domain.TokenUsage{}, ErrNoProviders
+		return "", core.TokenUsage{}, ErrNoProviders
 	}
 
 	if strings.TrimSpace(model) == "" {
@@ -174,7 +174,7 @@ func (p *ClientProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt
 		logLLMResponse(ctx, p.logger, trace, statusCode, rawResp, retErr)
 	}()
 
-	compResp, err := p.client.Complete(ctx, domain.LLMCompletionRequest{
+	compResp, err := p.client.Complete(ctx, core.LLMCompletionRequest{
 		Model:        model,
 		SystemPrompt: systemPrompt,
 		UserPrompt:   userPrompt,
@@ -188,11 +188,11 @@ func (p *ClientProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt
 	}
 	if err != nil {
 		retErr = err
-		return "", domain.TokenUsage{}, retErr
+		return "", core.TokenUsage{}, retErr
 	}
 	if compResp == nil {
 		retErr = fmt.Errorf("%w: empty completion response from provider %s", ErrInvalidResponse, p.Name())
-		return "", domain.TokenUsage{}, retErr
+		return "", core.TokenUsage{}, retErr
 	}
 
 	return strings.TrimSpace(compResp.Text), compResp.Usage, nil

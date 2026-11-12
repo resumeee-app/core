@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/services/worker"
 )
 
@@ -15,7 +15,7 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 	env := setupTestWorkerEnv(t)
 
 	// Update the profile to have a known authentic candidate identity
-	realProf := &domain.Profile{
+	realProf := &core.Profile{
 		ID:                 "profile-" + env.defaultUser,
 		UserID:             env.defaultUser,
 		FullName:           "Margaret Hamilton",
@@ -25,7 +25,7 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 		Summary:            "Margaret Hamilton pioneered asynchronous executive software.",
 		MainRevision:       2,
 		GlobalWritingRules: "Prioritize mission-critical systems and zero-bug principles.",
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "Website", URL: "https://margarethamilton.org"},
 			{Network: "GitHub", Username: "mhamilton", URL: "https://github.com/mhamilton"},
 		},
@@ -34,22 +34,22 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 		t.Fatalf("failed to update profile: %v", err)
 	}
 
-	exp := domain.WorkExperience{
+	exp := core.WorkExperience{
 		ID:        "exp-apollo",
 		UserID:    env.defaultUser,
 		Company:   "MIT Instrumentation Lab",
 		RoleTitle: "Director of Software Engineering",
-		StartDate: domain.NewDate(1965, 1, 1),
+		StartDate: core.NewDate(1965, 1, 1),
 	}
 	if err := env.profileRepo.CreateExperience(ctx, &exp); err != nil {
 		t.Fatalf("failed to create exp: %v", err)
 	}
 
-	fact := domain.Fact{
+	fact := core.Fact{
 		ID:        "fact-apollo-1",
 		UserID:    env.defaultUser,
 		OwnerID:   exp.ID,
-		OwnerType: domain.OwnerTypeWorkExperience,
+		OwnerType: core.OwnerTypeWorkExperience,
 		Statement: "Engineered Apollo guidance flight software.",
 	}
 	if err := env.profileRepo.CreateFact(ctx, &fact); err != nil {
@@ -61,17 +61,17 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 
 	// LLM Service returns tailored content and gap report with candidate details
 	env.llm.mu.Lock()
-	env.llm.customResp = &domain.GenerationResponse{
-		TailoredContent: domain.TailoredContent{
+	env.llm.customResp = &core.GenerationResponse{
+		TailoredContent: core.TailoredContent{
 			Summary: "Pioneering software executive Margaret Hamilton with expertise in fault-tolerant asynchronous execution. Contact: margaret.hamilton@mit.edu or +1 (617) 253-1000. Portfolio: https://margarethamilton.org.",
-			Experiences: []domain.TailoredExperience{
+			Experiences: []core.TailoredExperience{
 				{
 					SourceEntityID: expID,
 					Company:        "MIT Instrumentation Lab",
 					RoleTitle:      "Director (Margaret Hamilton)",
-					StartDate:      domain.NewDate(1965, 1, 1),
+					StartDate:      core.NewDate(1965, 1, 1),
 					DutiesSummary:  "Margaret Hamilton designed Apollo guidance flight software.",
-					Bullets: []domain.TailoredBullet{
+					Bullets: []core.TailoredBullet{
 						{
 							Text:          "Margaret Hamilton engineered priority display and asynchronous recovery.",
 							SourceFactIDs: []string{factID},
@@ -80,7 +80,7 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 				},
 			},
 		},
-		GapReport: domain.GapReport{
+		GapReport: core.GapReport{
 			OverallMatchSummary: "Margaret Hamilton exceeds all mission-critical reliability criteria.",
 			StrategicRecommendations: []string{
 				"Margaret Hamilton should highlight real-time operating systems.",
@@ -105,13 +105,13 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 	defer pool.Stop()
 
 	// Create and enqueue version
-	ver := domain.BranchVersion{
+	ver := core.BranchVersion{
 		ID:                 "ver-privacy-test",
 		BranchID:           env.branchID,
-		Status:             domain.VersionStatusPending,
+		Status:             core.VersionStatusPending,
 		MainRevisionUsed:   2,
 		TemplateSetIDUsed:  "builtin-standard-clean",
-		SourceType:         domain.SourceTypeLLMGeneration,
+		SourceType:         core.SourceTypeLLMGeneration,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, &ver); err != nil {
 		t.Fatalf("failed to create version: %v", err)
@@ -126,17 +126,17 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 	}
 
 	// Await completion
-	var completedVer *domain.BranchVersion
+	var completedVer *core.BranchVersion
 	for range 50 {
 		time.Sleep(20 * time.Millisecond)
 		v, err := env.branchRepo.GetVersion(ctx, env.branchID, ver.ID)
-		if err == nil && (v.Status == domain.VersionStatusCompleted || v.Status == domain.VersionStatusCompletedWithWarnings || v.Status == domain.VersionStatusFailed) {
+		if err == nil && (v.Status == core.VersionStatusCompleted || v.Status == core.VersionStatusCompletedWithWarnings || v.Status == core.VersionStatusFailed) {
 			completedVer = v
 			break
 		}
 	}
 
-	if completedVer == nil || (completedVer.Status != domain.VersionStatusCompleted && completedVer.Status != domain.VersionStatusCompletedWithWarnings) {
+	if completedVer == nil || (completedVer.Status != core.VersionStatusCompleted && completedVer.Status != core.VersionStatusCompletedWithWarnings) {
 		t.Fatalf("expected version completed or completed_with_warnings, got %+v", completedVer)
 	}
 

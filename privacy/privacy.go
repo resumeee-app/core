@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // Canonical deterministic PII placeholder constants.
@@ -81,8 +81,8 @@ func isValidURL(raw string) bool {
 }
 
 // NewSession constructs a Session from a Profile.
-func NewSession(profile *domain.Profile) *Session {
-	var targetProfile domain.Profile
+func NewSession(profile *core.Profile) *Session {
+	var targetProfile core.Profile
 	if profile != nil {
 		targetProfile = *profile
 	}
@@ -269,7 +269,7 @@ func NewSession(profile *domain.Profile) *Session {
 }
 
 // NewSessionFromSnapshot constructs a Session from a MainProfileSnapshot.
-func NewSessionFromSnapshot(snapshot *domain.MainProfileSnapshot) *Session {
+func NewSessionFromSnapshot(snapshot *core.MainProfileSnapshot) *Session {
 	if snapshot == nil {
 		return NewSession(nil)
 	}
@@ -277,7 +277,7 @@ func NewSessionFromSnapshot(snapshot *domain.MainProfileSnapshot) *Session {
 }
 
 // NewSessionFromRequest constructs a Session from a GenerationRequest.
-func NewSessionFromRequest(req domain.GenerationRequest) *Session {
+func NewSessionFromRequest(req core.GenerationRequest) *Session {
 	return NewSessionFromSnapshot(req.MainProfile)
 }
 
@@ -305,14 +305,14 @@ func (s *Session) DeobfuscateString(input string) string {
 	return res
 }
 
-func cloneSnapshot(snap *domain.MainProfileSnapshot) *domain.MainProfileSnapshot {
+func cloneSnapshot(snap *core.MainProfileSnapshot) *core.MainProfileSnapshot {
 	if snap == nil {
 		return nil
 	}
 	res := *snap
 	res.Profile = snap.Profile
 	if snap.Profile.Profiles != nil {
-		res.Profile.Profiles = make([]domain.SocialLink, len(snap.Profile.Profiles))
+		res.Profile.Profiles = make([]core.SocialLink, len(snap.Profile.Profiles))
 		copy(res.Profile.Profiles, snap.Profile.Profiles)
 	}
 	if snap.Profile.Metadata != nil {
@@ -322,11 +322,11 @@ func cloneSnapshot(snap *domain.MainProfileSnapshot) *domain.MainProfileSnapshot
 		}
 	}
 	if snap.Skills != nil {
-		res.Skills = make([]domain.Skill, len(snap.Skills))
+		res.Skills = make([]core.Skill, len(snap.Skills))
 		copy(res.Skills, snap.Skills)
 	}
 	if snap.Experiences != nil {
-		res.Experiences = make([]domain.WorkExperience, len(snap.Experiences))
+		res.Experiences = make([]core.WorkExperience, len(snap.Experiences))
 		for i, exp := range snap.Experiences {
 			res.Experiences[i] = exp
 			if exp.CompanyContact != nil {
@@ -342,17 +342,17 @@ func cloneSnapshot(snap *domain.MainProfileSnapshot) *domain.MainProfileSnapshot
 				res.Experiences[i].HoursPerWeek = &hpw
 			}
 			if exp.Facts != nil {
-				res.Experiences[i].Facts = make([]domain.Fact, len(exp.Facts))
+				res.Experiences[i].Facts = make([]core.Fact, len(exp.Facts))
 				copy(res.Experiences[i].Facts, exp.Facts)
 			}
 			if exp.Skills != nil {
-				res.Experiences[i].Skills = make([]domain.Skill, len(exp.Skills))
+				res.Experiences[i].Skills = make([]core.Skill, len(exp.Skills))
 				copy(res.Experiences[i].Skills, exp.Skills)
 			}
 		}
 	}
 	if snap.Projects != nil {
-		res.Projects = make([]domain.Project, len(snap.Projects))
+		res.Projects = make([]core.Project, len(snap.Projects))
 		for i, proj := range snap.Projects {
 			res.Projects[i] = proj
 			if proj.EndDate != nil {
@@ -360,17 +360,17 @@ func cloneSnapshot(snap *domain.MainProfileSnapshot) *domain.MainProfileSnapshot
 				res.Projects[i].EndDate = &ed
 			}
 			if proj.Facts != nil {
-				res.Projects[i].Facts = make([]domain.Fact, len(proj.Facts))
+				res.Projects[i].Facts = make([]core.Fact, len(proj.Facts))
 				copy(res.Projects[i].Facts, proj.Facts)
 			}
 			if proj.Skills != nil {
-				res.Projects[i].Skills = make([]domain.Skill, len(proj.Skills))
+				res.Projects[i].Skills = make([]core.Skill, len(proj.Skills))
 				copy(res.Projects[i].Skills, proj.Skills)
 			}
 		}
 	}
 	if snap.Education != nil {
-		res.Education = make([]domain.Education, len(snap.Education))
+		res.Education = make([]core.Education, len(snap.Education))
 		for i, edu := range snap.Education {
 			res.Education[i] = edu
 			if edu.EndDate != nil {
@@ -378,24 +378,24 @@ func cloneSnapshot(snap *domain.MainProfileSnapshot) *domain.MainProfileSnapshot
 				res.Education[i].EndDate = &ed
 			}
 			if edu.Facts != nil {
-				res.Education[i].Facts = make([]domain.Fact, len(edu.Facts))
+				res.Education[i].Facts = make([]core.Fact, len(edu.Facts))
 				copy(res.Education[i].Facts, edu.Facts)
 			}
 		}
 	}
 	if snap.Certifications != nil {
-		res.Certifications = make([]domain.Certification, len(snap.Certifications))
+		res.Certifications = make([]core.Certification, len(snap.Certifications))
 		copy(res.Certifications, snap.Certifications)
 	}
 	if snap.Facts != nil {
-		res.Facts = make([]domain.Fact, len(snap.Facts))
+		res.Facts = make([]core.Fact, len(snap.Facts))
 		copy(res.Facts, snap.Facts)
 	}
 	return &res
 }
 
 // ObfuscateSnapshot returns an isolated deep clone of the snapshot with PII obfuscated.
-func (s *Session) ObfuscateSnapshot(snap *domain.MainProfileSnapshot) *domain.MainProfileSnapshot {
+func (s *Session) ObfuscateSnapshot(snap *core.MainProfileSnapshot) *core.MainProfileSnapshot {
 	if snap == nil {
 		return nil
 	}
@@ -481,13 +481,13 @@ func (s *Session) ObfuscateSnapshot(snap *domain.MainProfileSnapshot) *domain.Ma
 	return res
 }
 
-func cloneTailoredContent(tc *domain.TailoredContent) *domain.TailoredContent {
+func cloneTailoredContent(tc *core.TailoredContent) *core.TailoredContent {
 	if tc == nil {
 		return nil
 	}
 	res := *tc
 	if tc.SkillGroups != nil {
-		res.SkillGroups = make([]domain.TailoredSkillGroup, len(tc.SkillGroups))
+		res.SkillGroups = make([]core.TailoredSkillGroup, len(tc.SkillGroups))
 		for i, sg := range tc.SkillGroups {
 			res.SkillGroups[i] = sg
 			if sg.Skills != nil {
@@ -499,11 +499,11 @@ func cloneTailoredContent(tc *domain.TailoredContent) *domain.TailoredContent {
 		}
 	}
 	if tc.Experiences != nil {
-		res.Experiences = make([]domain.TailoredExperience, len(tc.Experiences))
+		res.Experiences = make([]core.TailoredExperience, len(tc.Experiences))
 		for i, exp := range tc.Experiences {
 			res.Experiences[i] = exp
 			if exp.Bullets != nil {
-				res.Experiences[i].Bullets = make([]domain.TailoredBullet, len(exp.Bullets))
+				res.Experiences[i].Bullets = make([]core.TailoredBullet, len(exp.Bullets))
 				for j, b := range exp.Bullets {
 					res.Experiences[i].Bullets[j] = b
 					if b.SourceFactIDs != nil {
@@ -517,11 +517,11 @@ func cloneTailoredContent(tc *domain.TailoredContent) *domain.TailoredContent {
 		}
 	}
 	if tc.Projects != nil {
-		res.Projects = make([]domain.TailoredProject, len(tc.Projects))
+		res.Projects = make([]core.TailoredProject, len(tc.Projects))
 		for i, proj := range tc.Projects {
 			res.Projects[i] = proj
 			if proj.Bullets != nil {
-				res.Projects[i].Bullets = make([]domain.TailoredBullet, len(proj.Bullets))
+				res.Projects[i].Bullets = make([]core.TailoredBullet, len(proj.Bullets))
 				for j, b := range proj.Bullets {
 					res.Projects[i].Bullets[j] = b
 					if b.SourceFactIDs != nil {
@@ -535,11 +535,11 @@ func cloneTailoredContent(tc *domain.TailoredContent) *domain.TailoredContent {
 		}
 	}
 	if tc.Education != nil {
-		res.Education = make([]domain.TailoredEducation, len(tc.Education))
+		res.Education = make([]core.TailoredEducation, len(tc.Education))
 		for i, edu := range tc.Education {
 			res.Education[i] = edu
 			if edu.Bullets != nil {
-				res.Education[i].Bullets = make([]domain.TailoredBullet, len(edu.Bullets))
+				res.Education[i].Bullets = make([]core.TailoredBullet, len(edu.Bullets))
 				for j, b := range edu.Bullets {
 					res.Education[i].Bullets[j] = b
 					if b.SourceFactIDs != nil {
@@ -553,14 +553,14 @@ func cloneTailoredContent(tc *domain.TailoredContent) *domain.TailoredContent {
 		}
 	}
 	if tc.Certifications != nil {
-		res.Certifications = make([]domain.TailoredCert, len(tc.Certifications))
+		res.Certifications = make([]core.TailoredCert, len(tc.Certifications))
 		copy(res.Certifications, tc.Certifications)
 	}
 	return &res
 }
 
 // ObfuscatePriorVersion returns an isolated clone of prior tailored content with PII obfuscated.
-func (s *Session) ObfuscatePriorVersion(prior *domain.TailoredContent) *domain.TailoredContent {
+func (s *Session) ObfuscatePriorVersion(prior *core.TailoredContent) *core.TailoredContent {
 	if prior == nil {
 		return nil
 	}
@@ -599,7 +599,7 @@ func (s *Session) ObfuscatePriorVersion(prior *domain.TailoredContent) *domain.T
 }
 
 // ObfuscateRequest returns a deep copy of req with contact details and text occurrences obfuscated.
-func (s *Session) ObfuscateRequest(req domain.GenerationRequest) domain.GenerationRequest {
+func (s *Session) ObfuscateRequest(req core.GenerationRequest) core.GenerationRequest {
 	res := req
 	res.MainProfile = s.ObfuscateSnapshot(req.MainProfile)
 	res.PriorVersion = s.ObfuscatePriorVersion(req.PriorVersion)
@@ -618,7 +618,7 @@ func (s *Session) ObfuscateRequest(req domain.GenerationRequest) domain.Generati
 }
 
 // DeobfuscateTailoredContent restores original contact details into the provided TailoredContent.
-func (s *Session) DeobfuscateTailoredContent(content *domain.TailoredContent) {
+func (s *Session) DeobfuscateTailoredContent(content *core.TailoredContent) {
 	if s == nil || content == nil {
 		return
 	}
@@ -665,7 +665,7 @@ func (s *Session) DeobfuscateTailoredContent(content *domain.TailoredContent) {
 }
 
 // DeobfuscateGapReport restores original contact details into the provided GapReport.
-func (s *Session) DeobfuscateGapReport(report *domain.GapReport) {
+func (s *Session) DeobfuscateGapReport(report *core.GapReport) {
 	if s == nil || report == nil {
 		return
 	}
@@ -691,7 +691,7 @@ func (s *Session) DeobfuscateGapReport(report *domain.GapReport) {
 }
 
 // DeobfuscateGenerationResponse restores original contact details across TailoredContent and GapReport.
-func (s *Session) DeobfuscateGenerationResponse(resp *domain.GenerationResponse) {
+func (s *Session) DeobfuscateGenerationResponse(resp *core.GenerationResponse) {
 	if s == nil || resp == nil {
 		return
 	}
@@ -700,7 +700,7 @@ func (s *Session) DeobfuscateGenerationResponse(resp *domain.GenerationResponse)
 }
 
 // DeobfuscateATSScore restores original contact details across an ATSScore and its ExtractedCandidate.
-func (s *Session) DeobfuscateATSScore(score *domain.ATSScore) {
+func (s *Session) DeobfuscateATSScore(score *core.ATSScore) {
 	if s == nil || score == nil {
 		return
 	}

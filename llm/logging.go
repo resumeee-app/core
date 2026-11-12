@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // llmTrace coordinates in-flight debugging and timing metadata between request dispatch and response receipt.
@@ -38,7 +38,7 @@ func logLLMRequest(ctx context.Context, logger *slog.Logger, debugger PromptDebu
 
 	if debugger != nil {
 		var tenantID string
-		if uid, err := domain.UserIDFromContext(ctx); err == nil {
+		if uid, err := core.UserIDFromContext(ctx); err == nil {
 			tenantID = uid
 		}
 		session, err := debugger.StartSession(PromptDebugMeta{

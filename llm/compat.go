@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
-// CompatProvider implements domain.LLMClient for generic OpenAI-compatible HTTP endpoints
+// CompatProvider implements core.LLMClient for generic OpenAI-compatible HTTP endpoints
 // such as Ollama, vLLM, llama.cpp, LocalAI, and LM Studio.
 type CompatProvider struct {
 	baseURL      string
@@ -45,9 +45,9 @@ func (p *CompatProvider) DefaultModel() string {
 }
 
 // Models returns the default model option for the compatible endpoint.
-func (p *CompatProvider) Models() []domain.ModelOption {
+func (p *CompatProvider) Models() []core.ModelOption {
 	def := p.DefaultModel()
-	return []domain.ModelOption{
+	return []core.ModelOption{
 		{
 			Provider:    ProviderCompat,
 			Model:       def,
@@ -58,7 +58,7 @@ func (p *CompatProvider) Models() []domain.ModelOption {
 }
 
 // Complete executes a completion request against the OpenAI-compatible chat completions endpoint.
-func (p *CompatProvider) Complete(ctx context.Context, req domain.LLMCompletionRequest) (*domain.LLMCompletionResponse, error) {
+func (p *CompatProvider) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
 		model = p.DefaultModel()
@@ -130,7 +130,7 @@ func (p *CompatProvider) Complete(ctx context.Context, req domain.LLMCompletionR
 
 	rawBody := string(bodyBytes)
 	if err := checkStatusError("compat", resp.StatusCode, bodyBytes); err != nil {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, err
@@ -151,20 +151,20 @@ func (p *CompatProvider) Complete(ctx context.Context, req domain.LLMCompletionR
 
 	var compatResp compatResponse
 	if err := json.Unmarshal(bodyBytes, &compatResp); err != nil {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, fmt.Errorf("%w: malformed compat response: %v", ErrInvalidResponse, err)
 	}
 
 	if len(compatResp.Choices) == 0 {
-		return &domain.LLMCompletionResponse{
+		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 		}, fmt.Errorf("%w: no choices returned by compat endpoint", ErrInvalidResponse)
 	}
 
-	usage := domain.TokenUsage{
+	usage := core.TokenUsage{
 		PromptTokens:     compatResp.Usage.PromptTokens,
 		CompletionTokens: compatResp.Usage.CompletionTokens,
 		TotalTokens:      compatResp.Usage.TotalTokens,
@@ -173,7 +173,7 @@ func (p *CompatProvider) Complete(ctx context.Context, req domain.LLMCompletionR
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 
-	return &domain.LLMCompletionResponse{
+	return &core.LLMCompletionResponse{
 		Text:       strings.TrimSpace(compatResp.Choices[0].Message.Content),
 		RawBody:    rawBody,
 		StatusCode: resp.StatusCode,

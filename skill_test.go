@@ -1,16 +1,16 @@
-package domain_test
+package core_test
 
 import (
 	"reflect"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 func TestCareerGraphSnapshotAlias(t *testing.T) {
-	cgs := domain.CareerGraphSnapshot{
+	cgs := core.CareerGraphSnapshot{
 		MainRevision: 42,
-		Skills: []domain.Skill{
+		Skills: []core.Skill{
 			{ID: "sk-alias", Name: "Go"},
 		},
 	}
@@ -27,47 +27,47 @@ func TestCareerGraphSnapshotAlias(t *testing.T) {
 }
 
 func TestWorkExperience_EffectiveSkills(t *testing.T) {
-	skillGo := domain.Skill{ID: "skill-1", ShortID: "sk-go", Name: "Go"}
-	skillDocker := domain.Skill{ID: "skill-2", ShortID: "sk-doc", Name: "Docker"}
-	skillK8s := domain.Skill{ID: "skill-3", ShortID: "sk-k8s", Name: "Kubernetes"}
+	skillGo := core.Skill{ID: "skill-1", ShortID: "sk-go", Name: "Go"}
+	skillDocker := core.Skill{ID: "skill-2", ShortID: "sk-doc", Name: "Docker"}
+	skillK8s := core.Skill{ID: "skill-3", ShortID: "sk-k8s", Name: "Kubernetes"}
 
 	tests := []struct {
 		name     string
-		exp      domain.WorkExperience
+		exp      core.WorkExperience
 		expected []string // expected skill IDs
 	}{
 		{
 			name:     "empty skills and empty facts",
-			exp:      domain.WorkExperience{ID: "exp-1"},
+			exp:      core.WorkExperience{ID: "exp-1"},
 			expected: []string{},
 		},
 		{
 			name: "only direct skills",
-			exp: domain.WorkExperience{
+			exp: core.WorkExperience{
 				ID:     "exp-2",
-				Skills: []domain.Skill{skillGo, skillDocker},
+				Skills: []core.Skill{skillGo, skillDocker},
 			},
 			expected: []string{"skill-1", "skill-2"},
 		},
 		{
 			name: "only fact skills",
-			exp: domain.WorkExperience{
+			exp: core.WorkExperience{
 				ID: "exp-3",
-				Facts: []domain.Fact{
-					{ID: "fact-1", Skills: []domain.Skill{skillDocker}},
-					{ID: "fact-2", Skills: []domain.Skill{skillK8s}},
+				Facts: []core.Fact{
+					{ID: "fact-1", Skills: []core.Skill{skillDocker}},
+					{ID: "fact-2", Skills: []core.Skill{skillK8s}},
 				},
 			},
 			expected: []string{"skill-2", "skill-3"},
 		},
 		{
 			name: "overlapping direct and fact skills deduplicated",
-			exp: domain.WorkExperience{
+			exp: core.WorkExperience{
 				ID:     "exp-4",
-				Skills: []domain.Skill{skillGo, skillDocker},
-				Facts: []domain.Fact{
-					{ID: "fact-1", Skills: []domain.Skill{skillDocker, skillK8s}},
-					{ID: "fact-2", Skills: []domain.Skill{skillGo}},
+				Skills: []core.Skill{skillGo, skillDocker},
+				Facts: []core.Fact{
+					{ID: "fact-1", Skills: []core.Skill{skillDocker, skillK8s}},
+					{ID: "fact-2", Skills: []core.Skill{skillGo}},
 				},
 			},
 			expected: []string{"skill-1", "skill-2", "skill-3"},
@@ -89,15 +89,15 @@ func TestWorkExperience_EffectiveSkills(t *testing.T) {
 }
 
 func TestProject_EffectiveSkills(t *testing.T) {
-	skillReact := domain.Skill{ID: "skill-react", Name: "React"}
-	skillTS := domain.Skill{ID: "skill-ts", Name: "TypeScript"}
-	skillVite := domain.Skill{ID: "skill-vite", Name: "Vite"}
+	skillReact := core.Skill{ID: "skill-react", Name: "React"}
+	skillTS := core.Skill{ID: "skill-ts", Name: "TypeScript"}
+	skillVite := core.Skill{ID: "skill-vite", Name: "Vite"}
 
-	proj := domain.Project{
+	proj := core.Project{
 		ID:     "proj-1",
-		Skills: []domain.Skill{skillReact, skillTS},
-		Facts: []domain.Fact{
-			{ID: "fact-p1", Skills: []domain.Skill{skillTS, skillVite}},
+		Skills: []core.Skill{skillReact, skillTS},
+		Facts: []core.Fact{
+			{ID: "fact-p1", Skills: []core.Skill{skillTS, skillVite}},
 		},
 	}
 
@@ -114,14 +114,14 @@ func TestProject_EffectiveSkills(t *testing.T) {
 }
 
 func TestEducation_EffectiveSkills(t *testing.T) {
-	skillMath := domain.Skill{ID: "skill-math", Name: "Mathematics"}
-	skillAlgo := domain.Skill{ID: "skill-algo", Name: "Algorithms"}
+	skillMath := core.Skill{ID: "skill-math", Name: "Mathematics"}
+	skillAlgo := core.Skill{ID: "skill-algo", Name: "Algorithms"}
 
-	edu := domain.Education{
+	edu := core.Education{
 		ID: "edu-1",
-		Facts: []domain.Fact{
-			{ID: "fact-e1", Skills: []domain.Skill{skillMath}},
-			{ID: "fact-e2", Skills: []domain.Skill{skillAlgo, skillMath}},
+		Facts: []core.Fact{
+			{ID: "fact-e1", Skills: []core.Skill{skillMath}},
+			{ID: "fact-e2", Skills: []core.Skill{skillAlgo, skillMath}},
 		},
 	}
 
@@ -138,10 +138,10 @@ func TestEducation_EffectiveSkills(t *testing.T) {
 }
 
 func TestFact_EffectiveSkills(t *testing.T) {
-	skillSQL := domain.Skill{ID: "skill-sql", Name: "SQL"}
-	fact := domain.Fact{
+	skillSQL := core.Skill{ID: "skill-sql", Name: "SQL"}
+	fact := core.Fact{
 		ID:     "fact-1",
-		Skills: []domain.Skill{skillSQL},
+		Skills: []core.Skill{skillSQL},
 	}
 
 	effective := fact.EffectiveSkills()
@@ -151,45 +151,45 @@ func TestFact_EffectiveSkills(t *testing.T) {
 }
 
 func TestMainProfileSnapshot_AllSkills_And_Consolidation(t *testing.T) {
-	skillTop1 := domain.Skill{ID: "sk-top-1", ShortID: "sk-1", Name: "Go", Category: "Languages"}
-	skillTop2 := domain.Skill{ID: "sk-top-2", ShortID: "sk-2", Name: "Rust", Category: "Languages"}
-	skillExpDirect := domain.Skill{ID: "sk-exp-dir", ShortID: "sk-3", Name: "PostgreSQL", Category: "Databases"}
-	skillExpFact := domain.Skill{ID: "sk-exp-fact", ShortID: "sk-4", Name: "Kafka", Category: "Messaging"}
-	skillProjDirect := domain.Skill{ID: "sk-proj-dir", ShortID: "sk-5", Name: "React", Category: "Frontend"}
-	skillProjFact := domain.Skill{ID: "sk-proj-fact", ShortID: "sk-6", Name: "TailwindCSS", Category: "Frontend"}
-	skillEduFact := domain.Skill{ID: "sk-edu-fact", ShortID: "sk-7", Name: "Distributed Systems", Category: "Theory"}
-	skillStandaloneFact := domain.Skill{ID: "sk-stand-fact", ShortID: "sk-8", Name: "Linux", Category: "OS"}
+	skillTop1 := core.Skill{ID: "sk-top-1", ShortID: "sk-1", Name: "Go", Category: "Languages"}
+	skillTop2 := core.Skill{ID: "sk-top-2", ShortID: "sk-2", Name: "Rust", Category: "Languages"}
+	skillExpDirect := core.Skill{ID: "sk-exp-dir", ShortID: "sk-3", Name: "PostgreSQL", Category: "Databases"}
+	skillExpFact := core.Skill{ID: "sk-exp-fact", ShortID: "sk-4", Name: "Kafka", Category: "Messaging"}
+	skillProjDirect := core.Skill{ID: "sk-proj-dir", ShortID: "sk-5", Name: "React", Category: "Frontend"}
+	skillProjFact := core.Skill{ID: "sk-proj-fact", ShortID: "sk-6", Name: "TailwindCSS", Category: "Frontend"}
+	skillEduFact := core.Skill{ID: "sk-edu-fact", ShortID: "sk-7", Name: "Distributed Systems", Category: "Theory"}
+	skillStandaloneFact := core.Skill{ID: "sk-stand-fact", ShortID: "sk-8", Name: "Linux", Category: "OS"}
 
-	snap := &domain.MainProfileSnapshot{
-		Skills: []domain.Skill{skillTop1, skillTop2},
-		Experiences: []domain.WorkExperience{
+	snap := &core.MainProfileSnapshot{
+		Skills: []core.Skill{skillTop1, skillTop2},
+		Experiences: []core.WorkExperience{
 			{
 				ID:     "exp-1",
-				Skills: []domain.Skill{skillTop1, skillExpDirect}, // skillTop1 is repeated
-				Facts: []domain.Fact{
-					{ID: "fact-1", Skills: []domain.Skill{skillExpFact, skillTop2}},
+				Skills: []core.Skill{skillTop1, skillExpDirect}, // skillTop1 is repeated
+				Facts: []core.Fact{
+					{ID: "fact-1", Skills: []core.Skill{skillExpFact, skillTop2}},
 				},
 			},
 		},
-		Projects: []domain.Project{
+		Projects: []core.Project{
 			{
 				ID:     "proj-1",
-				Skills: []domain.Skill{skillProjDirect},
-				Facts: []domain.Fact{
-					{ID: "fact-2", Skills: []domain.Skill{skillProjFact}},
+				Skills: []core.Skill{skillProjDirect},
+				Facts: []core.Fact{
+					{ID: "fact-2", Skills: []core.Skill{skillProjFact}},
 				},
 			},
 		},
-		Education: []domain.Education{
+		Education: []core.Education{
 			{
 				ID: "edu-1",
-				Facts: []domain.Fact{
-					{ID: "fact-3", Skills: []domain.Skill{skillEduFact}},
+				Facts: []core.Fact{
+					{ID: "fact-3", Skills: []core.Skill{skillEduFact}},
 				},
 			},
 		},
-		Facts: []domain.Fact{
-			{ID: "fact-4", Skills: []domain.Skill{skillStandaloneFact}},
+		Facts: []core.Fact{
+			{ID: "fact-4", Skills: []core.Skill{skillStandaloneFact}},
 		},
 	}
 
@@ -239,31 +239,31 @@ func TestMainProfileSnapshot_AllSkills_And_Consolidation(t *testing.T) {
 }
 
 func TestMainProfileSnapshot_SkillUsages(t *testing.T) {
-	skillGo := domain.Skill{ID: "skill-go", Name: "Go"}
-	skillDB := domain.Skill{ID: "skill-db", Name: "PostgreSQL"}
+	skillGo := core.Skill{ID: "skill-go", Name: "Go"}
+	skillDB := core.Skill{ID: "skill-db", Name: "PostgreSQL"}
 
-	snap := &domain.MainProfileSnapshot{
-		Skills: []domain.Skill{skillGo, skillDB},
-		Experiences: []domain.WorkExperience{
+	snap := &core.MainProfileSnapshot{
+		Skills: []core.Skill{skillGo, skillDB},
+		Experiences: []core.WorkExperience{
 			{
 				ID:     "exp-1",
-				Skills: []domain.Skill{skillGo},
-				Facts: []domain.Fact{
-					{ID: "fact-1", OwnerID: "exp-1", Skills: []domain.Skill{skillDB}},
+				Skills: []core.Skill{skillGo},
+				Facts: []core.Fact{
+					{ID: "fact-1", OwnerID: "exp-1", Skills: []core.Skill{skillDB}},
 				},
 			},
 		},
-		Projects: []domain.Project{
+		Projects: []core.Project{
 			{
 				ID:     "proj-1",
-				Skills: []domain.Skill{skillDB},
-				Facts: []domain.Fact{
-					{ID: "fact-2", OwnerID: "proj-1", Skills: []domain.Skill{skillGo}},
+				Skills: []core.Skill{skillDB},
+				Facts: []core.Fact{
+					{ID: "fact-2", OwnerID: "proj-1", Skills: []core.Skill{skillGo}},
 				},
 			},
 		},
-		Facts: []domain.Fact{
-			{ID: "fact-standalone", Skills: []domain.Skill{skillGo}},
+		Facts: []core.Fact{
+			{ID: "fact-standalone", Skills: []core.Skill{skillGo}},
 		},
 	}
 
@@ -296,40 +296,40 @@ func TestMainProfileSnapshot_SkillUsages(t *testing.T) {
 }
 
 func TestSkillUtilities(t *testing.T) {
-	s1 := domain.Skill{ID: "1", Name: " Go "}
-	s2 := domain.Skill{ID: "2", Name: "Rust"}
-	s3 := domain.Skill{ID: "1", Name: "Go Duplicate"}
+	s1 := core.Skill{ID: "1", Name: " Go "}
+	s2 := core.Skill{ID: "2", Name: "Rust"}
+	s3 := core.Skill{ID: "1", Name: "Go Duplicate"}
 
 	// DeduplicateSkills
-	dedup := domain.DeduplicateSkills([]domain.Skill{s1, s2, s3})
+	dedup := core.DeduplicateSkills([]core.Skill{s1, s2, s3})
 	if len(dedup) != 2 || dedup[0].ID != "1" || dedup[1].ID != "2" {
 		t.Fatalf("unexpected DeduplicateSkills result: %+v", dedup)
 	}
 
 	// MergeUniqueSkills
-	merged := domain.MergeUniqueSkills([]domain.Skill{s1}, []domain.Skill{s2, s3})
+	merged := core.MergeUniqueSkills([]core.Skill{s1}, []core.Skill{s2, s3})
 	if len(merged) != 2 || merged[0].ID != "1" || merged[1].ID != "2" {
 		t.Fatalf("unexpected MergeUniqueSkills result: %+v", merged)
 	}
 
 	// NormalizeSkillName
-	if domain.NormalizeSkillName("  Go Lang  ") != "go lang" {
+	if core.NormalizeSkillName("  Go Lang  ") != "go lang" {
 		t.Fatalf("unexpected NormalizeSkillName result")
 	}
 
 	// FindSkillByName
-	found, ok := domain.FindSkillByName([]domain.Skill{s1, s2}, "go")
+	found, ok := core.FindSkillByName([]core.Skill{s1, s2}, "go")
 	if !ok || found.ID != "1" {
 		t.Fatalf("expected to find skill by case-insensitive name, got %+v (ok=%v)", found, ok)
 	}
-	_, ok = domain.FindSkillByName([]domain.Skill{s1, s2}, "nonexistent")
+	_, ok = core.FindSkillByName([]core.Skill{s1, s2}, "nonexistent")
 	if ok {
 		t.Fatalf("expected false for nonexistent skill name")
 	}
 }
 
 func TestMainProfileSnapshot_NilReceiverSafety(t *testing.T) {
-	var nilSnap *domain.MainProfileSnapshot
+	var nilSnap *core.MainProfileSnapshot
 
 	all := nilSnap.AllSkills()
 	if all == nil || len(all) != 0 {
@@ -357,16 +357,16 @@ func TestMainProfileSnapshot_NilReceiverSafety(t *testing.T) {
 }
 
 func TestMainProfileSnapshot_EducationFacts_And_GeneralCategoryFallback(t *testing.T) {
-	skillUncat := domain.Skill{ID: "sk-uncat", Name: "Leadership", Category: ""}
-	skillEdu := domain.Skill{ID: "sk-edu", Name: "Linear Algebra", Category: "Math"}
+	skillUncat := core.Skill{ID: "sk-uncat", Name: "Leadership", Category: ""}
+	skillEdu := core.Skill{ID: "sk-edu", Name: "Linear Algebra", Category: "Math"}
 
-	snap := &domain.MainProfileSnapshot{
-		Skills: []domain.Skill{skillUncat},
-		Education: []domain.Education{
+	snap := &core.MainProfileSnapshot{
+		Skills: []core.Skill{skillUncat},
+		Education: []core.Education{
 			{
 				ID: "edu-1",
-				Facts: []domain.Fact{
-					{ID: "fact-edu-1", Skills: []domain.Skill{skillEdu}},
+				Facts: []core.Fact{
+					{ID: "fact-edu-1", Skills: []core.Skill{skillEdu}},
 				},
 			},
 		},

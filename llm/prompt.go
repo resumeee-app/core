@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
@@ -43,7 +43,7 @@ type PromptPayload struct {
 	UserPrompt   string
 }
 
-// PromptCompiler implements domain.PromptCompiler using BuildPrompt.
+// PromptCompiler implements core.PromptCompiler using BuildPrompt.
 type PromptCompiler struct{}
 
 // NewPromptCompiler constructs a new PromptCompiler.
@@ -51,13 +51,13 @@ func NewPromptCompiler() *PromptCompiler {
 	return &PromptCompiler{}
 }
 
-// CompilePrompt builds the prompt payload and returns a domain.PromptPreview.
-func (c *PromptCompiler) CompilePrompt(req domain.GenerationRequest) (*domain.PromptPreview, error) {
+// CompilePrompt builds the prompt payload and returns a core.PromptPreview.
+func (c *PromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.PromptPreview, error) {
 	payload, err := BuildPrompt(req)
 	if err != nil {
 		return nil, err
 	}
-	return &domain.PromptPreview{
+	return &core.PromptPreview{
 		SystemPrompt: payload.SystemPrompt,
 		UserPrompt:   payload.UserPrompt,
 	}, nil
@@ -94,13 +94,13 @@ func recordShortID(idMap map[string]string, id, shortID string) {
 	}
 }
 
-func recordSkills(idMap map[string]string, skills []domain.Skill) {
+func recordSkills(idMap map[string]string, skills []core.Skill) {
 	for _, s := range skills {
 		recordShortID(idMap, s.ID, s.EffectiveShortID())
 	}
 }
 
-func recordFacts(idMap map[string]string, facts []domain.Fact) {
+func recordFacts(idMap map[string]string, facts []core.Fact) {
 	for _, f := range facts {
 		recordShortID(idMap, f.ID, f.EffectiveShortID())
 		recordSkills(idMap, f.Skills)
@@ -117,7 +117,7 @@ func recordFacts(idMap map[string]string, facts []domain.Fact) {
 //
 // Returns:
 //   - PromptPayload with populated SystemPrompt and UserPrompt strings, or an error if generation fails.
-func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
+func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 	// Obfuscate candidate contact PII before compiling prompts
 	session := privacy.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
@@ -170,7 +170,7 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 	if strings.TrimSpace(targetLanguage) == "" && obfReq.Preset != nil {
 		targetLanguage = obfReq.Preset.EffectiveLanguage()
 	}
-	validatedLanguage, err := domain.ValidateLanguage(targetLanguage)
+	validatedLanguage, err := core.ValidateLanguage(targetLanguage)
 	if err != nil {
 		return nil, fmt.Errorf("invalid prompt target language: %w", err)
 	}
@@ -203,7 +203,7 @@ func BuildPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
 
 // BuildGapAnalysisPrompt constructs a targeted prompt payload designed exclusively for evaluating
 // candidate qualifications against target job requirements, avoiding full resume generation overhead.
-func BuildGapAnalysisPrompt(req domain.GenerationRequest) (*PromptPayload, error) {
+func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 	// Obfuscate candidate contact PII before compiling prompts
 	session := privacy.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
@@ -303,8 +303,8 @@ func sanitizeATSPromptValue(content string, stripOuterTag string) string {
 
 // BuildATSExtractionPrompt compiles the Stage 1 ATS extraction system and user prompts,
 // obfuscating any candidate contact PII in the rendered resume text prior to LLM transmission.
-func BuildATSExtractionPrompt(req domain.ATSSimulationRequest) (*PromptPayload, *privacy.Session, error) {
-	formatUsed, err := domain.NormalizeATSFormat(req.FormatUsed)
+func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *privacy.Session, error) {
+	formatUsed, err := core.NormalizeATSFormat(req.FormatUsed)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -337,7 +337,7 @@ func BuildATSExtractionPrompt(req domain.ATSSimulationRequest) (*PromptPayload, 
 
 // BuildATSMatchingPrompt compiles the Stage 2 ATS job matching system and user prompts
 // using exclusively the extracted candidate representation from Stage 1 and the target job description.
-func BuildATSMatchingPrompt(branch domain.Branch, extracted *domain.ATSExtractedCandidate, session *privacy.Session) (*PromptPayload, error) {
+func BuildATSMatchingPrompt(branch core.Branch, extracted *core.ATSExtractedCandidate, session *privacy.Session) (*PromptPayload, error) {
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(1024)
 	if err := atsMatchSystemTmpl.Execute(&sysBuilder, nil); err != nil {
@@ -346,7 +346,7 @@ func BuildATSMatchingPrompt(branch domain.Branch, extracted *domain.ATSExtracted
 
 	candidateToSerialize := extracted
 	if candidateToSerialize == nil {
-		candidateToSerialize = &domain.ATSExtractedCandidate{}
+		candidateToSerialize = &core.ATSExtractedCandidate{}
 	}
 	candidateToSerialize.Normalize()
 
@@ -385,7 +385,7 @@ func BuildATSMatchingPrompt(branch domain.Branch, extracted *domain.ATSExtracted
 
 // buildShortIDMap builds a fast lookup dictionary mapping canonical UUIDs to compact short IDs
 // for all entities (skills, experiences, projects, education, certifications, facts) in a profile snapshot.
-func buildShortIDMap(snapshot *domain.MainProfileSnapshot) map[string]string {
+func buildShortIDMap(snapshot *core.MainProfileSnapshot) map[string]string {
 	idMap := make(map[string]string)
 	if snapshot == nil {
 		return idMap
@@ -412,7 +412,7 @@ func buildShortIDMap(snapshot *domain.MainProfileSnapshot) map[string]string {
 
 // serializeProjectedMainProfile projects the profile snapshot using short IDs into a lean main profile structure
 // and serializes it to formatted JSON, preventing leakage of internal database and multi-tenancy attributes.
-func serializeProjectedMainProfile(snapshot *domain.MainProfileSnapshot, idMap map[string]string) (string, error) {
+func serializeProjectedMainProfile(snapshot *core.MainProfileSnapshot, idMap map[string]string) (string, error) {
 	if snapshot == nil {
 		return "", nil
 	}
@@ -426,7 +426,7 @@ func serializeProjectedMainProfile(snapshot *domain.MainProfileSnapshot, idMap m
 
 // resolveShortID maps a canonical or existing identifier to its compact short equivalent.
 // It checks the provided idMap lookup table first; if not found or empty, it falls back
-// to deterministically deriving a short identifier via domain.ShortenID.
+// to deterministically deriving a short identifier via core.ShortenID.
 //
 // Parameters:
 //   - id: The canonical UUID or identifier string to resolve.
@@ -442,15 +442,15 @@ func resolveShortID(id string, idMap map[string]string) string {
 	if mapped, ok := idMap[trimmed]; ok && mapped != "" {
 		return mapped
 	}
-	return domain.ShortenID(trimmed)
+	return core.ShortenID(trimmed)
 }
 
 // projectPriorBullets transforms a slice of TailoredBullets to compact short IDs.
-func projectPriorBullets(bullets []domain.TailoredBullet, idMap map[string]string) []domain.TailoredBullet {
+func projectPriorBullets(bullets []core.TailoredBullet, idMap map[string]string) []core.TailoredBullet {
 	if len(bullets) == 0 {
 		return nil
 	}
-	res := make([]domain.TailoredBullet, len(bullets))
+	res := make([]core.TailoredBullet, len(bullets))
 	for i, b := range bullets {
 		var fids []string
 		if len(b.SourceFactIDs) > 0 {
@@ -466,7 +466,7 @@ func projectPriorBullets(bullets []domain.TailoredBullet, idMap map[string]strin
 				sids[k] = resolveShortID(sid, idMap)
 			}
 		}
-		res[i] = domain.TailoredBullet{
+		res[i] = core.TailoredBullet{
 			Text:           b.Text,
 			SourceFactIDs:  fids,
 			SourceSkillIDs: sids,
@@ -479,7 +479,7 @@ func projectPriorBullets(bullets []domain.TailoredBullet, idMap map[string]strin
 // stripping all non-tailoring contact, supervisory, and location metadata while rewriting all
 // experience/project/education/certification source entity IDs and bullet fact/skill citations to
 // their corresponding compact short identifiers. Non-tailoring struct and pointer fields are zeroed,
-// taking advantage of omitzero and omitempty tags on domain.TailoredContent to prevent data leakage
+// taking advantage of omitzero and omitempty tags on core.TailoredContent to prevent data leakage
 // across revisions without maintaining duplicate struct definitions.
 //
 // Parameters:
@@ -487,19 +487,19 @@ func projectPriorBullets(bullets []domain.TailoredBullet, idMap map[string]strin
 //   - idMap: Lookup map converting canonical UUIDs to short IDs.
 //
 // Returns:
-//   - A new domain.TailoredContent instance stripped of non-tailoring data and projected to compact short identifiers.
-func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string) *domain.TailoredContent {
+//   - A new core.TailoredContent instance stripped of non-tailoring data and projected to compact short identifiers.
+func projectPriorVersion(prior *core.TailoredContent, idMap map[string]string) *core.TailoredContent {
 	if prior == nil {
 		return nil
 	}
-	projected := &domain.TailoredContent{
+	projected := &core.TailoredContent{
 		Summary: prior.Summary,
 	}
 
 	if len(prior.SkillGroups) > 0 {
-		sgs := make([]domain.TailoredSkillGroup, len(prior.SkillGroups))
+		sgs := make([]core.TailoredSkillGroup, len(prior.SkillGroups))
 		for i, sg := range prior.SkillGroups {
-			sgs[i] = domain.TailoredSkillGroup{
+			sgs[i] = core.TailoredSkillGroup{
 				Category: sg.Category,
 				Skills:   append([]string(nil), sg.Skills...),
 			}
@@ -515,9 +515,9 @@ func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string)
 	}
 
 	if len(prior.Experiences) > 0 {
-		exps := make([]domain.TailoredExperience, len(prior.Experiences))
+		exps := make([]core.TailoredExperience, len(prior.Experiences))
 		for i, exp := range prior.Experiences {
-			exps[i] = domain.TailoredExperience{
+			exps[i] = core.TailoredExperience{
 				SourceEntityID: resolveShortID(exp.SourceEntityID, idMap),
 				Company:        exp.Company,
 				RoleTitle:      exp.RoleTitle,
@@ -531,9 +531,9 @@ func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string)
 	}
 
 	if len(prior.Projects) > 0 {
-		projs := make([]domain.TailoredProject, len(prior.Projects))
+		projs := make([]core.TailoredProject, len(prior.Projects))
 		for i, proj := range prior.Projects {
-			projs[i] = domain.TailoredProject{
+			projs[i] = core.TailoredProject{
 				SourceEntityID: resolveShortID(proj.SourceEntityID, idMap),
 				Name:           proj.Name,
 				Role:           proj.Role,
@@ -548,9 +548,9 @@ func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string)
 	}
 
 	if len(prior.Education) > 0 {
-		edus := make([]domain.TailoredEducation, len(prior.Education))
+		edus := make([]core.TailoredEducation, len(prior.Education))
 		for i, edu := range prior.Education {
-			edus[i] = domain.TailoredEducation{
+			edus[i] = core.TailoredEducation{
 				SourceEntityID: resolveShortID(edu.SourceEntityID, idMap),
 				Institution:    edu.Institution,
 				Degree:         edu.Degree,
@@ -565,9 +565,9 @@ func projectPriorVersion(prior *domain.TailoredContent, idMap map[string]string)
 	}
 
 	if len(prior.Certifications) > 0 {
-		certs := make([]domain.TailoredCert, len(prior.Certifications))
+		certs := make([]core.TailoredCert, len(prior.Certifications))
 		for i, cert := range prior.Certifications {
-			certs[i] = domain.TailoredCert{
+			certs[i] = core.TailoredCert{
 				SourceEntityID: resolveShortID(cert.SourceEntityID, idMap),
 				Name:           cert.Name,
 				Issuer:         cert.Issuer,

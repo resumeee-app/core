@@ -12,58 +12,58 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 // Service defines domain operations for branches, async generation, batch synchronization, and version lifecycle.
 type Service interface {
-	ListBranches(ctx context.Context, userID string, staleOnly bool) ([]domain.Branch, error)
-	GetBranch(ctx context.Context, userID, id string) (*domain.Branch, error)
-	CreateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error)
-	UpdateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error)
+	ListBranches(ctx context.Context, userID string, staleOnly bool) ([]core.Branch, error)
+	GetBranch(ctx context.Context, userID, id string) (*core.Branch, error)
+	CreateBranch(ctx context.Context, branch *core.Branch) (*core.Branch, error)
+	UpdateBranch(ctx context.Context, branch *core.Branch) (*core.Branch, error)
 	DeleteBranch(ctx context.Context, userID, id string) error
 
 	// Version Lifecycle
-	GenerateVersion(ctx context.Context, userID, branchID string) (*domain.BranchVersion, error)
+	GenerateVersion(ctx context.Context, userID, branchID string) (*core.BranchVersion, error)
 	SyncBranches(ctx context.Context, userID string, branchIDs []string) ([]string, error)
-	ListVersions(ctx context.Context, branchID string) ([]domain.BranchVersion, error)
-	GetVersion(ctx context.Context, branchID, versionNumOrID string) (*domain.BranchVersion, error)
-	EditVersion(ctx context.Context, userID, branchID, parentVersionNumOrID string, editedContent domain.TailoredContent) (*domain.BranchVersion, error)
-	AnalyzeGaps(ctx context.Context, userID, branchID string) (*domain.GapReport, error)
-	SimulateATS(ctx context.Context, userID, branchID string, opts *domain.ATSSimulationOptions) (*domain.ATSScore, error)
-	GetPromptPreview(ctx context.Context, userID, branchID string, opts *domain.PromptPreviewOptions) (*domain.PromptPreview, error)
+	ListVersions(ctx context.Context, branchID string) ([]core.BranchVersion, error)
+	GetVersion(ctx context.Context, branchID, versionNumOrID string) (*core.BranchVersion, error)
+	EditVersion(ctx context.Context, userID, branchID, parentVersionNumOrID string, editedContent core.TailoredContent) (*core.BranchVersion, error)
+	AnalyzeGaps(ctx context.Context, userID, branchID string) (*core.GapReport, error)
+	SimulateATS(ctx context.Context, userID, branchID string, opts *core.ATSSimulationOptions) (*core.ATSScore, error)
+	GetPromptPreview(ctx context.Context, userID, branchID string, opts *core.PromptPreviewOptions) (*core.PromptPreview, error)
 }
 
 // Config defines the dependencies required by the branch domain service.
 type Config struct {
-	BranchRepo        domain.BranchRepository
-	ProfileRepo       domain.ProfileRepository
-	PresetRepo        domain.PresetRepository
-	TemplateRepo      domain.TemplateRepository
-	QuotaRepo         domain.QuotaRepository
-	JobEnqueuer       domain.JobEnqueuer
+	BranchRepo        core.BranchRepository
+	ProfileRepo       core.ProfileRepository
+	PresetRepo        core.PresetRepository
+	TemplateRepo      core.TemplateRepository
+	QuotaRepo         core.QuotaRepository
+	JobEnqueuer       core.JobEnqueuer
 	Validator         validator.ProvenanceValidator
-	Renderer          domain.TemplateRenderer
-	LLMService        domain.LLMService
-	PromptCompiler    domain.PromptCompiler
+	Renderer          core.TemplateRenderer
+	LLMService        core.LLMService
+	PromptCompiler    core.PromptCompiler
 	Logger            *slog.Logger
 	DailyRequestLimit int
 	MonthlyTokenLimit int
 }
 
 type service struct {
-	branchRepo        domain.BranchRepository
-	profileRepo       domain.ProfileRepository
-	presetRepo        domain.PresetRepository
-	templateRepo      domain.TemplateRepository
-	quotaRepo         domain.QuotaRepository
-	jobEnqueuer       domain.JobEnqueuer
+	branchRepo        core.BranchRepository
+	profileRepo       core.ProfileRepository
+	presetRepo        core.PresetRepository
+	templateRepo      core.TemplateRepository
+	quotaRepo         core.QuotaRepository
+	jobEnqueuer       core.JobEnqueuer
 	validator         validator.ProvenanceValidator
-	renderer          domain.TemplateRenderer
-	llmService        domain.LLMService
-	promptCompiler    domain.PromptCompiler
+	renderer          core.TemplateRenderer
+	llmService        core.LLMService
+	promptCompiler    core.PromptCompiler
 	logger            *slog.Logger
 	dailyRequestLimit int
 	monthlyTokenLimit int
@@ -100,14 +100,14 @@ func NewService(cfg Config) Service {
 	}
 }
 
-func (s *service) validateBranchReferences(ctx context.Context, branch *domain.Branch) error {
+func (s *service) validateBranchReferences(ctx context.Context, branch *core.Branch) error {
 	if s.templateRepo != nil && branch.TemplateSetID != "" {
 		tmpl, err := s.templateRepo.GetTemplate(ctx, branch.UserID, branch.TemplateSetID)
 		if err != nil {
-			return fmt.Errorf("%w: referenced template set %s: %v", domain.ErrValidation, branch.TemplateSetID, err)
+			return fmt.Errorf("%w: referenced template set %s: %v", core.ErrValidation, branch.TemplateSetID, err)
 		}
 		if tmpl != nil && tmpl.UserID != branch.UserID && !tmpl.IsBuiltIn {
-			return fmt.Errorf("%w: template set %s belongs to another tenant", domain.ErrForbidden, branch.TemplateSetID)
+			return fmt.Errorf("%w: template set %s belongs to another tenant", core.ErrForbidden, branch.TemplateSetID)
 		}
 	}
 	presetID := branch.PresetID
@@ -117,34 +117,34 @@ func (s *service) validateBranchReferences(ctx context.Context, branch *domain.B
 	if s.presetRepo != nil && presetID != nil && *presetID != "" {
 		preset, err := s.presetRepo.GetPreset(ctx, branch.UserID, *presetID)
 		if err != nil {
-			return fmt.Errorf("%w: referenced preset %s: %v", domain.ErrValidation, *presetID, err)
+			return fmt.Errorf("%w: referenced preset %s: %v", core.ErrValidation, *presetID, err)
 		}
 		if preset != nil && preset.UserID != branch.UserID && !preset.IsBuiltIn() {
-			return fmt.Errorf("%w: preset %s belongs to another tenant", domain.ErrForbidden, *presetID)
+			return fmt.Errorf("%w: preset %s belongs to another tenant", core.ErrForbidden, *presetID)
 		}
 	}
 	return nil
 }
 
-func isGapReportEmpty(g *domain.GapReport) bool {
+func isGapReportEmpty(g *core.GapReport) bool {
 	if g == nil {
 		return true
 	}
 	return g.MatchScore == nil && g.OverallMatchSummary == "" && len(g.MissingRequirements) == 0 && len(g.IdentifiedGaps) == 0
 }
 
-func ensureGapReportScore(g *domain.GapReport) {
+func ensureGapReportScore(g *core.GapReport) {
 	if g == nil {
 		return
 	}
 	g.Normalize()
 	if g.MatchScore == nil {
-		score := domain.CalculateDeterministicMatchScore(g.MissingRequirements)
+		score := core.CalculateDeterministicMatchScore(g.MissingRequirements)
 		g.MatchScore = &score
 	}
 }
 
-func hydrateBranchFromActiveVersion(branch *domain.Branch, ver *domain.BranchVersion, overwriteExisting bool) {
+func hydrateBranchFromActiveVersion(branch *core.Branch, ver *core.BranchVersion, overwriteExisting bool) {
 	if branch == nil || ver == nil {
 		return
 	}
@@ -170,7 +170,7 @@ func hydrateBranchFromActiveVersion(branch *domain.Branch, ver *domain.BranchVer
 	}
 }
 
-func (s *service) populateBranchActiveMetrics(ctx context.Context, branch *domain.Branch) {
+func (s *service) populateBranchActiveMetrics(ctx context.Context, branch *core.Branch) {
 	if branch == nil {
 		return
 	}
@@ -191,7 +191,7 @@ func (s *service) populateBranchActiveMetrics(ctx context.Context, branch *domai
 }
 
 // ListBranches returns all branches for the user, optionally filtering for stale branches whose synced revision is behind main.
-func (s *service) ListBranches(ctx context.Context, userID string, staleOnly bool) ([]domain.Branch, error) {
+func (s *service) ListBranches(ctx context.Context, userID string, staleOnly bool) ([]core.Branch, error) {
 	branches, err := s.branchRepo.ListBranches(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -214,7 +214,7 @@ func (s *service) ListBranches(ctx context.Context, userID string, staleOnly boo
 	if len(missingActiveVersionIDs) > 0 && s.branchRepo != nil {
 		activeVersions, err := s.branchRepo.GetVersionsByIDs(ctx, missingActiveVersionIDs)
 		if err == nil {
-			versionMap := make(map[string]*domain.BranchVersion, len(activeVersions))
+			versionMap := make(map[string]*core.BranchVersion, len(activeVersions))
 			for i := range activeVersions {
 				versionMap[activeVersions[i].ID] = &activeVersions[i]
 			}
@@ -229,26 +229,26 @@ func (s *service) ListBranches(ctx context.Context, userID string, staleOnly boo
 	}
 
 	if staleOnly {
-		var filtered []domain.Branch
+		var filtered []core.Branch
 		for _, b := range branches {
 			if b.IsStale {
 				filtered = append(filtered, b)
 			}
 		}
 		if filtered == nil {
-			filtered = []domain.Branch{}
+			filtered = []core.Branch{}
 		}
 		return filtered, nil
 	}
 
 	if branches == nil {
-		branches = []domain.Branch{}
+		branches = []core.Branch{}
 	}
 	return branches, nil
 }
 
 // GetBranch retrieves a branch record by its identifier.
-func (s *service) GetBranch(ctx context.Context, userID, id string) (*domain.Branch, error) {
+func (s *service) GetBranch(ctx context.Context, userID, id string) (*core.Branch, error) {
 	branch, err := s.branchRepo.GetBranch(ctx, userID, id)
 	if err != nil {
 		return nil, err
@@ -258,7 +258,7 @@ func (s *service) GetBranch(ctx context.Context, userID, id string) (*domain.Bra
 }
 
 // CreateBranch initializes and saves a new resume branch with main revision synchronization.
-func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error) {
+func (s *service) CreateBranch(ctx context.Context, branch *core.Branch) (*core.Branch, error) {
 	if err := s.validateBranchReferences(ctx, branch); err != nil {
 		return nil, err
 	}
@@ -282,7 +282,7 @@ func (s *service) CreateBranch(ctx context.Context, branch *domain.Branch) (*dom
 }
 
 // UpdateBranch modifies branch configuration while preserving default branch immutability invariants.
-func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*domain.Branch, error) {
+func (s *service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.Branch, error) {
 	if err := s.validateBranchReferences(ctx, branch); err != nil {
 		return nil, err
 	}
@@ -297,14 +297,14 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 		if branch.TargetRole != "" || branch.TargetCompany != "" || branch.TargetRequirements != "" ||
 			branch.BranchInstructions != "" || branch.PresetID != nil || branch.ProviderOverride != "" ||
 			branch.ModelOverride != "" || branch.ReasoningLevel != "" || len(branch.PinnedEntityIDs) > 0 || len(branch.ExcludedEntityIDs) > 0 {
-			return nil, fmt.Errorf("%w: default branch cannot be tailored with custom roles, presets, or instructions", domain.ErrDefaultBranchImmutable)
+			return nil, fmt.Errorf("%w: default branch cannot be tailored with custom roles, presets, or instructions", core.ErrDefaultBranchImmutable)
 		}
-		if branch.Name != "" && branch.Name != domain.DefaultBranchName {
-			return nil, fmt.Errorf("%w: default branch name cannot be altered", domain.ErrDefaultBranchImmutable)
+		if branch.Name != "" && branch.Name != core.DefaultBranchName {
+			return nil, fmt.Errorf("%w: default branch name cannot be altered", core.ErrDefaultBranchImmutable)
 		}
 
 		branch.IsDefault = true
-		branch.Name = domain.DefaultBranchName
+		branch.Name = core.DefaultBranchName
 
 		templateChanged := branch.TemplateSetID != "" && branch.TemplateSetID != existing.TemplateSetID
 		if templateChanged {
@@ -331,16 +331,16 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" {
 		ver, err := s.branchRepo.GetVersion(ctx, "", *branch.ActiveVersionID)
 		if err != nil {
-			if errors.Is(err, domain.ErrNotFound) {
-				return nil, fmt.Errorf("%w: active version %s not found", domain.ErrValidation, *branch.ActiveVersionID)
+			if errors.Is(err, core.ErrNotFound) {
+				return nil, fmt.Errorf("%w: active version %s not found", core.ErrValidation, *branch.ActiveVersionID)
 			}
 			return nil, err
 		}
 		if ver.BranchID != branch.ID {
-			return nil, fmt.Errorf("%w: version %s belongs to branch %s, not %s", domain.ErrValidation, ver.ID, ver.BranchID, branch.ID)
+			return nil, fmt.Errorf("%w: version %s belongs to branch %s, not %s", core.ErrValidation, ver.ID, ver.BranchID, branch.ID)
 		}
-		if ver.Status != domain.VersionStatusCompleted && ver.Status != domain.VersionStatusCompletedWithWarnings {
-			return nil, fmt.Errorf("%w: active version %s must be completed (got %s)", domain.ErrValidation, ver.ID, ver.Status)
+		if ver.Status != core.VersionStatusCompleted && ver.Status != core.VersionStatusCompletedWithWarnings {
+			return nil, fmt.Errorf("%w: active version %s must be completed (got %s)", core.ErrValidation, ver.ID, ver.Status)
 		}
 		hydrateBranchFromActiveVersion(branch, ver, true)
 	}
@@ -355,25 +355,25 @@ func (s *service) UpdateBranch(ctx context.Context, branch *domain.Branch) (*dom
 func (s *service) DeleteBranch(ctx context.Context, userID, id string) error {
 	branch, err := s.branchRepo.GetBranch(ctx, userID, id)
 	if err == nil && branch != nil && branch.IsDefault {
-		return fmt.Errorf("%w: cannot delete default branch", domain.ErrDefaultBranchImmutable)
+		return fmt.Errorf("%w: cannot delete default branch", core.ErrDefaultBranchImmutable)
 	}
 	return s.branchRepo.DeleteBranch(ctx, userID, id)
 }
 
 // ListVersions returns all generated and edited versions belonging to a branch.
-func (s *service) ListVersions(ctx context.Context, branchID string) ([]domain.BranchVersion, error) {
+func (s *service) ListVersions(ctx context.Context, branchID string) ([]core.BranchVersion, error) {
 	versions, err := s.branchRepo.ListVersions(ctx, branchID)
 	if err != nil {
 		return nil, err
 	}
 	if versions == nil {
-		versions = []domain.BranchVersion{}
+		versions = []core.BranchVersion{}
 	}
 	return versions, nil
 }
 
 // GetVersion resolves a version by either sequential version number (1, 2, ...) or version UUID.
-func (s *service) GetVersion(ctx context.Context, branchID, versionNumOrID string) (*domain.BranchVersion, error) {
+func (s *service) GetVersion(ctx context.Context, branchID, versionNumOrID string) (*core.BranchVersion, error) {
 	if num, err := strconv.Atoi(versionNumOrID); err == nil && num > 0 {
 		ver, err := s.branchRepo.GetVersionByNumber(ctx, branchID, num)
 		if err == nil {
@@ -384,7 +384,7 @@ func (s *service) GetVersion(ctx context.Context, branchID, versionNumOrID strin
 }
 
 // GenerateVersion enqueues an asynchronous generation job or synchronously renders default branch versions.
-func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) (*domain.BranchVersion, error) {
+func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) (*core.BranchVersion, error) {
 	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
@@ -407,23 +407,23 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 
 	var reservationID string
 	if s.quotaRepo != nil {
-		rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationResumeTailoring, 2000, s.dailyRequestLimit, s.monthlyTokenLimit)
+		rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, s.dailyRequestLimit, s.monthlyTokenLimit)
 		if qErr != nil {
 			return nil, qErr
 		}
 		reservationID = rec.ID
 	}
 
-	ver := &domain.BranchVersion{
+	ver := &core.BranchVersion{
 		ID:                "ver-" + uuid.New().String(),
 		UserID:            userID,
 		BranchID:          branch.ID,
-		Status:            domain.VersionStatusPending,
+		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  mainRevision,
 		TemplateSetIDUsed:  branch.TemplateSetID,
 		ProviderUsed:       provider,
 		ModelUsed:          model,
-		SourceType:         domain.SourceTypeLLMGeneration,
+		SourceType:         core.SourceTypeLLMGeneration,
 		ParentVersionID:    branch.ActiveVersionID,
 	}
 
@@ -435,7 +435,7 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 	}
 
 	if s.jobEnqueuer != nil {
-		job := domain.GenerationJob{
+		job := core.GenerationJob{
 			UserID:        userID,
 			BranchID:      branch.ID,
 			VersionID:     ver.ID,
@@ -445,9 +445,9 @@ func (s *service) GenerateVersion(ctx context.Context, userID, branchID string) 
 			if reservationID != "" && s.quotaRepo != nil {
 				_ = s.quotaRepo.ReleaseQuota(ctx, reservationID, "generation queue full or error")
 			}
-			if errors.Is(err, domain.ErrQueueFull) {
-				_ = s.branchRepo.UpdateVersionStatus(ctx, ver.ID, domain.VersionStatusFailed, "generation queue full")
-				return nil, domain.ErrQueueFull
+			if errors.Is(err, core.ErrQueueFull) {
+				_ = s.branchRepo.UpdateVersionStatus(ctx, ver.ID, core.VersionStatusFailed, "generation queue full")
+				return nil, core.ErrQueueFull
 			}
 			return nil, err
 		}
@@ -468,7 +468,7 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 		mainRevision = prof.MainRevision
 	}
 
-	var targetBranches []domain.Branch
+	var targetBranches []core.Branch
 	if len(branchIDs) > 0 {
 		for _, bID := range branchIDs {
 			b, err := s.branchRepo.GetBranch(ctx, userID, bID)
@@ -505,23 +505,23 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 
 		var reservationID string
 		if s.quotaRepo != nil {
-			rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, domain.OperationResumeTailoring, 2000, s.dailyRequestLimit, s.monthlyTokenLimit)
+			rec, qErr := s.quotaRepo.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, s.dailyRequestLimit, s.monthlyTokenLimit)
 			if qErr != nil {
 				return enqueuedIDs, qErr
 			}
 			reservationID = rec.ID
 		}
 
-		ver := &domain.BranchVersion{
+		ver := &core.BranchVersion{
 			ID:               "ver-" + uuid.New().String(),
 			UserID:           userID,
 			BranchID:         b.ID,
-			Status:           domain.VersionStatusPending,
+			Status:           core.VersionStatusPending,
 			MainRevisionUsed: mainRevision,
 			TemplateSetIDUsed:  b.TemplateSetID,
 			ProviderUsed:       provider,
 			ModelUsed:          model,
-			SourceType:         domain.SourceTypeLLMGeneration,
+			SourceType:         core.SourceTypeLLMGeneration,
 			ParentVersionID:    b.ActiveVersionID,
 		}
 
@@ -533,7 +533,7 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 		}
 
 		if s.jobEnqueuer != nil {
-			job := domain.GenerationJob{
+			job := core.GenerationJob{
 				UserID:        userID,
 				BranchID:      b.ID,
 				VersionID:     ver.ID,
@@ -543,9 +543,9 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 				if s.quotaRepo != nil && reservationID != "" {
 					_ = s.quotaRepo.ReleaseQuota(ctx, reservationID, "failed to enqueue generation job")
 				}
-				if errors.Is(err, domain.ErrQueueFull) {
-					_ = s.branchRepo.UpdateVersionStatus(ctx, ver.ID, domain.VersionStatusFailed, "generation queue full")
-					return enqueuedIDs, domain.ErrQueueFull
+				if errors.Is(err, core.ErrQueueFull) {
+					_ = s.branchRepo.UpdateVersionStatus(ctx, ver.ID, core.VersionStatusFailed, "generation queue full")
+					return enqueuedIDs, core.ErrQueueFull
 				}
 				return enqueuedIDs, err
 			}
@@ -561,14 +561,14 @@ func (s *service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 }
 
 // EditVersion applies provenance validation to manual edits, renders templates, and appends a new immutable version.
-func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersionNumOrID string, editedContent domain.TailoredContent) (*domain.BranchVersion, error) {
+func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersionNumOrID string, editedContent core.TailoredContent) (*core.BranchVersion, error) {
 	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
 	}
 
 	if branch.IsDefault {
-		return nil, fmt.Errorf("%w: default branch cannot be manually edited", domain.ErrDefaultBranchImmutable)
+		return nil, fmt.Errorf("%w: default branch cannot be manually edited", core.ErrDefaultBranchImmutable)
 	}
 
 	parentVer, err := s.GetVersion(ctx, branchID, parentVersionNumOrID)
@@ -594,12 +594,12 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	// 1. Provenance validation ("No Lies" invariant)
 	if s.validator != nil {
 		if err := s.validator.ValidateStrict(&editedContent, snapshot, branch); err != nil {
-			return nil, fmt.Errorf("%w: %v", domain.ErrProvenance, err)
+			return nil, fmt.Errorf("%w: %v", core.ErrProvenance, err)
 		}
 	}
 
 	// 2. Synchronous Go template rendering
-	var rendered *domain.RenderOutput
+	var rendered *core.RenderOutput
 	if s.renderer != nil {
 		r, err := s.renderer.Render(ctx, tmpl, prof, &editedContent)
 		if err != nil {
@@ -607,20 +607,20 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 		}
 		rendered = r
 	} else {
-		rendered = &domain.RenderOutput{}
+		rendered = &core.RenderOutput{}
 	}
 
 	// 3. Construct immutable sequential version vN+1
-	newVer := &domain.BranchVersion{
+	newVer := &core.BranchVersion{
 		ID:               "ver-" + uuid.New().String(),
 		UserID:           branch.UserID,
 		BranchID:         branch.ID,
-		Status:           domain.VersionStatusCompleted,
+		Status:           core.VersionStatusCompleted,
 		MainRevisionUsed: snapshot.MainRevision,
 		TemplateSetIDUsed:  branch.TemplateSetID,
 		ProviderUsed:       "manual",
 		ModelUsed:          "manual",
-		SourceType:         domain.SourceTypeManualEdit,
+		SourceType:         core.SourceTypeManualEdit,
 		ParentVersionID:    &parentVer.ID,
 		TailoredContent:    &editedContent,
 		GapReport:          parentVer.GapReport,
@@ -642,7 +642,7 @@ func (s *service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 }
 
 // renderDefaultBranchVersion synchronously renders a resume version for the default branch directly from the main profile.
-func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string, branch *domain.Branch) (*domain.BranchVersion, error) {
+func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string, branch *core.Branch) (*core.BranchVersion, error) {
 	if s.profileRepo == nil {
 		return nil, errors.New("profile repository required for default branch rendering")
 	}
@@ -669,9 +669,9 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 		return nil, fmt.Errorf("getting template %s for default branch: %w", tmplID, err)
 	}
 
-	tailoredContent := domain.SnapshotToTailoredContent(snapshot)
+	tailoredContent := core.SnapshotToTailoredContent(snapshot)
 
-	var rendered *domain.RenderOutput
+	var rendered *core.RenderOutput
 	if s.renderer != nil {
 		r, err := s.renderer.Render(ctx, tmpl, prof, tailoredContent)
 		if err != nil {
@@ -679,20 +679,20 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 		}
 		rendered = r
 	} else {
-		rendered = &domain.RenderOutput{}
+		rendered = &core.RenderOutput{}
 	}
 
 	now := time.Now().UTC()
-	ver := &domain.BranchVersion{
+	ver := &core.BranchVersion{
 		ID:                "ver-" + uuid.New().String(),
 		UserID:            userID,
 		BranchID:          branch.ID,
-		Status:            domain.VersionStatusCompleted,
+		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  snapshot.MainRevision,
 		TemplateSetIDUsed: branch.TemplateSetID,
 		ProviderUsed:      "none",
 		ModelUsed:         "none",
-		SourceType:        domain.SourceTypeMainProfile,
+		SourceType:        core.SourceTypeMainProfile,
 		ParentVersionID:   branch.ActiveVersionID,
 		TailoredContent:   tailoredContent,
 		HTMLOutput:        rendered.HTML,
@@ -716,15 +716,15 @@ func (s *service) renderDefaultBranchVersion(ctx context.Context, userID string,
 	return ver, nil
 }
 
-func (s *service) reserveOperationQuota(ctx context.Context, userID string, op domain.LLMOperationType, estimatedTokens, fallbackTokens int) (func(domain.TokenUsage, error), error) {
+func (s *service) reserveOperationQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, fallbackTokens int) (func(core.TokenUsage, error), error) {
 	if s.llmService == nil || s.quotaRepo == nil {
-		return func(domain.TokenUsage, error) {}, nil
+		return func(core.TokenUsage, error) {}, nil
 	}
 	rec, err := s.quotaRepo.ReserveQuota(ctx, userID, op, estimatedTokens, s.dailyRequestLimit, s.monthlyTokenLimit)
 	if err != nil {
 		return nil, err
 	}
-	return func(usage domain.TokenUsage, retErr error) {
+	return func(usage core.TokenUsage, retErr error) {
 		if rec == nil {
 			return
 		}
@@ -756,12 +756,12 @@ func (s *service) releaseATSInFlight(versionID string) {
 }
 
 // AnalyzeGaps performs fast decoupled gap analysis for a branch against the main profile snapshot.
-func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*domain.GapReport, error) {
+func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*core.GapReport, error) {
 	var (
 		retErr error
-		usage  domain.TokenUsage
+		usage  core.TokenUsage
 	)
-	finishQuota, err := s.reserveOperationQuota(ctx, userID, domain.OperationGapAnalysis, 1000, 500)
+	finishQuota, err := s.reserveOperationQuota(ctx, userID, core.OperationGapAnalysis, 1000, 500)
 	if err != nil {
 		return nil, err
 	}
@@ -782,7 +782,7 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 	}
 
 	// Fetch active version once if present
-	var activeVer *domain.BranchVersion
+	var activeVer *core.BranchVersion
 	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" {
 		v, vErr := s.branchRepo.GetVersion(ctx, branch.ID, *branch.ActiveVersionID)
 		if vErr != nil && s.logger != nil {
@@ -792,16 +792,16 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 		}
 	}
 
-	var report *domain.GapReport
+	var report *core.GapReport
 	if s.llmService != nil {
-		req := domain.GenerationRequest{
+		req := core.GenerationRequest{
 			Model:          branch.ModelOverride,
 			ReasoningLevel: branch.ReasoningLevel,
 			MainProfile:    snapshot,
 			BranchContext:  *branch,
 		}
 		if analyzer, ok := s.llmService.(interface {
-			GenerateGapAnalysis(ctx context.Context, req domain.GenerationRequest) (*domain.GapReport, error)
+			GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error)
 		}); ok {
 			r, err := analyzer.GenerateGapAnalysis(ctx, req)
 			if err != nil {
@@ -824,9 +824,9 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 			report = activeVer.GapReport
 		}
 		if report == nil {
-			report = &domain.GapReport{
+			report = &core.GapReport{
 				OverallMatchSummary: "No qualification gaps detected or LLM service unconfigured.",
-				MissingRequirements: []domain.GapItem{},
+				MissingRequirements: []core.GapItem{},
 			}
 		}
 	}
@@ -835,12 +835,12 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 	report.Normalize()
 
 	if report.MatchScore == nil {
-		score := domain.CalculateDeterministicMatchScore(report.MissingRequirements)
+		score := core.CalculateDeterministicMatchScore(report.MissingRequirements)
 		report.MatchScore = &score
 	}
 
 	if report.SkillCoverageRatio == nil {
-		ratio := domain.CalculateSkillCoverageRatio(snapshot.AllSkills(), report.MissingRequirements, branch.TargetRequirements)
+		ratio := core.CalculateSkillCoverageRatio(snapshot.AllSkills(), report.MissingRequirements, branch.TargetRequirements)
 		report.SkillCoverageRatio = &ratio
 	}
 
@@ -863,7 +863,7 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*do
 
 // GetPromptPreview compiles the system and user prompt templates against the branch's candidate profile,
 // rules hierarchy, and target requirements without dispatching any request to an LLM provider.
-func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string, opts *domain.PromptPreviewOptions) (*domain.PromptPreview, error) {
+func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string, opts *core.PromptPreviewOptions) (*core.PromptPreview, error) {
 	branch, err := s.branchRepo.GetBranch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
@@ -905,7 +905,7 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 		}
 	}
 
-	var preset *domain.Preset
+	var preset *core.Preset
 	var presetInstructions string
 	if b.PresetID != nil && *b.PresetID != "" {
 		p, pErr := s.presetRepo.GetPreset(ctx, userID, *b.PresetID)
@@ -917,7 +917,7 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 		}
 	}
 
-	var priorContent *domain.TailoredContent
+	var priorContent *core.TailoredContent
 	if b.ActiveVersionID != nil && *b.ActiveVersionID != "" {
 		activeVer, vErr := s.branchRepo.GetVersion(ctx, b.ID, *b.ActiveVersionID)
 		if vErr == nil && activeVer != nil {
@@ -932,7 +932,7 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 
 	targetLang := preset.EffectiveLanguage()
 
-	req := domain.GenerationRequest{
+	req := core.GenerationRequest{
 		Model:              model,
 		ReasoningLevel:     reasoningLevel,
 		MainProfile:        snapshot,
@@ -945,7 +945,7 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 	}
 
 	if s.promptCompiler == nil {
-		return nil, fmt.Errorf("%w: prompt compiler not configured", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: prompt compiler not configured", core.ErrValidation)
 	}
 
 	preview, err := s.promptCompiler.CompilePrompt(req)
@@ -956,7 +956,7 @@ func (s *service) GetPromptPreview(ctx context.Context, userID, branchID string,
 	return preview, nil
 }
 
-func formatTailoredContentAsText(tc *domain.TailoredContent) string {
+func formatTailoredContentAsText(tc *core.TailoredContent) string {
 	if tc == nil {
 		return ""
 	}
@@ -1025,7 +1025,7 @@ func formatTailoredContentAsText(tc *domain.TailoredContent) string {
 	return strings.TrimSpace(sb.String())
 }
 
-func (s *service) resolveVersionResumeText(ctx context.Context, userID string, branch *domain.Branch, ver *domain.BranchVersion, snapshot *domain.MainProfileSnapshot, requestedFormat string) (string, string, error) {
+func (s *service) resolveVersionResumeText(ctx context.Context, userID string, branch *core.Branch, ver *core.BranchVersion, snapshot *core.MainProfileSnapshot, requestedFormat string) (string, string, error) {
 	htmlOut := ver.HTMLOutput
 	mdOut := ver.MarkdownOutput
 	txtOut := ver.PlainTextOutput
@@ -1036,7 +1036,7 @@ func (s *service) resolveVersionResumeText(ctx context.Context, userID string, b
 		}
 		if tmplID != "" {
 			if tmpl, tErr := s.templateRepo.GetTemplate(ctx, userID, tmplID); tErr == nil && tmpl != nil {
-				var prof *domain.Profile
+				var prof *core.Profile
 				if snapshot != nil {
 					prof = &snapshot.Profile
 				}
@@ -1057,50 +1057,50 @@ func (s *service) resolveVersionResumeText(ctx context.Context, userID string, b
 
 	var resumeText, formatUsed string
 	switch requestedFormat {
-	case string(domain.OutputFormatHTML):
+	case string(core.OutputFormatHTML):
 		if strings.TrimSpace(htmlOut) != "" {
 			resumeText = htmlOut
-			formatUsed = string(domain.OutputFormatHTML)
+			formatUsed = string(core.OutputFormatHTML)
 		}
-	case string(domain.OutputFormatPlainText):
+	case string(core.OutputFormatPlainText):
 		if strings.TrimSpace(txtOut) != "" {
 			resumeText = txtOut
-			formatUsed = string(domain.OutputFormatPlainText)
+			formatUsed = string(core.OutputFormatPlainText)
 		}
 	}
 	if strings.TrimSpace(resumeText) == "" {
 		if strings.TrimSpace(mdOut) != "" {
 			resumeText = mdOut
-			formatUsed = string(domain.OutputFormatMarkdown)
+			formatUsed = string(core.OutputFormatMarkdown)
 		} else if strings.TrimSpace(txtOut) != "" {
 			resumeText = txtOut
-			formatUsed = string(domain.OutputFormatPlainText)
+			formatUsed = string(core.OutputFormatPlainText)
 		} else if strings.TrimSpace(htmlOut) != "" {
 			resumeText = htmlOut
-			formatUsed = string(domain.OutputFormatHTML)
+			formatUsed = string(core.OutputFormatHTML)
 		} else if ver.TailoredContent != nil {
 			resumeText = formatTailoredContentAsText(ver.TailoredContent)
-			formatUsed = string(domain.OutputFormatMarkdown)
+			formatUsed = string(core.OutputFormatMarkdown)
 		}
 	}
 
 	if strings.TrimSpace(resumeText) == "" {
-		return "", "", fmt.Errorf("%w: tailored version contains no resume text to evaluate", domain.ErrValidation)
+		return "", "", fmt.Errorf("%w: tailored version contains no resume text to evaluate", core.ErrValidation)
 	}
 	return resumeText, formatUsed, nil
 }
 
 // SimulateATS executes on-demand ATS extraction and job matching score calculation for a completed tailored version.
 // It enforces:
-//   - Disabled for Default Main Branch (returns domain.ErrDefaultBranchImmutable).
-//   - Disabled when Job Description (TargetRequirements) is not provided (returns domain.ErrValidation).
-//   - Triggered once per successfully tailored version (returns domain.ErrConflict if already calculated for that version).
-func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts *domain.ATSSimulationOptions) (*domain.ATSScore, error) {
+//   - Disabled for Default Main Branch (returns core.ErrDefaultBranchImmutable).
+//   - Disabled when Job Description (TargetRequirements) is not provided (returns core.ErrValidation).
+//   - Triggered once per successfully tailored version (returns core.ErrConflict if already calculated for that version).
+func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts *core.ATSSimulationOptions) (*core.ATSScore, error) {
 	rawFormat := ""
 	if opts != nil {
 		rawFormat = opts.Format
 	}
-	requestedFormat, err := domain.NormalizeATSFormat(rawFormat)
+	requestedFormat, err := core.NormalizeATSFormat(rawFormat)
 	if err != nil {
 		return nil, err
 	}
@@ -1111,11 +1111,11 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 	}
 
 	if branch.IsDefault {
-		return nil, fmt.Errorf("%w: ATS score simulation is disabled for the default main branch", domain.ErrDefaultBranchImmutable)
+		return nil, fmt.Errorf("%w: ATS score simulation is disabled for the default main branch", core.ErrDefaultBranchImmutable)
 	}
 
 	if strings.TrimSpace(branch.TargetRequirements) == "" {
-		return nil, fmt.Errorf("%w: job description (target_requirements) is required to calculate ATS score", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: job description (target_requirements) is required to calculate ATS score", core.ErrValidation)
 	}
 
 	targetVersionID := ""
@@ -1125,27 +1125,27 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 		targetVersionID = strings.TrimSpace(*branch.ActiveVersionID)
 	}
 	if targetVersionID == "" {
-		return nil, fmt.Errorf("%w: branch has no completed tailored version to evaluate", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: branch has no completed tailored version to evaluate", core.ErrValidation)
 	}
 
 	ver, err := s.GetVersion(ctx, branch.ID, targetVersionID)
 	if err != nil {
 		return nil, err
 	}
-	if ver.Status != domain.VersionStatusCompleted && ver.Status != domain.VersionStatusCompletedWithWarnings {
-		return nil, fmt.Errorf("%w: ATS score can only be generated for a completed tailored version (status is %s)", domain.ErrValidation, ver.Status)
+	if ver.Status != core.VersionStatusCompleted && ver.Status != core.VersionStatusCompletedWithWarnings {
+		return nil, fmt.Errorf("%w: ATS score can only be generated for a completed tailored version (status is %s)", core.ErrValidation, ver.Status)
 	}
 
 	if ver.ATSScore != nil {
-		return nil, fmt.Errorf("%w: ATS score has already been generated for version %s", domain.ErrConflict, ver.ID)
+		return nil, fmt.Errorf("%w: ATS score has already been generated for version %s", core.ErrConflict, ver.ID)
 	}
 
 	if !s.tryAcquireATSInFlight(ver.ID) {
-		return nil, fmt.Errorf("%w: ATS score calculation already in progress or completed for version %s", domain.ErrConflict, ver.ID)
+		return nil, fmt.Errorf("%w: ATS score calculation already in progress or completed for version %s", core.ErrConflict, ver.ID)
 	}
 	defer s.releaseATSInFlight(ver.ID)
 
-	var snapshot *domain.MainProfileSnapshot
+	var snapshot *core.MainProfileSnapshot
 	if s.profileRepo != nil {
 		snap, snapErr := s.profileRepo.GetSnapshot(ctx, userID)
 		if snapErr != nil {
@@ -1161,9 +1161,9 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 
 	var (
 		retErr error
-		usage  domain.TokenUsage
+		usage  core.TokenUsage
 	)
-	finishQuota, err := s.reserveOperationQuota(ctx, userID, domain.OperationATSSimulation, 1500, 800)
+	finishQuota, err := s.reserveOperationQuota(ctx, userID, core.OperationATSSimulation, 1500, 800)
 	if err != nil {
 		return nil, err
 	}
@@ -1171,13 +1171,13 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 		finishQuota(usage, retErr)
 	}()
 
-	var atsScore *domain.ATSScore
+	var atsScore *core.ATSScore
 	if s.llmService != nil {
 		if simulator, ok := s.llmService.(interface {
-			SimulateATS(ctx context.Context, req domain.ATSSimulationRequest) (*domain.ATSSimulationResponse, error)
+			SimulateATS(ctx context.Context, req core.ATSSimulationRequest) (*core.ATSSimulationResponse, error)
 		}); ok {
 			model := branch.ModelOverride
-			simResp, simErr := simulator.SimulateATS(ctx, domain.ATSSimulationRequest{
+			simResp, simErr := simulator.SimulateATS(ctx, core.ATSSimulationRequest{
 				Model:          model,
 				ReasoningLevel: branch.ReasoningLevel,
 				ResumeText:     resumeText,
@@ -1195,7 +1195,7 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 		}
 	}
 	if atsScore == nil {
-		atsScore = domain.CalculateDeterministicATSScore(resumeText, formatUsed, branch.TargetRequirements)
+		atsScore = core.CalculateDeterministicATSScore(resumeText, formatUsed, branch.TargetRequirements)
 	}
 
 	if atsScore.EvaluatedAt == nil {

@@ -1,11 +1,11 @@
-package domain_test
+package core_test
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 func TestGapReport_JSONHarmonization(t *testing.T) {
@@ -25,7 +25,7 @@ func TestGapReport_JSONHarmonization(t *testing.T) {
 			"strategic_recommendations": ["Emphasize Go concurrency patterns."]
 		}`
 
-		var report domain.GapReport
+		var report core.GapReport
 		if err := json.Unmarshal([]byte(input), &report); err != nil {
 			t.Fatalf("failed to unmarshal GapReport: %v", err)
 		}
@@ -48,7 +48,7 @@ func TestGapReport_JSONHarmonization(t *testing.T) {
 		if report.MissingRequirements[0].MissingArea != "Container Orchestration" {
 			t.Errorf("expected missing area 'Container Orchestration', got %q", report.MissingRequirements[0].MissingArea)
 		}
-		if report.MissingRequirements[0].Importance != domain.GapImportanceCritical {
+		if report.MissingRequirements[0].Importance != core.GapImportanceCritical {
 			t.Errorf("expected importance 'critical', got %q", report.MissingRequirements[0].Importance)
 		}
 	})
@@ -66,7 +66,7 @@ func TestGapReport_JSONHarmonization(t *testing.T) {
 			]
 		}`
 
-		var report domain.GapReport
+		var report core.GapReport
 		if err := json.Unmarshal([]byte(input), &report); err != nil {
 			t.Fatalf("failed to unmarshal GapReport: %v", err)
 		}
@@ -85,14 +85,14 @@ func TestGapReport_JSONHarmonization(t *testing.T) {
 
 	t.Run("marshaling includes both missing_requirements and identified_gaps", func(t *testing.T) {
 		score := 90.0
-		report := domain.GapReport{
+		report := core.GapReport{
 			OverallMatchSummary: "Solid fit",
 			MatchScore:          &score,
-			MissingRequirements: []domain.GapItem{
+			MissingRequirements: []core.GapItem{
 				{
 					Requirement:      "Kafka stream processing",
 					MissingArea:      "Messaging",
-					Importance:       domain.GapImportancePreferred,
+					Importance:       core.GapImportancePreferred,
 					ClarifyingPrompt: "Have you operated Kafka consumers at high throughput?",
 				},
 			},
@@ -123,61 +123,61 @@ func TestGapReport_JSONHarmonization(t *testing.T) {
 func TestCalculateDeterministicMatchScore(t *testing.T) {
 	tests := []struct {
 		name     string
-		gaps     []domain.GapItem
+		gaps     []core.GapItem
 		expected float64
 	}{
 		{
 			name:     "empty gaps returns 100",
-			gaps:     []domain.GapItem{},
+			gaps:     []core.GapItem{},
 			expected: 100.0,
 		},
 		{
 			name: "single critical gap deducts 15",
-			gaps: []domain.GapItem{
-				{Requirement: "G1", Importance: domain.GapImportanceCritical},
+			gaps: []core.GapItem{
+				{Requirement: "G1", Importance: core.GapImportanceCritical},
 			},
 			expected: 85.0,
 		},
 		{
 			name: "single preferred gap deducts 7",
-			gaps: []domain.GapItem{
-				{Requirement: "G1", Importance: domain.GapImportancePreferred},
+			gaps: []core.GapItem{
+				{Requirement: "G1", Importance: core.GapImportancePreferred},
 			},
 			expected: 93.0,
 		},
 		{
 			name: "single nice to have gap deducts 3",
-			gaps: []domain.GapItem{
-				{Requirement: "G1", Importance: domain.GapImportanceNiceToHave},
+			gaps: []core.GapItem{
+				{Requirement: "G1", Importance: core.GapImportanceNiceToHave},
 			},
 			expected: 97.0,
 		},
 		{
 			name: "suggested gap acts as nice to have alias (-3)",
-			gaps: []domain.GapItem{
-				{Requirement: "G1", Importance: domain.GapImportanceSuggested},
+			gaps: []core.GapItem{
+				{Requirement: "G1", Importance: core.GapImportanceSuggested},
 			},
 			expected: 97.0,
 		},
 		{
 			name: "combined gaps: 1 critical, 1 preferred, 1 nice_to_have = -25",
-			gaps: []domain.GapItem{
-				{Requirement: "G1", Importance: domain.GapImportanceCritical},
-				{Requirement: "G2", Importance: domain.GapImportancePreferred},
-				{Requirement: "G3", Importance: domain.GapImportanceNiceToHave},
+			gaps: []core.GapItem{
+				{Requirement: "G1", Importance: core.GapImportanceCritical},
+				{Requirement: "G2", Importance: core.GapImportancePreferred},
+				{Requirement: "G3", Importance: core.GapImportanceNiceToHave},
 			},
 			expected: 75.0,
 		},
 		{
 			name: "many critical gaps clamp at 0.0",
-			gaps: []domain.GapItem{
-				{Requirement: "G1", Importance: domain.GapImportanceCritical},
-				{Requirement: "G2", Importance: domain.GapImportanceCritical},
-				{Requirement: "G3", Importance: domain.GapImportanceCritical},
-				{Requirement: "G4", Importance: domain.GapImportanceCritical},
-				{Requirement: "G5", Importance: domain.GapImportanceCritical},
-				{Requirement: "G6", Importance: domain.GapImportanceCritical},
-				{Requirement: "G7", Importance: domain.GapImportanceCritical},
+			gaps: []core.GapItem{
+				{Requirement: "G1", Importance: core.GapImportanceCritical},
+				{Requirement: "G2", Importance: core.GapImportanceCritical},
+				{Requirement: "G3", Importance: core.GapImportanceCritical},
+				{Requirement: "G4", Importance: core.GapImportanceCritical},
+				{Requirement: "G5", Importance: core.GapImportanceCritical},
+				{Requirement: "G6", Importance: core.GapImportanceCritical},
+				{Requirement: "G7", Importance: core.GapImportanceCritical},
 			},
 			expected: 0.0,
 		},
@@ -185,7 +185,7 @@ func TestCalculateDeterministicMatchScore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			score := domain.CalculateDeterministicMatchScore(tt.gaps)
+			score := core.CalculateDeterministicMatchScore(tt.gaps)
 			if score != tt.expected {
 				t.Errorf("CalculateDeterministicMatchScore() = %v, expected %v", score, tt.expected)
 			}
@@ -194,7 +194,7 @@ func TestCalculateDeterministicMatchScore(t *testing.T) {
 }
 
 func TestCalculateSkillCoverageRatio(t *testing.T) {
-	candidateSkills := []domain.Skill{
+	candidateSkills := []core.Skill{
 		{Name: "Go"},
 		{Name: "Kubernetes"},
 		{Name: "PostgreSQL"},
@@ -202,35 +202,35 @@ func TestCalculateSkillCoverageRatio(t *testing.T) {
 	}
 
 	t.Run("calculates ratio when candidate has matching skills", func(t *testing.T) {
-		gaps := []domain.GapItem{
+		gaps := []core.GapItem{
 			{Requirement: "Raft consensus protocol"},
 		}
 		target := "Must be experienced in Go and Kubernetes and Raft"
 
 		// Go and Kubernetes match (2 matched). 1 gap.
 		// total = 2 + 1 = 3 -> ratio = 2/3 = 0.67
-		ratio := domain.CalculateSkillCoverageRatio(candidateSkills, gaps, target)
+		ratio := core.CalculateSkillCoverageRatio(candidateSkills, gaps, target)
 		if ratio != 0.67 {
 			t.Errorf("expected 0.67, got %v", ratio)
 		}
 	})
 
 	t.Run("returns 1.0 when candidate has no gaps", func(t *testing.T) {
-		gaps := []domain.GapItem{}
+		gaps := []core.GapItem{}
 		target := "Experienced in Go and PostgreSQL"
-		ratio := domain.CalculateSkillCoverageRatio(candidateSkills, gaps, target)
+		ratio := core.CalculateSkillCoverageRatio(candidateSkills, gaps, target)
 		if ratio != 1.0 {
 			t.Errorf("expected 1.0, got %v", ratio)
 		}
 	})
 
 	t.Run("returns 0.0 when candidate has zero matching skills and multiple gaps", func(t *testing.T) {
-		gaps := []domain.GapItem{
+		gaps := []core.GapItem{
 			{Requirement: "Cobol"},
 			{Requirement: "Mainframe"},
 		}
 		target := "Cobol and Mainframe systems"
-		ratio := domain.CalculateSkillCoverageRatio(candidateSkills, gaps, target)
+		ratio := core.CalculateSkillCoverageRatio(candidateSkills, gaps, target)
 		if ratio != 0.0 {
 			t.Errorf("expected 0.0, got %v", ratio)
 		}
@@ -239,27 +239,27 @@ func TestCalculateSkillCoverageRatio(t *testing.T) {
 
 func TestTailoredContent_OmitZeroNonTailoringFields(t *testing.T) {
 	t.Run("Location.IsZero correctly identifies empty locations", func(t *testing.T) {
-		emptyLoc := domain.Location{}
+		emptyLoc := core.Location{}
 		if !emptyLoc.IsZero() {
 			t.Errorf("expected empty Location to be zero")
 		}
 
-		populatedLoc := domain.Location{City: "San Francisco"}
+		populatedLoc := core.Location{City: "San Francisco"}
 		if populatedLoc.IsZero() {
 			t.Errorf("expected populated Location to not be zero")
 		}
 	})
 
 	t.Run("omitzero and omitempty omit unpopulated location and contact fields", func(t *testing.T) {
-		content := domain.TailoredContent{
+		content := core.TailoredContent{
 			Summary: "Lead developer summary.",
-			Experiences: []domain.TailoredExperience{
+			Experiences: []core.TailoredExperience{
 				{
 					SourceEntityID: "exp-1",
 					Company:        "Stripe",
 					RoleTitle:      "Staff Engineer",
-					StartDate:      domain.NewDate(2022, 1, 1),
-					Bullets: []domain.TailoredBullet{
+					StartDate:      core.NewDate(2022, 1, 1),
+					Bullets: []core.TailoredBullet{
 						{
 							Text:          "Scaled payment engine.",
 							SourceFactIDs: []string{"fact-1"},
@@ -267,7 +267,7 @@ func TestTailoredContent_OmitZeroNonTailoringFields(t *testing.T) {
 					},
 				},
 			},
-			Education: []domain.TailoredEducation{
+			Education: []core.TailoredEducation{
 				{
 					SourceEntityID: "edu-1",
 					Institution:    "Stanford",
@@ -337,7 +337,7 @@ func TestConvertATSRatioToPercent(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := domain.ConvertATSRatioToPercent(tc.input)
+			got := core.ConvertATSRatioToPercent(tc.input)
 			if got != tc.expected {
 				t.Errorf("ConvertATSRatioToPercent(%v) = %v; want %v", tc.input, got, tc.expected)
 			}
@@ -346,12 +346,12 @@ func TestConvertATSRatioToPercent(t *testing.T) {
 }
 
 func TestATSScore_Normalize(t *testing.T) {
-	score := &domain.ATSScore{
+	score := &core.ATSScore{
 		ExtractionConfidenceScore: 105.0,
 		JobMatchingScore:          -5.0,
-		ExtractedCandidate: &domain.ATSExtractedCandidate{
+		ExtractedCandidate: &core.ATSExtractedCandidate{
 			Summary: "Backend engineer",
-			Experiences: []domain.ATSExtractedExperience{
+			Experiences: []core.ATSExtractedExperience{
 				{Company: "Acme", Title: "Senior Dev"},
 			},
 		},
@@ -376,7 +376,7 @@ func TestCalculateDeterministicATSScore(t *testing.T) {
 	resumeText := "# Jane Doe\n## Summary\nDistributed systems engineer skilled in Go, Kubernetes, and PostgreSQL.\n## Experience\n- Built high-throughput microservices in Go and Kubernetes."
 	jobDesc := "Looking for a Senior Go Engineer with Kubernetes, PostgreSQL, and AWS experience."
 
-	score := domain.CalculateDeterministicATSScore(resumeText, "markdown", jobDesc)
+	score := core.CalculateDeterministicATSScore(resumeText, "markdown", jobDesc)
 	if score == nil {
 		t.Fatal("expected non-nil ATSScore")
 	}

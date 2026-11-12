@@ -1,4 +1,4 @@
-package domain
+package core
 
 import "strings"
 
@@ -93,7 +93,7 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 		factsByOwner[f.OwnerID] = append(factsByOwner[f.OwnerID], f)
 	}
 
-	// Helper to map a slice of domain.Fact to []TailoredBullet
+	// Helper to map a slice of core.Fact to []TailoredBullet
 	mapFactsToBullets := func(facts []Fact) []TailoredBullet {
 		bullets := make([]TailoredBullet, 0, len(facts))
 		for _, f := range facts {

@@ -6,60 +6,60 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // Service defines high-level profile management, career graph operations, and JSON Resume interoperability.
 type Service interface {
-	GetProfile(ctx context.Context, userID string) (*domain.Profile, error)
-	UpdateProfile(ctx context.Context, profile *domain.Profile) error
-	GetSnapshot(ctx context.Context, userID string) (*domain.MainProfileSnapshot, error)
+	GetProfile(ctx context.Context, userID string) (*core.Profile, error)
+	UpdateProfile(ctx context.Context, profile *core.Profile) error
+	GetSnapshot(ctx context.Context, userID string) (*core.MainProfileSnapshot, error)
 
 	// JSON Resume Operations
-	ImportJSONResume(ctx context.Context, userID string, payload []byte) (*domain.MainProfileSnapshot, error)
+	ImportJSONResume(ctx context.Context, userID string, payload []byte) (*core.MainProfileSnapshot, error)
 	ExportJSONResume(ctx context.Context, userID string, versionID *string) (*JSONResume, error)
-	ExportFromSnapshot(snapshot *domain.MainProfileSnapshot) (*JSONResume, error)
-	ExportFromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*JSONResume, error)
+	ExportFromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error)
+	ExportFromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONResume, error)
 }
 
 type profileService struct {
-	profileRepo domain.ProfileRepository
-	branchRepo  domain.BranchRepository
+	profileRepo core.ProfileRepository
+	branchRepo  core.BranchRepository
 }
 
 // NewService constructs a new Profile service instance.
-func NewService(profileRepo domain.ProfileRepository, branchRepo domain.BranchRepository) Service {
+func NewService(profileRepo core.ProfileRepository, branchRepo core.BranchRepository) Service {
 	return &profileService{
 		profileRepo: profileRepo,
 		branchRepo:  branchRepo,
 	}
 }
 
-func (s *profileService) GetProfile(ctx context.Context, userID string) (*domain.Profile, error) {
+func (s *profileService) GetProfile(ctx context.Context, userID string) (*core.Profile, error) {
 	return s.profileRepo.GetProfile(ctx, userID)
 }
 
-func (s *profileService) UpdateProfile(ctx context.Context, profile *domain.Profile) error {
+func (s *profileService) UpdateProfile(ctx context.Context, profile *core.Profile) error {
 	return s.profileRepo.UpsertProfile(ctx, profile)
 }
 
-func (s *profileService) GetSnapshot(ctx context.Context, userID string) (*domain.MainProfileSnapshot, error) {
+func (s *profileService) GetSnapshot(ctx context.Context, userID string) (*core.MainProfileSnapshot, error) {
 	return s.profileRepo.GetSnapshot(ctx, userID)
 }
 
 // ImportJSONResume parses JSON Resume bytes and atomically replaces the user's main career graph.
-func (s *profileService) ImportJSONResume(ctx context.Context, userID string, payload []byte) (*domain.MainProfileSnapshot, error) {
+func (s *profileService) ImportJSONResume(ctx context.Context, userID string, payload []byte) (*core.MainProfileSnapshot, error) {
 	if len(payload) == 0 {
-		return nil, fmt.Errorf("%w: empty JSON payload", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: empty JSON payload", core.ErrValidation)
 	}
 
 	var resume JSONResume
 	if err := json.Unmarshal(payload, &resume); err != nil {
-		return nil, fmt.Errorf("%w: malformed JSON Resume: %v", domain.ErrValidation, err)
+		return nil, fmt.Errorf("%w: malformed JSON Resume: %v", core.ErrValidation, err)
 	}
 
 	existingProfile, err := s.profileRepo.GetProfile(ctx, userID)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+	if err != nil && !errors.Is(err, core.ErrNotFound) {
 		return nil, err
 	}
 
@@ -68,7 +68,7 @@ func (s *profileService) ImportJSONResume(ctx context.Context, userID string, pa
 		revision = existingProfile.MainRevision + 1
 	}
 
-	var globalSkills []domain.Skill
+	var globalSkills []core.Skill
 	if gs, err := s.profileRepo.ListGlobalSkills(ctx); err == nil {
 		globalSkills = gs
 	}
@@ -96,7 +96,7 @@ func (s *profileService) ExportJSONResume(ctx context.Context, userID string, ve
 	}
 
 	if s.branchRepo == nil {
-		return nil, fmt.Errorf("%w: branch repository not configured", domain.ErrNotFound)
+		return nil, fmt.Errorf("%w: branch repository not configured", core.ErrNotFound)
 	}
 
 	targetVersion, err := s.branchRepo.GetVersion(ctx, "", *versionID)
@@ -109,25 +109,25 @@ func (s *profileService) ExportJSONResume(ctx context.Context, userID string, ve
 		return nil, err
 	}
 	if targetBranch.UserID != userID {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 
 	if targetVersion.TailoredContent == nil {
-		return nil, fmt.Errorf("%w: version %s has no tailored content", domain.ErrValidation, *versionID)
+		return nil, fmt.Errorf("%w: version %s has no tailored content", core.ErrValidation, *versionID)
 	}
 
 	prof, err := s.profileRepo.GetProfile(ctx, userID)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+	if err != nil && !errors.Is(err, core.ErrNotFound) {
 		return nil, err
 	}
 
 	return s.ExportFromTailored(prof, targetVersion.TailoredContent)
 }
 
-func (s *profileService) ExportFromSnapshot(snapshot *domain.MainProfileSnapshot) (*JSONResume, error) {
+func (s *profileService) ExportFromSnapshot(snapshot *core.MainProfileSnapshot) (*JSONResume, error) {
 	return FromSnapshot(snapshot)
 }
 
-func (s *profileService) ExportFromTailored(profile *domain.Profile, tailored *domain.TailoredContent) (*JSONResume, error) {
+func (s *profileService) ExportFromTailored(profile *core.Profile, tailored *core.TailoredContent) (*JSONResume, error) {
 	return FromTailored(profile, tailored)
 }

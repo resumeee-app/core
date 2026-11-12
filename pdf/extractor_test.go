@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/pdf"
 )
 
@@ -51,7 +51,7 @@ func TestPDFExtractor_Table(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for empty payload, got nil")
 		}
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Fatalf("expected ErrValidation, got: %v", err)
 		}
 	})
@@ -62,7 +62,7 @@ func TestPDFExtractor_Table(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for negative size, got nil")
 		}
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Fatalf("expected ErrValidation, got: %v", err)
 		}
 	})
@@ -74,7 +74,7 @@ func TestPDFExtractor_Table(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for non-PDF content, got nil")
 		}
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Fatalf("expected ErrValidation, got: %v", err)
 		}
 	})
@@ -86,7 +86,7 @@ func TestPDFExtractor_Table(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for corrupted PDF, got nil")
 		}
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Fatalf("expected ErrValidation, got: %v", err)
 		}
 	})
@@ -111,7 +111,7 @@ func TestPDFExtractor_Table(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for blank PDF, got nil")
 		}
-		if !errors.Is(err, domain.ErrValidation) {
+		if !errors.Is(err, core.ErrValidation) {
 			t.Fatalf("expected ErrValidation, got: %v", err)
 		}
 	})

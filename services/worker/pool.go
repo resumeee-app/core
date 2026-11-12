@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // ErrPoolClosed indicates the pool is stopped and cannot accept new jobs.
@@ -20,12 +20,12 @@ type PoolConfig struct {
 	Concurrency            int
 	QueueSize              int
 	MaxConcurrentPerTenant int
-	BranchRepo             domain.BranchRepository
-	ProfileRepo            domain.ProfileRepository
-	PresetRepo             domain.PresetRepository
-	TemplateRepo           domain.TemplateRepository
-	PDFJobRepo             domain.PDFParseJobRepository
-	QuotaRepo              domain.QuotaRepository
+	BranchRepo             core.BranchRepository
+	ProfileRepo            core.ProfileRepository
+	PresetRepo             core.PresetRepository
+	TemplateRepo           core.TemplateRepository
+	PDFJobRepo             core.PDFParseJobRepository
+	QuotaRepo              core.QuotaRepository
 	ResumeExtractor        ResumeExtractor
 	LLMTimeout             time.Duration
 	LLMService             LLMService
@@ -63,12 +63,12 @@ type Pool struct {
 	cancel context.CancelFunc
 	logger *slog.Logger
 
-	branchRepo      domain.BranchRepository
-	profileRepo     domain.ProfileRepository
-	presetRepo      domain.PresetRepository
-	templateRepo    domain.TemplateRepository
-	pdfJobRepo      domain.PDFParseJobRepository
-	quotaRepo       domain.QuotaRepository
+	branchRepo      core.BranchRepository
+	profileRepo     core.ProfileRepository
+	presetRepo      core.PresetRepository
+	templateRepo    core.TemplateRepository
+	pdfJobRepo      core.PDFParseJobRepository
+	quotaRepo       core.QuotaRepository
 	resumeExtractor ResumeExtractor
 	llmTimeout      time.Duration
 	llmService      LLMService
@@ -155,7 +155,7 @@ func (p *Pool) Start(ctx context.Context) {
 	}
 }
 
-// Enqueue submits a generation job to the pool, returning domain.ErrQueueFull if saturated.
+// Enqueue submits a generation job to the pool, returning core.ErrQueueFull if saturated.
 func (p *Pool) Enqueue(job GenerationJob) error {
 	tenantID := normalizeTenantID(job.UserID)
 	item := pendingJob{
@@ -174,7 +174,7 @@ func (p *Pool) Enqueue(job GenerationJob) error {
 	)
 }
 
-// EnqueuePDFJob submits an asynchronous PDF parse task to the pool, returning domain.ErrQueueFull if saturated.
+// EnqueuePDFJob submits an asynchronous PDF parse task to the pool, returning core.ErrQueueFull if saturated.
 func (p *Pool) EnqueuePDFJob(task PDFParseJobTask) error {
 	tenantID := normalizeTenantID(task.UserID)
 	item := pendingJob{
@@ -197,7 +197,7 @@ func (p *Pool) enqueuePendingJob(tenantID string, item pendingJob, debugMsg, war
 	defer p.mu.Unlock()
 
 	if p.closed {
-		return domain.ErrQueueFull
+		return core.ErrQueueFull
 	}
 
 	if p.totalQueued >= p.queueSize {
@@ -208,7 +208,7 @@ func (p *Pool) enqueuePendingJob(tenantID string, item pendingJob, debugMsg, war
 			}
 			p.logger.Warn(warnMsg, args...)
 		}
-		return domain.ErrQueueFull
+		return core.ErrQueueFull
 	}
 
 	q, exists := p.tenantQueues[tenantID]

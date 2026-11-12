@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 )
 
@@ -16,59 +16,59 @@ type emptyStringer struct{}
 
 func (emptyStringer) String() string { return "" }
 
-func mockFullProfileAndContent() (*domain.Profile, *domain.TailoredContent) {
-	endDate := domain.NewDate(2023, 12, 31)
-	projStart := domain.NewDate(1843, 1, 1)
-	eduStart := domain.NewDate(1830, 1, 1)
-	certDate := domain.NewDate(1845, 1, 1)
+func mockFullProfileAndContent() (*core.Profile, *core.TailoredContent) {
+	endDate := core.NewDate(2023, 12, 31)
+	projStart := core.NewDate(1843, 1, 1)
+	eduStart := core.NewDate(1830, 1, 1)
+	certDate := core.NewDate(1845, 1, 1)
 	hours := 40
-	profile := &domain.Profile{
+	profile := &core.Profile{
 		ID:       "prof-test",
 		UserID:   "user-test",
 		FullName: "Ada Lovelace",
 		Headline: "Chief Computing Pioneer",
 		Email:    "ada@analytical.org",
 		Phone:    "+44-20-7946-0919",
-		Location: domain.Location{
+		Location: core.Location{
 			City:        "London",
 			Region:      "Greater London",
 			CountryCode: "GB",
 		},
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "GitHub", Username: "adalovelace", URL: "https://github.com/adalovelace"},
 		},
 		Summary: "First computer programmer, specializing in the Analytical Engine.",
 	}
 
-	content := &domain.TailoredContent{
+	content := &core.TailoredContent{
 		Summary: "Pioneering computer scientist and algorithmic strategist.",
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category: "Core Competencies",
 				Skills:   []string{"Algorithmic Design", "Bernoulli Numbers", "Mechanical Computing"},
 			},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID:    "exp-1",
 				Company:           "Babbage Engine Works",
 				RoleTitle:         "Lead Algorithmic Engineer",
-				StartDate:         domain.NewDate(1842, 1, 1),
+				StartDate:         core.NewDate(1842, 1, 1),
 				EndDate:           &endDate,
-				Location:          domain.Location{City: "London", Region: "UK"},
-				CompanyLocation:   domain.Location{City: "London", Region: "UK"},
-				CompanyContact:    &domain.ContactDetail{Type: domain.ContactTypeEmail, Value: "inquiries@babbage.org"},
+				Location:          core.Location{City: "London", Region: "UK"},
+				CompanyLocation:   core.Location{City: "London", Region: "UK"},
+				CompanyContact:    &core.ContactDetail{Type: core.ContactTypeEmail, Value: "inquiries@babbage.org"},
 				HoursPerWeek:      &hours,
 				SupervisorName:    "Charles Babbage",
 				SupervisorContact: "charles@babbage.org",
 				DutiesSummary:     "Authored notes and algorithm for calculating Bernoulli numbers.",
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{Text: "Formulated the world's first algorithm intended for implementation on a mechanical computer."},
 					{Text: "Translated Luigi Menabrea's memoir on Babbage's Analytical Engine."},
 				},
 			},
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{
 				SourceEntityID: "proj-1",
 				Name:           "Bernoulli Engine Script",
@@ -77,12 +77,12 @@ func mockFullProfileAndContent() (*domain.Profile, *domain.TailoredContent) {
 				StartDate:      &projStart,
 				EndDate:        &endDate,
 				Summary:        "Diagram and plan for the computation of Bernoulli numbers.",
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{Text: "Derived recurrence relations and punch card sequence specifications."},
 				},
 			},
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{
 				SourceEntityID: "edu-1",
 				Institution:    "Private Tutelage",
@@ -91,12 +91,12 @@ func mockFullProfileAndContent() (*domain.Profile, *domain.TailoredContent) {
 				StartDate:      &eduStart,
 				EndDate:        &endDate,
 				Score:          "Distinction",
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{Text: "Mentored by Mary Somerville and Augustus De Morgan."},
 				},
 			},
 		},
-		Certifications: []domain.TailoredCert{
+		Certifications: []core.TailoredCert{
 			{
 				SourceEntityID: "cert-1",
 				Name:           "Fellow of the Analytical Sciences",
@@ -165,21 +165,21 @@ func TestRenderer_SecurityAutoEscaping(t *testing.T) {
 	ctx := context.Background()
 	engine := renderer.New()
 
-	maliciousProfile := &domain.Profile{
+	maliciousProfile := &core.Profile{
 		FullName: `<script>alert('xss-name')</script>`,
 		Headline: `"><img src=x onerror=alert('xss-headline')>`,
 		Email:    `xss@test.org`,
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "Exploit", Username: "bad", URL: `javascript:alert('xss-url')`},
 		},
 	}
-	maliciousContent := &domain.TailoredContent{
+	maliciousContent := &core.TailoredContent{
 		Summary: `<script>alert('xss-summary')</script>`,
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				Company:   `<b onmouseover=alert('xss-company')>Evil Corp</b>`,
 				RoleTitle: `<script>alert('xss-role')</script>`,
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{Text: `<script>alert('xss-bullet')</script>`},
 				},
 			},
@@ -219,29 +219,29 @@ func TestRenderer_SandboxForbiddenFunctions(t *testing.T) {
 
 	forbiddenTemplates := []struct {
 		name string
-		tmpl domain.TemplateSet
+		tmpl core.TemplateSet
 	}{
 		{
 			name: "call exec",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				HTMLTemplate: `<div>{{exec "cat /etc/passwd"}}</div>`,
 			},
 		},
 		{
 			name: "call os system",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				MarkdownTemplate: `{{os "whoami"}}`,
 			},
 		},
 		{
 			name: "call io read",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				TextTemplate: `{{read "/dev/urandom"}}`,
 			},
 		},
 		{
 			name: "call nonexistent function",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				HTMLTemplate: `<span>{{nonExistentHelper .FullName}}</span>`,
 			},
 		},
@@ -253,7 +253,7 @@ func TestRenderer_SandboxForbiddenFunctions(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected validation error for forbidden function in %s, got nil", tc.name)
 			}
-			if !errors.Is(err, domain.ErrTemplateSyntax) {
+			if !errors.Is(err, core.ErrTemplateSyntax) {
 				t.Errorf("expected ErrTemplateSyntax, got %v", err)
 			}
 		})
@@ -265,47 +265,47 @@ func TestRenderer_SyntaxErrorDetection(t *testing.T) {
 
 	badTemplates := []struct {
 		name string
-		tmpl domain.TemplateSet
+		tmpl core.TemplateSet
 	}{
 		{
 			name: "unclosed action tag in HTML",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				HTMLTemplate: `<h1>{{.FullName</h1>`,
 			},
 		},
 		{
 			name: "unclosed block in Markdown",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				MarkdownTemplate: `{{if .Summary}}Summary: {{.Summary}}`,
 			},
 		},
 		{
 			name: "invalid pipeline syntax in Text",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				TextTemplate: `{{.FullName | | }}`,
 			},
 		},
 		{
 			name: "nonexistent field in synthetic context HTML",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				HTMLTemplate: `<div>{{.NonExistentField}}</div>`,
 			},
 		},
 		{
 			name: "nonexistent field in synthetic context Markdown",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				MarkdownTemplate: `<div>{{.NonExistentField}}</div>`,
 			},
 		},
 		{
 			name: "nonexistent field in synthetic context Text",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				TextTemplate: `<div>{{.NonExistentField}}</div>`,
 			},
 		},
 		{
 			name: "unclosed tag in Text",
-			tmpl: domain.TemplateSet{
+			tmpl: core.TemplateSet{
 				TextTemplate: `{{.FullName`,
 			},
 		},
@@ -317,7 +317,7 @@ func TestRenderer_SyntaxErrorDetection(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected validation failure for %s, got nil", tc.name)
 			}
-			if !errors.Is(err, domain.ErrTemplateSyntax) {
+			if !errors.Is(err, core.ErrTemplateSyntax) {
 				t.Errorf("expected ErrTemplateSyntax for %s, got %v", tc.name, err)
 			}
 		})
@@ -347,12 +347,12 @@ func TestRenderer_FuncMapHelpers(t *testing.T) {
 		t.Errorf("formatDateRange expected '2018 – 2020', got '%s'", rangeYears)
 	}
 
-	// Verify domain.Date inputs also produce Month-Year format (no day displayed)
-	domainStart := domain.NewDate(2021, 1, 15)
-	domainEnd := domain.NewDate(2023, 5, 20)
+	// Verify core.Date inputs also produce Month-Year format (no day displayed)
+	domainStart := core.NewDate(2021, 1, 15)
+	domainEnd := core.NewDate(2023, 5, 20)
 	rangeDomain := renderer.SafeFuncMap["formatDateRange"].(func(any, any, string) string)(domainStart, &domainEnd, "Present")
 	if rangeDomain != "Jan 2021 – May 2023" {
-		t.Errorf("formatDateRange with domain.Date expected 'Jan 2021 – May 2023', got '%s'", rangeDomain)
+		t.Errorf("formatDateRange with core.Date expected 'Jan 2021 – May 2023', got '%s'", rangeDomain)
 	}
 
 	formatDate := renderer.SafeFuncMap["formatDate"].(func(string, any) string)
@@ -360,7 +360,7 @@ func TestRenderer_FuncMapHelpers(t *testing.T) {
 		t.Errorf("formatDate expected 'Feb 2026', got '%s'", formatted)
 	}
 	if formatted := formatDate("Jan 2006", domainStart); formatted != "Jan 2021" {
-		t.Errorf("formatDate with domain.Date expected 'Jan 2021', got '%s'", formatted)
+		t.Errorf("formatDate with core.Date expected 'Jan 2021', got '%s'", formatted)
 	}
 	if raw := formatDate("Jan 2006", "invalid-date"); raw != "invalid-date" {
 		t.Errorf("formatDate expected 'invalid-date' fallback, got '%s'", raw)
@@ -371,7 +371,7 @@ func TestRenderer_FuncMapHelpers(t *testing.T) {
 		t.Errorf("year expected '2024', got '%s'", y)
 	}
 	if y := year(domainStart); y != "2021" {
-		t.Errorf("year with domain.Date expected '2021', got '%s'", y)
+		t.Errorf("year with core.Date expected '2021', got '%s'", y)
 	}
 	if y := year("2021"); y != "2021" {
 		t.Errorf("year expected '2021', got '%s'", y)
@@ -593,9 +593,9 @@ func TestRenderer_FuncMapHelpers_EdgeCases(t *testing.T) {
 }
 
 func TestRenderer_RenderContext_ProfilesAndMetadata(t *testing.T) {
-	prof := &domain.Profile{
+	prof := &core.Profile{
 		FullName: "Test User",
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "website", URL: "https://myportfolio.com"},
 		},
 		Metadata: map[string]any{
@@ -608,7 +608,7 @@ func TestRenderer_RenderContext_ProfilesAndMetadata(t *testing.T) {
 		t.Errorf("expected website from profile social link, got %s", rctx.Website)
 	}
 
-	profMetaOnly := &domain.Profile{
+	profMetaOnly := &core.Profile{
 		FullName: "Test User 2",
 		Metadata: map[string]any{
 			"website": "https://metaonly.com",
@@ -627,12 +627,12 @@ func TestRenderer_RenderContext_ProfilesAndMetadata(t *testing.T) {
 
 func TestRenderer_Engine_AliasesAndMethods(t *testing.T) {
 	r := renderer.NewTemplateRenderer()
-	res, err := r.RenderFormat(domain.OutputFormatHTML, "<b>{{.Text}}</b>", map[string]string{"Text": "bold"})
+	res, err := r.RenderFormat(core.OutputFormatHTML, "<b>{{.Text}}</b>", map[string]string{"Text": "bold"})
 	if err != nil || res != "<b>bold</b>" {
 		t.Errorf("r.RenderFormat failed: %v", err)
 	}
 
-	emptyRes, err := renderer.RenderFormat(domain.OutputFormatHTML, "", nil)
+	emptyRes, err := renderer.RenderFormat(core.OutputFormatHTML, "", nil)
 	if err != nil || emptyRes != "" {
 		t.Errorf("RenderFormat with empty template string failed")
 	}
@@ -644,7 +644,7 @@ func TestRenderer_Render_ExecutionErrors(t *testing.T) {
 	profile, content := mockFullProfileAndContent()
 
 	// HTML execution error
-	badHTMLTmpl := &domain.TemplateSet{
+	badHTMLTmpl := &core.TemplateSet{
 		HTMLTemplate: `{{.Experiences.InvalidCall}}`,
 	}
 	_, err := engine.Render(ctx, badHTMLTmpl, profile, content)
@@ -653,7 +653,7 @@ func TestRenderer_Render_ExecutionErrors(t *testing.T) {
 	}
 
 	// Markdown execution error
-	badMDTmpl := &domain.TemplateSet{
+	badMDTmpl := &core.TemplateSet{
 		MarkdownTemplate: `{{.Experiences.InvalidCall}}`,
 	}
 	_, err = engine.Render(ctx, badMDTmpl, profile, content)
@@ -662,7 +662,7 @@ func TestRenderer_Render_ExecutionErrors(t *testing.T) {
 	}
 
 	// Text execution error
-	badTxtTmpl := &domain.TemplateSet{
+	badTxtTmpl := &core.TemplateSet{
 		TextTemplate: `{{.Experiences.InvalidCall}}`,
 	}
 	_, err = engine.Render(ctx, badTxtTmpl, profile, content)
@@ -705,7 +705,7 @@ func TestRenderer_DefaultTemplates(t *testing.T) {
 			}
 
 			// 3. Render against minimal / empty content (must not crash or panic)
-			minimalProfile := &domain.Profile{FullName: "Minimal User"}
+			minimalProfile := &core.Profile{FullName: "Minimal User"}
 			minimalOut, err := engine.Render(ctx, &tmpl, minimalProfile, nil)
 			if err != nil {
 				t.Fatalf("render failed on minimal profile for %s: %v", tmpl.Name, err)
@@ -762,43 +762,43 @@ func TestRenderer_RenderFormat(t *testing.T) {
 		Name: "Gopher",
 	}
 
-	htmlRes, err := renderer.RenderFormat(domain.OutputFormatHTML, "<h1>Hello {{.Name}}</h1>", data)
+	htmlRes, err := renderer.RenderFormat(core.OutputFormatHTML, "<h1>Hello {{.Name}}</h1>", data)
 	if err != nil || htmlRes != "<h1>Hello Gopher</h1>" {
 		t.Errorf("RenderFormat HTML failed: res=%s, err=%v", htmlRes, err)
 	}
 
-	mdRes, err := renderer.RenderFormat(domain.OutputFormatMarkdown, "# Hello {{.Name}}", data)
+	mdRes, err := renderer.RenderFormat(core.OutputFormatMarkdown, "# Hello {{.Name}}", data)
 	if err != nil || mdRes != "# Hello Gopher" {
 		t.Errorf("RenderFormat Markdown failed: res=%s, err=%v", mdRes, err)
 	}
 
-	txtRes, err := renderer.RenderFormat(domain.OutputFormatPlainText, "Hello {{.Name}}", data)
+	txtRes, err := renderer.RenderFormat(core.OutputFormatPlainText, "Hello {{.Name}}", data)
 	if err != nil || txtRes != "Hello Gopher" {
 		t.Errorf("RenderFormat PlainText failed: res=%s, err=%v", txtRes, err)
 	}
 
-	_, err = renderer.RenderFormat(domain.OutputFormat("invalid"), "Hello", data)
+	_, err = renderer.RenderFormat(core.OutputFormat("invalid"), "Hello", data)
 	if err == nil {
 		t.Errorf("expected error for invalid OutputFormat")
 	}
 
 	// Bad template syntax
-	_, err = renderer.RenderFormat(domain.OutputFormatHTML, "<h1>{{.Name</h1>", data)
+	_, err = renderer.RenderFormat(core.OutputFormatHTML, "<h1>{{.Name</h1>", data)
 	if err == nil {
 		t.Errorf("expected HTML parse error")
 	}
-	_, err = renderer.RenderFormat(domain.OutputFormatMarkdown, "# {{.Name", data)
+	_, err = renderer.RenderFormat(core.OutputFormatMarkdown, "# {{.Name", data)
 	if err == nil {
 		t.Errorf("expected Markdown parse error")
 	}
-	_, err = renderer.RenderFormat(domain.OutputFormatPlainText, "{{.Name", data)
+	_, err = renderer.RenderFormat(core.OutputFormatPlainText, "{{.Name", data)
 	if err == nil {
 		t.Errorf("expected PlainText parse error")
 	}
 }
 
 func TestRenderer_BulletPointsCompatibility(t *testing.T) {
-	tmpl := domain.TemplateSet{
+	tmpl := core.TemplateSet{
 		HTMLTemplate: `{{range .Experiences}}{{range .BulletPoints}}<li>{{.Text}}</li>{{end}}{{end}}`,
 	}
 	err := renderer.Validate(&tmpl)
@@ -838,13 +838,13 @@ func TestRenderer_RenderNilInputs(t *testing.T) {
 	engine := renderer.New()
 
 	_, err := engine.Render(ctx, nil, nil, nil)
-	if err == nil || !errors.Is(err, domain.ErrValidation) {
+	if err == nil || !errors.Is(err, core.ErrValidation) {
 		t.Errorf("expected ErrValidation when rendering nil TemplateSet, got %v", err)
 	}
 }
 
 func TestValidate_CSSStylesIncluded(t *testing.T) {
-	tmpl := &domain.TemplateSet{
+	tmpl := &core.TemplateSet{
 		HTMLTemplate: `<style>{{.CSSStyles}}</style><h1>{{.FullName}}</h1>`,
 		CSSStyles:    `body { background-color: #f0f0f0; }`,
 	}
@@ -852,7 +852,7 @@ func TestValidate_CSSStylesIncluded(t *testing.T) {
 		t.Fatalf("expected valid template with CSSStyles to pass Validate, got: %v", err)
 	}
 
-	invalidTmpl := &domain.TemplateSet{
+	invalidTmpl := &core.TemplateSet{
 		HTMLTemplate: `<style>{{.CSSStyles}}</style><h1>{{.NonExistentField}}</h1>`,
 		CSSStyles:    `body { color: red; }`,
 	}
@@ -918,7 +918,7 @@ func TestRenderer_AllEntityFieldsAccessible(t *testing.T) {
 	ctx := context.Background()
 	engine := renderer.New()
 
-	tmpl := domain.TemplateSet{
+	tmpl := core.TemplateSet{
 		ID:     "tmpl-comprehensive-fields",
 		UserID: "user-1",
 		Name:   "All Fields Template",
@@ -959,14 +959,14 @@ func TestRenderer_AllEntityFieldsAccessible(t *testing.T) {
 	}
 
 	hours := 40
-	content := &domain.TailoredContent{
-		Experiences: []domain.TailoredExperience{
+	content := &core.TailoredContent{
+		Experiences: []core.TailoredExperience{
 			{
 				Company:           "Acme Technologies",
 				RoleTitle:         "Lead Systems Architect",
-				EmploymentType:    domain.EmploymentTypeFullTime,
+				EmploymentType:    core.EmploymentTypeFullTime,
 				IsCurrent:         true,
-				CompanyLocation:   domain.Location{City: "San Francisco", Region: "CA"},
+				CompanyLocation:   core.Location{City: "San Francisco", Region: "CA"},
 				HoursPerWeek:      &hours,
 				SupervisorName:    "Jane Doe",
 				SupervisorContact: "jane@acme.com",
@@ -974,7 +974,7 @@ func TestRenderer_AllEntityFieldsAccessible(t *testing.T) {
 				Metadata:          map[string]any{"custom_meta": "level-7"},
 			},
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{
 				Institution: "MIT",
 				Degree:      "B.S.",
@@ -982,14 +982,14 @@ func TestRenderer_AllEntityFieldsAccessible(t *testing.T) {
 				Metadata:    map[string]any{"honors": "Dean's List"},
 			},
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{
 				Name:     "Kube-Scale",
 				Summary:  "Distributed autoscaler for Kubernetes.",
 				Metadata: map[string]any{"stars": "1.2k"},
 			},
 		},
-		Certifications: []domain.TailoredCert{
+		Certifications: []core.TailoredCert{
 			{
 				Name:     "Certified Kubernetes Administrator",
 				Issuer:   "CNCF",
@@ -999,7 +999,7 @@ func TestRenderer_AllEntityFieldsAccessible(t *testing.T) {
 		},
 	}
 
-	out, err := engine.Render(ctx, &tmpl, &domain.Profile{FullName: "Test User"}, content)
+	out, err := engine.Render(ctx, &tmpl, &core.Profile{FullName: "Test User"}, content)
 	if err != nil {
 		t.Fatalf("Render failed: %v", err)
 	}

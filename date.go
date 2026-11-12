@@ -1,4 +1,4 @@
-package domain
+package core
 
 import (
 	"database/sql/driver"
@@ -191,7 +191,7 @@ func (d *Date) Scan(value any) error {
 		*d = parsed
 		return nil
 	default:
-		return fmt.Errorf("cannot scan %T into domain.Date: %v", value, value)
+		return fmt.Errorf("cannot scan %T into core.Date: %v", value, value)
 	}
 }
 

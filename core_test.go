@@ -1,4 +1,4 @@
-package domain_test
+package core_test
 
 import (
 	"context"
@@ -9,26 +9,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 func TestProfileJSONRoundTrip(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
-	profile := domain.Profile{
+	profile := core.Profile{
 		ID:       "prof-1",
 		UserID:   "user-1",
 		FullName: "Jane Doe",
 		Headline: "Staff Distributed Systems Engineer",
 		Email:    "jane@example.com",
 		Phone:    "+1-555-0199",
-		Location: domain.Location{
+		Location: core.Location{
 			Address:     "123 Tech Way",
 			PostalCode:  "94107",
 			City:        "San Francisco",
 			CountryCode: "US",
 			Region:      "CA",
 		},
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "GitHub", Username: "janedoe", URL: "https://github.com/janedoe"},
 		},
 		Summary:            "Experienced systems engineer.",
@@ -44,7 +44,7 @@ func TestProfileJSONRoundTrip(t *testing.T) {
 		t.Fatalf("failed to marshal Profile: %v", err)
 	}
 
-	var decoded domain.Profile
+	var decoded core.Profile
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("failed to unmarshal Profile: %v", err)
 	}
@@ -60,12 +60,12 @@ func TestProfileJSONRoundTrip(t *testing.T) {
 func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	hours := 40
-	endDate := domain.NewDate(2024, 1, 1)
-	startDateProj := domain.NewDate(2026, 1, 1)
-	startDateEdu := domain.NewDate(2016, 9, 1)
-	certDate := domain.NewDate(2023, 5, 15)
+	endDate := core.NewDate(2024, 1, 1)
+	startDateProj := core.NewDate(2026, 1, 1)
+	startDateEdu := core.NewDate(2016, 9, 1)
+	certDate := core.NewDate(2023, 5, 15)
 
-	skill := domain.Skill{
+	skill := core.Skill{
 		ID:              "skill-1",
 		UserID:          "user-1",
 		Name:            "Go",
@@ -77,48 +77,48 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 		UpdatedAt:       now,
 	}
 
-	fact := domain.Fact{
+	fact := core.Fact{
 		ID:        "fact-1",
 		UserID:    "user-1",
 		OwnerID:   "exp-1",
-		OwnerType: domain.OwnerTypeWorkExperience,
+		OwnerType: core.OwnerTypeWorkExperience,
 		Statement: "Reduced p99 latency from 120ms to 8ms by introducing worker pools.",
 		Impact:    "93% latency reduction",
-		Skills:    []domain.Skill{skill},
+		Skills:    []core.Skill{skill},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
-	exp := domain.WorkExperience{
+	exp := core.WorkExperience{
 		ID:             "exp-1",
 		UserID:         "user-1",
 		Company:        "Acme Corp",
 		RoleTitle:      "Lead Backend Engineer",
-		EmploymentType: domain.EmploymentTypeFullTime,
-		StartDate:      domain.NewDate(2020, 1, 1),
+		EmploymentType: core.EmploymentTypeFullTime,
+		StartDate:      core.NewDate(2020, 1, 1),
 		EndDate:        &endDate,
 		IsCurrent:      false,
-		Location: domain.Location{
+		Location: core.Location{
 			City:        "Austin",
 			CountryCode: "US",
 		},
-		CompanyLocation: domain.Location{
+		CompanyLocation: core.Location{
 			Address:     "100 Corporate Blvd",
 			City:        "Austin",
 			CountryCode: "US",
 		},
-		CompanyContact: &domain.ContactDetail{
-			Type:  domain.ContactTypeEmail,
+		CompanyContact: &core.ContactDetail{
+			Type:  core.ContactTypeEmail,
 			Value: "hr@acmeworks.example.com",
 		},
 		HoursPerWeek:   &hours,
-		Facts:          []domain.Fact{fact},
-		Skills:         []domain.Skill{skill},
+		Facts:          []core.Fact{fact},
+		Skills:         []core.Skill{skill},
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
 
-	proj := domain.Project{
+	proj := core.Project{
 		ID:        "proj-1",
 		UserID:    "user-1",
 		Name:      "Resumeee",
@@ -126,21 +126,21 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 		URL:       "https://github.com/rrivera/resumeee",
 		StartDate: &startDateProj,
 		Summary:   "Self-hosted resume tailoring engine",
-		Facts: []domain.Fact{
+		Facts: []core.Fact{
 			{
 				ID:        "fact-2",
 				UserID:    "user-1",
 				OwnerID:   "proj-1",
-				OwnerType: domain.OwnerTypeProject,
+				OwnerType: core.OwnerTypeProject,
 				Statement: "Designed dual-axis peer review agent pipeline.",
 			},
 		},
-		Skills:    []domain.Skill{skill},
+		Skills:    []core.Skill{skill},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
-	edu := domain.Education{
+	edu := core.Education{
 		ID:          "edu-1",
 		UserID:      "user-1",
 		Institution: "MIT",
@@ -149,16 +149,16 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 		StartDate:   &startDateEdu,
 		EndDate:     &endDate,
 		Score:       "3.9",
-		Location: domain.Location{
+		Location: core.Location{
 			City:        "Cambridge",
 			CountryCode: "US",
 		},
-		Facts: []domain.Fact{
+		Facts: []core.Fact{
 			{
 				ID:        "fact-3",
 				UserID:    "user-1",
 				OwnerID:   "edu-1",
-				OwnerType: domain.OwnerTypeEducation,
+				OwnerType: core.OwnerTypeEducation,
 				Statement: "Graduated with honors in systems research.",
 			},
 		},
@@ -166,7 +166,7 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	cert := domain.Certification{
+	cert := core.Certification{
 		ID:        "cert-1",
 		UserID:    "user-1",
 		Name:      "AWS Solutions Architect Professional",
@@ -194,22 +194,22 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to marshal WorkExperience: %v", err)
 	}
-	var decodedExp domain.WorkExperience
+	var decodedExp core.WorkExperience
 	if err := json.Unmarshal(expBytes, &decodedExp); err != nil {
 		t.Fatalf("failed to unmarshal WorkExperience: %v", err)
 	}
-	if decodedExp.CompanyLocation.City != "Austin" || decodedExp.CompanyContact == nil || decodedExp.CompanyContact.Value != "hr@acmeworks.example.com" || decodedExp.CompanyContact.Type != domain.ContactTypeEmail {
+	if decodedExp.CompanyLocation.City != "Austin" || decodedExp.CompanyContact == nil || decodedExp.CompanyContact.Value != "hr@acmeworks.example.com" || decodedExp.CompanyContact.Type != core.ContactTypeEmail {
 		t.Errorf("company location or contact not preserved: %+v", decodedExp)
 	}
-	if decodedExp.EmploymentType != domain.EmploymentTypeFullTime {
-		t.Errorf("expected EmploymentType %v, got %v", domain.EmploymentTypeFullTime, decodedExp.EmploymentType)
+	if decodedExp.EmploymentType != core.EmploymentTypeFullTime {
+		t.Errorf("expected EmploymentType %v, got %v", core.EmploymentTypeFullTime, decodedExp.EmploymentType)
 	}
 }
 
 func TestPresetsAndBranches(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 
-	preset := domain.Preset{
+	preset := core.Preset{
 		ID:                 "preset-1",
 		UserID:             "user-1",
 		Name:               "1-Page Tech Resume",
@@ -220,7 +220,7 @@ func TestPresetsAndBranches(t *testing.T) {
 		UpdatedAt:          now,
 	}
 
-	tmpl := domain.TemplateSet{
+	tmpl := core.TemplateSet{
 		ID:               "tmpl-1",
 		UserID:           "user-1",
 		Name:             "Standard Clean",
@@ -237,13 +237,13 @@ func TestPresetsAndBranches(t *testing.T) {
 	if preset.IsBuiltIn() {
 		t.Errorf("expected preset-1 not to be built-in")
 	}
-	builtinPreset := domain.Preset{ID: "builtin-1-page-tech-resume"}
+	builtinPreset := core.Preset{ID: "builtin-1-page-tech-resume"}
 	if !builtinPreset.IsBuiltIn() {
 		t.Errorf("expected builtin-1-page-tech-resume to be built-in")
 	}
 
 	presetID := preset.ID
-	branch := domain.Branch{
+	branch := core.Branch{
 		ID:                       "branch-1",
 		UserID:                   "user-1",
 		Name:                     "Stripe Backend",
@@ -267,16 +267,16 @@ func TestPresetsAndBranches(t *testing.T) {
 		t.Errorf("expected branch not to be stale when main revision matches")
 	}
 
-	version := domain.BranchVersion{
+	version := core.BranchVersion{
 		ID:               "ver-1",
 		BranchID:         branch.ID,
 		VersionNumber:    1,
-		Status:           domain.VersionStatusCompleted,
+		Status:           core.VersionStatusCompleted,
 		MainRevisionUsed: 1,
 		TemplateSetIDUsed:  tmpl.ID,
 		ProviderUsed:       "gemini",
 		ModelUsed:          "gemini-2.5-pro",
-		SourceType:         domain.SourceTypeLLMGeneration,
+		SourceType:         core.SourceTypeLLMGeneration,
 		HTMLOutput:         "<html>...</html>",
 		MarkdownOutput:     "# ...",
 		PlainTextOutput:    "...",
@@ -287,43 +287,43 @@ func TestPresetsAndBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to marshal BranchVersion: %v", err)
 	}
-	var decodedVersion domain.BranchVersion
+	var decodedVersion core.BranchVersion
 	if err := json.Unmarshal(data, &decodedVersion); err != nil {
 		t.Fatalf("failed to unmarshal BranchVersion: %v", err)
 	}
-	if decodedVersion.Status != domain.VersionStatusCompleted {
-		t.Errorf("expected status %v, got %v", domain.VersionStatusCompleted, decodedVersion.Status)
+	if decodedVersion.Status != core.VersionStatusCompleted {
+		t.Errorf("expected status %v, got %v", core.VersionStatusCompleted, decodedVersion.Status)
 	}
-	if decodedVersion.SourceType != domain.SourceTypeLLMGeneration {
-		t.Errorf("expected SourceType %v, got %v", domain.SourceTypeLLMGeneration, decodedVersion.SourceType)
+	if decodedVersion.SourceType != core.SourceTypeLLMGeneration {
+		t.Errorf("expected SourceType %v, got %v", core.SourceTypeLLMGeneration, decodedVersion.SourceType)
 	}
 }
 
 func TestTailoredContentAndProvenance(t *testing.T) {
-	tailored := domain.TailoredContent{
+	tailored := core.TailoredContent{
 		Summary: "Backend specialist with deep experience in distributed systems.",
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category:       "Languages & Runtimes",
 				Skills:         []string{"Go", "Rust", "C++"},
 				SourceSkillIDs: []string{"skill-1", "skill-2"},
 			},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme Corp",
 				RoleTitle:      "Lead Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				CompanyLocation: domain.Location{
+				StartDate:      core.NewDate(2020, 1, 1),
+				CompanyLocation: core.Location{
 					City:        "Austin",
 					CountryCode: "US",
 				},
-				CompanyContact: &domain.ContactDetail{
-					Type:  domain.ContactTypePhone,
+				CompanyContact: &core.ContactDetail{
+					Type:  core.ContactTypePhone,
 					Value: "+1-555-0100",
 				},
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{
 						Text:           "Architected event-driven streaming pipeline handling 50k eps.",
 						SourceFactIDs:  []string{"fact-1"},
@@ -334,12 +334,12 @@ func TestTailoredContentAndProvenance(t *testing.T) {
 		},
 	}
 
-	gapReport := domain.GapReport{
+	gapReport := core.GapReport{
 		OverallMatchSummary: "Strong match (90%) for distributed systems role.",
-		MissingRequirements: []domain.GapItem{
+		MissingRequirements: []core.GapItem{
 			{
 				Requirement:      "Kubernetes operator development",
-				Importance:       domain.GapImportancePreferred,
+				Importance:       core.GapImportancePreferred,
 				ClarifyingPrompt: "Have you written custom CRDs or Kubernetes controllers?",
 			},
 		},
@@ -349,7 +349,7 @@ func TestTailoredContentAndProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to marshal TailoredContent: %v", err)
 	}
-	var decodedContent domain.TailoredContent
+	var decodedContent core.TailoredContent
 	if err := json.Unmarshal(data, &decodedContent); err != nil {
 		t.Fatalf("failed to unmarshal TailoredContent: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestTailoredContentAndProvenance(t *testing.T) {
 	if decodedContent.Experiences[0].Bullets[0].SourceFactIDs[0] != "fact-1" {
 		t.Errorf("expected bullet SourceFactIDs 'fact-1', got %v", decodedContent.Experiences[0].Bullets[0].SourceFactIDs)
 	}
-	if decodedContent.Experiences[0].CompanyContact == nil || decodedContent.Experiences[0].CompanyContact.Value != "+1-555-0100" || decodedContent.Experiences[0].CompanyContact.Type != domain.ContactTypePhone {
+	if decodedContent.Experiences[0].CompanyContact == nil || decodedContent.Experiences[0].CompanyContact.Value != "+1-555-0100" || decodedContent.Experiences[0].CompanyContact.Type != core.ContactTypePhone {
 		t.Errorf("expected CompanyContact preserved in TailoredExperience, got %q", decodedContent.Experiences[0].CompanyContact)
 	}
 
@@ -367,26 +367,26 @@ func TestTailoredContentAndProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to marshal GapReport: %v", err)
 	}
-	var decodedGap domain.GapReport
+	var decodedGap core.GapReport
 	if err := json.Unmarshal(gapData, &decodedGap); err != nil {
 		t.Fatalf("failed to unmarshal GapReport: %v", err)
 	}
-	if len(decodedGap.MissingRequirements) != 1 || decodedGap.MissingRequirements[0].Importance != domain.GapImportancePreferred {
+	if len(decodedGap.MissingRequirements) != 1 || decodedGap.MissingRequirements[0].Importance != core.GapImportancePreferred {
 		t.Errorf("decoded GapReport mismatch: %+v", decodedGap)
 	}
 }
 
 func TestMainProfileSnapshot(t *testing.T) {
-	profile := domain.Profile{ID: "prof-1", UserID: "user-1", FullName: "Jane Doe", MainRevision: 3}
-	snapshot := domain.MainProfileSnapshot{
+	profile := core.Profile{ID: "prof-1", UserID: "user-1", FullName: "Jane Doe", MainRevision: 3}
+	snapshot := core.MainProfileSnapshot{
 		Profile:      profile,
 		MainRevision: 3,
-		Skills:       []domain.Skill{{ID: "s-1", Name: "Go"}},
-		Experiences:  []domain.WorkExperience{{ID: "e-1", Company: "Acme"}},
-		Projects:     []domain.Project{{ID: "p-1", Name: "Resumeee"}},
-		Education:    []domain.Education{{ID: "ed-1", Institution: "MIT"}},
-		Certifications: []domain.Certification{{ID: "c-1", Name: "AWS"}},
-		Facts:        []domain.Fact{{ID: "f-1", Statement: "Did something great"}},
+		Skills:       []core.Skill{{ID: "s-1", Name: "Go"}},
+		Experiences:  []core.WorkExperience{{ID: "e-1", Company: "Acme"}},
+		Projects:     []core.Project{{ID: "p-1", Name: "Resumeee"}},
+		Education:    []core.Education{{ID: "ed-1", Institution: "MIT"}},
+		Certifications: []core.Certification{{ID: "c-1", Name: "AWS"}},
+		Facts:        []core.Fact{{ID: "f-1", Statement: "Did something great"}},
 		ExportedAt:   time.Now(),
 	}
 
@@ -404,12 +404,12 @@ func TestDomainErrors(t *testing.T) {
 		target   error
 		expected bool
 	}{
-		{err: domain.ErrNotFound, target: domain.ErrNotFound, expected: true},
-		{err: domain.ErrValidation, target: domain.ErrValidation, expected: true},
-		{err: domain.ErrProvenance, target: domain.ErrProvenance, expected: true},
-		{err: domain.ErrTemplateSyntax, target: domain.ErrTemplateSyntax, expected: true},
-		{err: domain.ErrQueueFull, target: domain.ErrQueueFull, expected: true},
-		{err: domain.ErrNotFound, target: domain.ErrValidation, expected: false},
+		{err: core.ErrNotFound, target: core.ErrNotFound, expected: true},
+		{err: core.ErrValidation, target: core.ErrValidation, expected: true},
+		{err: core.ErrProvenance, target: core.ErrProvenance, expected: true},
+		{err: core.ErrTemplateSyntax, target: core.ErrTemplateSyntax, expected: true},
+		{err: core.ErrQueueFull, target: core.ErrQueueFull, expected: true},
+		{err: core.ErrNotFound, target: core.ErrValidation, expected: false},
 	}
 
 	for _, tc := range tests {
@@ -421,8 +421,8 @@ func TestDomainErrors(t *testing.T) {
 
 func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	// 1. Assert TailoringStrategy.IsBuiltIn()
-	builtinStrat := domain.TailoringStrategy{ID: "builtin-1-page-swe"}
-	customStrat := domain.TailoringStrategy{ID: "strat-custom-1"}
+	builtinStrat := core.TailoringStrategy{ID: "builtin-1-page-swe"}
+	customStrat := core.TailoringStrategy{ID: "strat-custom-1"}
 	if !builtinStrat.IsBuiltIn() {
 		t.Errorf("expected builtin-1-page-swe to be built-in")
 	}
@@ -431,7 +431,7 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	}
 
 	// 2. Assert SuggestedThemeID serializes to null in JSON when omitted
-	stratNoTheme := domain.TailoringStrategy{
+	stratNoTheme := core.TailoringStrategy{
 		ID:                 "strat-1",
 		UserID:             "user-1",
 		Name:               "1-Page SWE",
@@ -447,7 +447,7 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	}
 
 	themeID := "builtin-standard-clean"
-	stratWithTheme := domain.TailoringStrategy{
+	stratWithTheme := core.TailoringStrategy{
 		ID:                 "strat-2",
 		UserID:             "user-1",
 		Name:               "1-Page SWE",
@@ -463,7 +463,7 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	}
 
 	// 3. Assert TargetResume directly owns TemplateSetID
-	targetResume := domain.TargetResume{
+	targetResume := core.TargetResume{
 		ID:            "resume-1",
 		UserID:        "user-1",
 		Name:          "Stripe - Staff Backend",
@@ -476,20 +476,20 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 
 func TestMultiTenancyDomainModels(t *testing.T) {
 	// 1. User entity
-	user := domain.User{
+	user := core.User{
 		ID:       "firebase-uid-123",
 		Email:    "dev@example.com",
 		FullName: "Alex Dev",
-		Role:     domain.UserRoleUser,
+		Role:     core.UserRoleUser,
 		Tier:     "free",
 		IsActive: true,
 	}
-	if user.ID != "firebase-uid-123" || user.Role != domain.UserRoleUser {
+	if user.ID != "firebase-uid-123" || user.Role != core.UserRoleUser {
 		t.Errorf("unexpected user values: %+v", user)
 	}
 
 	// 2. Skill with IsGlobal and Slug
-	skill := domain.Skill{
+	skill := core.Skill{
 		ID:       "skill-go",
 		UserID:   "system",
 		Name:     "Go",
@@ -501,24 +501,24 @@ func TestMultiTenancyDomainModels(t *testing.T) {
 	}
 
 	// 3. ResumeVersion with UserID
-	version := domain.ResumeVersion{
+	version := core.ResumeVersion{
 		ID:            "ver-1",
 		UserID:        "user-abc",
 		ResumeID:      "resume-1",
 		VersionNumber: 1,
-		Status:        domain.VersionStatusPending,
+		Status:        core.VersionStatusPending,
 	}
 	if version.UserID != "user-abc" {
 		t.Errorf("expected version UserID 'user-abc', got %q", version.UserID)
 	}
 
 	// 4. TokenUsage & GenerationResponse
-	usage := domain.TokenUsage{
+	usage := core.TokenUsage{
 		PromptTokens:     150,
 		CompletionTokens: 300,
 		TotalTokens:      450,
 	}
-	genResp := domain.GenerationResponse{
+	genResp := core.GenerationResponse{
 		Usage: usage,
 	}
 	if genResp.Usage.TotalTokens != 450 {
@@ -526,7 +526,7 @@ func TestMultiTenancyDomainModels(t *testing.T) {
 	}
 
 	// 5. Quota & Usage entities
-	quota := domain.TenantQuota{
+	quota := core.TenantQuota{
 		UserID:            "user-abc",
 		DailyRequestsUsed: 5,
 		DailyRequestLimit: 50,
@@ -537,28 +537,28 @@ func TestMultiTenancyDomainModels(t *testing.T) {
 		t.Errorf("unexpected quota: %+v", quota)
 	}
 
-	rec := domain.LLMUsageRecord{
+	rec := core.LLMUsageRecord{
 		ID:              "res-1",
 		UserID:          "user-abc",
-		Operation:       domain.OperationResumeTailoring,
+		Operation:       core.OperationResumeTailoring,
 		EstimatedTokens: 2000,
-		Status:          domain.ReservationStatusPending,
+		Status:          core.ReservationStatusPending,
 	}
-	if rec.Operation != domain.OperationResumeTailoring || rec.Status != domain.ReservationStatusPending {
+	if rec.Operation != core.OperationResumeTailoring || rec.Status != core.ReservationStatusPending {
 		t.Errorf("unexpected usage record: %+v", rec)
 	}
 
 	// 6. Domain errors sentinel wrapping
-	wrappedQuota := fmt.Errorf("quota exceeded error: %w", domain.ErrQuotaExceeded)
-	if !errors.Is(wrappedQuota, domain.ErrQuotaExceeded) {
+	wrappedQuota := fmt.Errorf("quota exceeded error: %w", core.ErrQuotaExceeded)
+	if !errors.Is(wrappedQuota, core.ErrQuotaExceeded) {
 		t.Errorf("expected wrapped error to match ErrQuotaExceeded")
 	}
-	wrappedGlobal := fmt.Errorf("global skill error: %w", domain.ErrGlobalSkillImmutable)
-	if !errors.Is(wrappedGlobal, domain.ErrGlobalSkillImmutable) {
+	wrappedGlobal := fmt.Errorf("global skill error: %w", core.ErrGlobalSkillImmutable)
+	if !errors.Is(wrappedGlobal, core.ErrGlobalSkillImmutable) {
 		t.Errorf("expected wrapped error to match ErrGlobalSkillImmutable")
 	}
-	wrappedUnauth := fmt.Errorf("unauthorized error: %w", domain.ErrUnauthorized)
-	if !errors.Is(wrappedUnauth, domain.ErrUnauthorized) {
+	wrappedUnauth := fmt.Errorf("unauthorized error: %w", core.ErrUnauthorized)
+	if !errors.Is(wrappedUnauth, core.ErrUnauthorized) {
 		t.Errorf("expected wrapped error to match ErrUnauthorized")
 	}
 }
@@ -582,7 +582,7 @@ func TestDomain_Slugify(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := domain.Slugify(tc.input)
+			got := core.Slugify(tc.input)
 			if got != tc.expected {
 				t.Errorf("Slugify(%q) = %q, expected %q", tc.input, got, tc.expected)
 			}
@@ -593,32 +593,32 @@ func TestDomain_Slugify(t *testing.T) {
 func TestDomain_ContextUserID(t *testing.T) {
 	t.Run("nil context returns ErrUnauthorized", func(t *testing.T) {
 		//nolint:staticcheck // intentionally testing nil context boundary handling
-		uid, err := domain.UserIDFromContext(nil)
-		if !errors.Is(err, domain.ErrUnauthorized) || uid != "" {
+		uid, err := core.UserIDFromContext(nil)
+		if !errors.Is(err, core.ErrUnauthorized) || uid != "" {
 			t.Errorf("expected ErrUnauthorized and empty string on nil context, got uid=%q, err=%v", uid, err)
 		}
 	})
 
 	t.Run("context without user id returns ErrUnauthorized", func(t *testing.T) {
 		ctx := context.Background()
-		uid, err := domain.UserIDFromContext(ctx)
-		if !errors.Is(err, domain.ErrUnauthorized) || uid != "" {
+		uid, err := core.UserIDFromContext(ctx)
+		if !errors.Is(err, core.ErrUnauthorized) || uid != "" {
 			t.Errorf("expected ErrUnauthorized and empty string on missing context key, got uid=%q, err=%v", uid, err)
 		}
 	})
 
 	t.Run("context with empty user id returns ErrUnauthorized", func(t *testing.T) {
-		ctx := domain.WithUserID(context.Background(), "")
-		uid, err := domain.UserIDFromContext(ctx)
-		if !errors.Is(err, domain.ErrUnauthorized) || uid != "" {
+		ctx := core.WithUserID(context.Background(), "")
+		uid, err := core.UserIDFromContext(ctx)
+		if !errors.Is(err, core.ErrUnauthorized) || uid != "" {
 			t.Errorf("expected ErrUnauthorized and empty string on empty user id in context, got uid=%q, err=%v", uid, err)
 		}
 	})
 
 	t.Run("context with valid user id returns uid", func(t *testing.T) {
 		expected := "tenant-user-12345"
-		ctx := domain.WithUserID(context.Background(), expected)
-		uid, err := domain.UserIDFromContext(ctx)
+		ctx := core.WithUserID(context.Background(), expected)
+		uid, err := core.UserIDFromContext(ctx)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -632,7 +632,7 @@ func TestDomain_TenantQuota_Methods(t *testing.T) {
 	now := time.Now().UTC()
 
 	t.Run("ResetWindowsIfExpired resets daily when expired", func(t *testing.T) {
-		q := domain.TenantQuota{
+		q := core.TenantQuota{
 			UserID:             "u1",
 			DailyRequestsUsed:  20,
 			DailyWindowStart:   now.Add(-25 * time.Hour),
@@ -653,7 +653,7 @@ func TestDomain_TenantQuota_Methods(t *testing.T) {
 	})
 
 	t.Run("ResetWindowsIfExpired resets monthly when expired", func(t *testing.T) {
-		q := domain.TenantQuota{
+		q := core.TenantQuota{
 			UserID:             "u1",
 			DailyRequestsUsed:  10,
 			DailyWindowStart:   now.Add(-2 * time.Hour),
@@ -674,7 +674,7 @@ func TestDomain_TenantQuota_Methods(t *testing.T) {
 	})
 
 	t.Run("ResetWindowsIfExpired does nothing when unexpired", func(t *testing.T) {
-		q := domain.TenantQuota{
+		q := core.TenantQuota{
 			UserID:             "u1",
 			DailyRequestsUsed:  15,
 			DailyWindowStart:   now.Add(-5 * time.Hour),
@@ -692,7 +692,7 @@ func TestDomain_TenantQuota_Methods(t *testing.T) {
 	})
 
 	t.Run("AdjustMonthlyTokens clamps to zero on negative overshoot", func(t *testing.T) {
-		q := domain.TenantQuota{
+		q := core.TenantQuota{
 			MonthlyTokensUsed: 100,
 		}
 		q.AdjustMonthlyTokens(50)
@@ -706,7 +706,7 @@ func TestDomain_TenantQuota_Methods(t *testing.T) {
 	})
 
 	t.Run("ReleaseReservation decrements requests and refunds tokens with clamping", func(t *testing.T) {
-		q := domain.TenantQuota{
+		q := core.TenantQuota{
 			DailyRequestsUsed: 2,
 			MonthlyTokensUsed: 1000,
 		}

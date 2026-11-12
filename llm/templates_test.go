@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 	"github.com/resumeee-app/resumeee-core/privacy"
 )
@@ -40,15 +40,15 @@ func TestPromptTemplates_EmbeddedFilesExist(t *testing.T) {
 }
 
 func TestBuildGapAnalysisPrompt_Composition(t *testing.T) {
-	req := domain.GenerationRequest{
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{FullName: "Jane Doe"},
-			Skills: []domain.Skill{
+	req := core.GenerationRequest{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{FullName: "Jane Doe"},
+			Skills: []core.Skill{
 				{ID: "skill-1", ShortID: "skill-1", Name: "Go"},
 			},
 			ExportedAt: time.Now(),
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRole:         "Senior Backend Engineer",
 			TargetCompany:      "Acme Cloud",
 			TargetRequirements: "5+ years Go experience and distributed systems architecture.",
@@ -118,36 +118,36 @@ func TestBuildGapAnalysisPrompt_Composition(t *testing.T) {
 }
 
 func TestBuildPrompt_Composition(t *testing.T) {
-	req := domain.GenerationRequest{
+	req := core.GenerationRequest{
 		GlobalRules:        "Tier 1: Never write passive voice sentences.",
 		PresetInstructions: "Tier 2: Emphasize metrics and quantified business impact.",
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{FullName: "Alex Mercer"},
-			Experiences: []domain.WorkExperience{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{FullName: "Alex Mercer"},
+			Experiences: []core.WorkExperience{
 				{
 					ID:        "exp-1111-2222",
 					ShortID:   "exp-1",
 					Company:   "TechCorp",
 					RoleTitle: "Staff Engineer",
-					StartDate: domain.NewDate(2020, 1, 1),
-					Facts: []domain.Fact{
+					StartDate: core.NewDate(2020, 1, 1),
+					Facts: []core.Fact{
 						{ID: "fact-1111-2222", ShortID: "f-1", Statement: "Architected event-driven microservices platform."},
 					},
 				},
 			},
-			Projects: []domain.Project{
+			Projects: []core.Project{
 				{
 					ID:      "proj-3333-4444",
 					ShortID: "proj-1",
 					Name:    "OpenTelemetry Collector Plugin",
 				},
 			},
-			Skills: []domain.Skill{
+			Skills: []core.Skill{
 				{ID: "skill-5555-6666", ShortID: "sk-1", Name: "Go"},
 			},
 			ExportedAt: time.Now(),
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRole:         "Principal Distributed Systems Engineer",
 			TargetCompany:      "Stripe",
 			TargetRequirements: "Deep expertise in consensus algorithms and high availability.",
@@ -155,7 +155,7 @@ func TestBuildPrompt_Composition(t *testing.T) {
 			PinnedEntityIDs:    []string{"exp-1111-2222"},
 			ExcludedEntityIDs:  []string{"proj-3333-4444"},
 		},
-		PriorVersion: &domain.TailoredContent{
+		PriorVersion: &core.TailoredContent{
 			Summary: "Prior active summary highlighting distributed systems.",
 		},
 	}
@@ -244,15 +244,15 @@ func TestBuildPrompt_Composition(t *testing.T) {
 }
 
 func TestBuildPrompt_MultiLanguageSupport(t *testing.T) {
-	req := domain.GenerationRequest{
+	req := core.GenerationRequest{
 		PresetInstructions: "Tier 2: Focus on technical leadership.",
-		Preset: &domain.Preset{
+		Preset: &core.Preset{
 			Language: "Spanish",
 		},
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{FullName: "Alex Mercer"},
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{FullName: "Alex Mercer"},
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRole: "Engineering Manager",
 		},
 	}
@@ -274,12 +274,12 @@ func TestBuildPrompt_MultiLanguageSupport(t *testing.T) {
 }
 
 func TestBuildPrompt_InvalidAndRTLTargetLanguage_Rejected(t *testing.T) {
-	baseReq := domain.GenerationRequest{
+	baseReq := core.GenerationRequest{
 		PresetInstructions: "Tier 2: Focus on technical leadership.",
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{FullName: "Alex Mercer"},
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{FullName: "Alex Mercer"},
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRole: "Engineering Manager",
 		},
 	}
@@ -292,20 +292,20 @@ func TestBuildPrompt_InvalidAndRTLTargetLanguage_Rejected(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error building prompt with RTL language, got nil")
 		}
-		if !errors.Is(err, domain.ErrRTLLanguageNotSupported) {
+		if !errors.Is(err, core.ErrRTLLanguageNotSupported) {
 			t.Errorf("expected ErrRTLLanguageNotSupported, got: %v", err)
 		}
 	})
 
 	t.Run("RTL_Language_Via_Preset", func(t *testing.T) {
 		req := baseReq
-		req.Preset = &domain.Preset{Language: "Hebrew"}
+		req.Preset = &core.Preset{Language: "Hebrew"}
 
 		_, err := llm.BuildPrompt(req)
 		if err == nil {
 			t.Fatal("expected error building prompt with RTL preset language, got nil")
 		}
-		if !errors.Is(err, domain.ErrRTLLanguageNotSupported) {
+		if !errors.Is(err, core.ErrRTLLanguageNotSupported) {
 			t.Errorf("expected ErrRTLLanguageNotSupported, got: %v", err)
 		}
 	})
@@ -318,7 +318,7 @@ func TestBuildPrompt_InvalidAndRTLTargetLanguage_Rejected(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error building prompt with unsupported language, got nil")
 		}
-		if !errors.Is(err, domain.ErrUnsupportedLanguage) {
+		if !errors.Is(err, core.ErrUnsupportedLanguage) {
 			t.Errorf("expected ErrUnsupportedLanguage, got: %v", err)
 		}
 	})
@@ -331,7 +331,7 @@ func TestBuildPrompt_InvalidAndRTLTargetLanguage_Rejected(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error building prompt with injection attempt, got nil")
 		}
-		if !errors.Is(err, domain.ErrUnsupportedLanguage) {
+		if !errors.Is(err, core.ErrUnsupportedLanguage) {
 			t.Errorf("expected ErrUnsupportedLanguage for prompt injection, got: %v", err)
 		}
 	})
@@ -463,8 +463,8 @@ func TestPromptTemplates_SpecificSchemaInstructions(t *testing.T) {
 }
 
 func TestBuildPrompt_PriorVersionFencedJSON(t *testing.T) {
-	req := domain.GenerationRequest{
-		PriorVersion: &domain.TailoredContent{
+	req := core.GenerationRequest{
+		PriorVersion: &core.TailoredContent{
 			Summary: "Prior active summary with custom phrasing.",
 		},
 	}
@@ -492,7 +492,7 @@ func TestBuildPrompt_PriorVersionFencedJSON(t *testing.T) {
 }
 
 func TestBuildPrompt_NilPriorVersion_NoCodeFence(t *testing.T) {
-	req := domain.GenerationRequest{
+	req := core.GenerationRequest{
 		PriorVersion: nil,
 	}
 

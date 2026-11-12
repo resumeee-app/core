@@ -4,21 +4,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/validator"
 )
 
 // snapshotWithShortIDs constructs a sample MainProfileSnapshot populated with both canonical UUIDs
 // and compact short IDs across skills, experiences, projects, and facts for provenance testing.
-func snapshotWithShortIDs() *domain.MainProfileSnapshot {
-	endDate := domain.NewDate(2023, 12, 31)
-	projStart := domain.NewDate(2021, 6, 1)
-	return &domain.MainProfileSnapshot{
-		Profile: domain.Profile{
+func snapshotWithShortIDs() *core.MainProfileSnapshot {
+	endDate := core.NewDate(2023, 12, 31)
+	projStart := core.NewDate(2021, 6, 1)
+	return &core.MainProfileSnapshot{
+		Profile: core.Profile{
 			ID:       "prof-uuid-12345678-abcd-1111-2222-333344445555",
 			FullName: "Grace Hopper",
 		},
-		Skills: []domain.Skill{
+		Skills: []core.Skill{
 			{
 				ID:       "skill-uuid-0001-abcd-1111-2222-333344445555",
 				ShortID:  "skill-go",
@@ -32,27 +32,27 @@ func snapshotWithShortIDs() *domain.MainProfileSnapshot {
 				Category: "Infrastructure",
 			},
 		},
-		Experiences: []domain.WorkExperience{
+		Experiences: []core.WorkExperience{
 			{
 				ID:        "exp-uuid-1111-abcd-1111-2222-333344445555",
 				ShortID:   "exp-1",
 				Company:   "Acme Systems",
 				RoleTitle: "Staff Engineer",
-				StartDate: domain.NewDate(2020, 1, 1),
+				StartDate: core.NewDate(2020, 1, 1),
 				EndDate:   &endDate,
-				Facts: []domain.Fact{
+				Facts: []core.Fact{
 					{
 						ID:        "fact-uuid-1001-abcd-1111-2222-333344445555",
 						ShortID:   "fact-1",
 						OwnerID:   "exp-uuid-1111-abcd-1111-2222-333344445555",
-						OwnerType: domain.OwnerTypeWorkExperience,
+						OwnerType: core.OwnerTypeWorkExperience,
 						Statement: "Designed distributed consensus engine",
 					},
 					{
 						ID:        "fact-uuid-1002-abcd-1111-2222-333344445555",
 						ShortID:   "fact-2",
 						OwnerID:   "exp-uuid-1111-abcd-1111-2222-333344445555",
-						OwnerType: domain.OwnerTypeWorkExperience,
+						OwnerType: core.OwnerTypeWorkExperience,
 						Statement: "Reduced p99 latency by 45%",
 					},
 				},
@@ -62,30 +62,30 @@ func snapshotWithShortIDs() *domain.MainProfileSnapshot {
 				ShortID:   "exp-2",
 				Company:   "Globex Corp",
 				RoleTitle: "Senior Developer",
-				StartDate: domain.NewDate(2017, 1, 1),
-				Facts: []domain.Fact{
+				StartDate: core.NewDate(2017, 1, 1),
+				Facts: []core.Fact{
 					{
 						ID:        "fact-uuid-2001-abcd-1111-2222-333344445555",
 						ShortID:   "fact-3",
 						OwnerID:   "exp-uuid-2222-abcd-1111-2222-333344445555",
-						OwnerType: domain.OwnerTypeWorkExperience,
+						OwnerType: core.OwnerTypeWorkExperience,
 						Statement: "Led payment processing pipeline overhaul",
 					},
 				},
 			},
 		},
-		Projects: []domain.Project{
+		Projects: []core.Project{
 			{
 				ID:        "proj-uuid-3333-abcd-1111-2222-333344445555",
 				ShortID:   "proj-1",
 				Name:      "Distributed KV Store",
 				StartDate: &projStart,
-				Facts: []domain.Fact{
+				Facts: []core.Fact{
 					{
 						ID:        "fact-uuid-3001-abcd-1111-2222-333344445555",
 						ShortID:   "fact-proj-1",
 						OwnerID:   "proj-uuid-3333-abcd-1111-2222-333344445555",
-						OwnerType: domain.OwnerTypeProject,
+						OwnerType: core.OwnerTypeProject,
 						Statement: "Achieved 2M ops/sec with Raft consensus",
 					},
 				},
@@ -98,22 +98,22 @@ func snapshotWithShortIDs() *domain.MainProfileSnapshot {
 // for experiences, skills, and fact citations passes provenance validation cleanly without warnings.
 func TestValidate_ShortIDCitations(t *testing.T) {
 	snap := snapshotWithShortIDs()
-	content := &domain.TailoredContent{
+	content := &core.TailoredContent{
 		Summary: "Systems engineer specializing in high-throughput architectures.",
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category:       "Backend",
 				Skills:         []string{"Go"},
 				SourceSkillIDs: []string{"skill-go"},
 			},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2020, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:           "Designed distributed consensus engine handling enterprise workloads.",
 						SourceFactIDs:  []string{"fact-1"},
@@ -144,16 +144,16 @@ func TestValidate_ShortIDCitations(t *testing.T) {
 // UUIDs while others use compact short IDs in the same tailored resume payload.
 func TestValidate_MixedCitations(t *testing.T) {
 	snap := snapshotWithShortIDs()
-	content := &domain.TailoredContent{
+	content := &core.TailoredContent{
 		Summary: "Hybrid citation test.",
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				// exp-1 cited by ShortID, bullet fact cited by canonical UUID
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2020, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Optimized latency.",
 						SourceFactIDs: []string{"fact-uuid-1002-abcd-1111-2222-333344445555"},
@@ -165,8 +165,8 @@ func TestValidate_MixedCitations(t *testing.T) {
 				SourceEntityID: "exp-uuid-2222-abcd-1111-2222-333344445555",
 				Company:        "Globex Corp",
 				RoleTitle:      "Senior Developer",
-				StartDate:      domain.NewDate(2017, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2017, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Led payment processing rewrite.",
 						SourceFactIDs: []string{"fact-3"},
@@ -192,14 +192,14 @@ func TestValidate_MixedCitations(t *testing.T) {
 // experience using short IDs triggers a [CROSS_ENTITY_SPOOF] warning and prunes the fraudulent bullet.
 func TestValidate_CrossEntitySpoof_ShortIDs(t *testing.T) {
 	snap := snapshotWithShortIDs()
-	content := &domain.TailoredContent{
-		Experiences: []domain.TailoredExperience{
+	content := &core.TailoredContent{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2020, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						// fact-3 belongs to exp-2, not exp-1!
 						Text:          "Claiming payment processing pipeline bullet under Acme.",
@@ -236,14 +236,14 @@ func TestValidate_CrossEntitySpoof_ShortIDs(t *testing.T) {
 // triggers a [FABRICATED_FACT] warning and prunes the bullet.
 func TestValidate_FabricatedFact_ShortID(t *testing.T) {
 	snap := snapshotWithShortIDs()
-	content := &domain.TailoredContent{
-		Experiences: []domain.TailoredExperience{
+	content := &core.TailoredContent{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2020, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Invented breakthrough AI chip.",
 						SourceFactIDs: []string{"fact-999"},
@@ -276,18 +276,18 @@ func TestValidate_FabricatedFact_ShortID(t *testing.T) {
 // is recognized properly without emitting false-positive [OMITTED_PINNED_ENTITY] warnings.
 func TestValidate_BranchPinning_ShortID(t *testing.T) {
 	snap := snapshotWithShortIDs()
-	branch := &domain.Branch{
+	branch := &core.Branch{
 		// Pinned using short ID
 		PinnedEntityIDs: []string{"exp-1"},
 	}
-	content := &domain.TailoredContent{
-		Experiences: []domain.TailoredExperience{
+	content := &core.TailoredContent{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2020, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Designed distributed consensus engine.",
 						SourceFactIDs: []string{"fact-1"},
@@ -312,18 +312,18 @@ func TestValidate_BranchPinning_ShortID(t *testing.T) {
 // properly prunes the entity and emits an [EXCLUDED_ENTITY] warning.
 func TestValidate_BranchExclusion_ShortID(t *testing.T) {
 	snap := snapshotWithShortIDs()
-	branch := &domain.Branch{
+	branch := &core.Branch{
 		// Excluded using short ID
 		ExcludedEntityIDs: []string{"exp-1"},
 	}
-	content := &domain.TailoredContent{
-		Experiences: []domain.TailoredExperience{
+	content := &core.TailoredContent{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Acme Systems",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2020, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Designed distributed consensus engine.",
 						SourceFactIDs: []string{"fact-1"},
@@ -334,8 +334,8 @@ func TestValidate_BranchExclusion_ShortID(t *testing.T) {
 				SourceEntityID: "exp-2",
 				Company:        "Globex Corp",
 				RoleTitle:      "Senior Developer",
-				StartDate:      domain.NewDate(2017, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2017, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Led payment processing overhaul.",
 						SourceFactIDs: []string{"fact-3"},

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // clone produces a detached deep copy of an entity or slice via JSON serialization.
@@ -30,41 +30,41 @@ func clone[T any](v T) T {
 type Store struct {
 	mu sync.RWMutex
 
-	profiles       map[string]*domain.Profile
-	skills         map[string]*domain.Skill
-	experiences    map[string]*domain.WorkExperience
-	projects       map[string]*domain.Project
-	education      map[string]*domain.Education
-	certifications map[string]*domain.Certification
-	facts          map[string]*domain.Fact
-	presets        map[string]*domain.Preset
-	templates      map[string]*domain.TemplateSet
-	branches       map[string]*domain.Branch
-	versions       map[string]*domain.BranchVersion
-	pdfJobs        map[string]*domain.PDFParseJob
-	quotas         map[string]*domain.TenantQuota
-	usageRecords   map[string]*domain.LLMUsageRecord
-	users          map[string]*domain.User
+	profiles       map[string]*core.Profile
+	skills         map[string]*core.Skill
+	experiences    map[string]*core.WorkExperience
+	projects       map[string]*core.Project
+	education      map[string]*core.Education
+	certifications map[string]*core.Certification
+	facts          map[string]*core.Fact
+	presets        map[string]*core.Preset
+	templates      map[string]*core.TemplateSet
+	branches       map[string]*core.Branch
+	versions       map[string]*core.BranchVersion
+	pdfJobs        map[string]*core.PDFParseJob
+	quotas         map[string]*core.TenantQuota
+	usageRecords   map[string]*core.LLMUsageRecord
+	users          map[string]*core.User
 }
 
 // New constructs an empty, thread-safe in-memory store.
 func New() *Store {
 	return &Store{
-		profiles:       make(map[string]*domain.Profile),
-		skills:         make(map[string]*domain.Skill),
-		experiences:    make(map[string]*domain.WorkExperience),
-		projects:       make(map[string]*domain.Project),
-		education:      make(map[string]*domain.Education),
-		certifications: make(map[string]*domain.Certification),
-		facts:          make(map[string]*domain.Fact),
-		presets:        make(map[string]*domain.Preset),
-		templates:      make(map[string]*domain.TemplateSet),
-		branches:       make(map[string]*domain.Branch),
-		versions:       make(map[string]*domain.BranchVersion),
-		pdfJobs:        make(map[string]*domain.PDFParseJob),
-		quotas:         make(map[string]*domain.TenantQuota),
-		usageRecords:   make(map[string]*domain.LLMUsageRecord),
-		users:          make(map[string]*domain.User),
+		profiles:       make(map[string]*core.Profile),
+		skills:         make(map[string]*core.Skill),
+		experiences:    make(map[string]*core.WorkExperience),
+		projects:       make(map[string]*core.Project),
+		education:      make(map[string]*core.Education),
+		certifications: make(map[string]*core.Certification),
+		facts:          make(map[string]*core.Fact),
+		presets:        make(map[string]*core.Preset),
+		templates:      make(map[string]*core.TemplateSet),
+		branches:       make(map[string]*core.Branch),
+		versions:       make(map[string]*core.BranchVersion),
+		pdfJobs:        make(map[string]*core.PDFParseJob),
+		quotas:         make(map[string]*core.TenantQuota),
+		usageRecords:   make(map[string]*core.LLMUsageRecord),
+		users:          make(map[string]*core.User),
 	}
 }
 
@@ -75,39 +75,39 @@ func NewSeeded(ctx context.Context, defaultUserID ...string) (*Store, error) {
 	if len(defaultUserID) > 0 && defaultUserID[0] != "" {
 		targetUserID = defaultUserID[0]
 	}
-	if err := domain.SeedDefaultData(ctx, s, s, s, s, targetUserID); err != nil {
+	if err := core.SeedDefaultData(ctx, s, s, s, s, targetUserID); err != nil {
 		return nil, fmt.Errorf("seeding in-memory store: %w", err)
 	}
 	return s, nil
 }
 
-// Profile returns this store as domain.ProfileRepository.
-func (s *Store) Profile() domain.ProfileRepository { return s }
+// Profile returns this store as core.ProfileRepository.
+func (s *Store) Profile() core.ProfileRepository { return s }
 
-// Branch returns this store as domain.BranchRepository.
-func (s *Store) Branch() domain.BranchRepository { return s }
+// Branch returns this store as core.BranchRepository.
+func (s *Store) Branch() core.BranchRepository { return s }
 
-// Preset returns this store as domain.PresetRepository.
-func (s *Store) Preset() domain.PresetRepository { return s }
+// Preset returns this store as core.PresetRepository.
+func (s *Store) Preset() core.PresetRepository { return s }
 
-// Template returns this store as domain.TemplateRepository.
-func (s *Store) Template() domain.TemplateRepository { return s }
+// Template returns this store as core.TemplateRepository.
+func (s *Store) Template() core.TemplateRepository { return s }
 
-// PDFJob returns this store as domain.PDFParseJobRepository.
-func (s *Store) PDFJob() domain.PDFParseJobRepository { return s }
+// PDFJob returns this store as core.PDFParseJobRepository.
+func (s *Store) PDFJob() core.PDFParseJobRepository { return s }
 
-// Quota returns this store as domain.QuotaRepository.
-func (s *Store) Quota() domain.QuotaRepository { return s }
+// Quota returns this store as core.QuotaRepository.
+func (s *Store) Quota() core.QuotaRepository { return s }
 
-// User returns this store as domain.UserRepository.
-func (s *Store) User() domain.UserRepository { return s }
+// User returns this store as core.UserRepository.
+func (s *Store) User() core.UserRepository { return s }
 
 // Close releases any allocated store resources.
 func (s *Store) Close() error { return nil }
 
-// StoreBundle converts the in-memory store into a domain.StoreBundle.
-func (s *Store) StoreBundle() *domain.StoreBundle {
-	return &domain.StoreBundle{
+// StoreBundle converts the in-memory store into a core.StoreBundle.
+func (s *Store) StoreBundle() *core.StoreBundle {
+	return &core.StoreBundle{
 		ProfileRepo:  s,
 		BranchRepo:   s,
 		PresetRepo:   s,
@@ -119,12 +119,12 @@ func (s *Store) StoreBundle() *domain.StoreBundle {
 	}
 }
 
-var _ domain.Store = (*Store)(nil)
+var _ core.Store = (*Store)(nil)
 
 func (s *Store) incrementRevisionLocked(userID string) int64 {
 	prof, ok := s.profiles[userID]
 	if !ok {
-		prof = &domain.Profile{
+		prof = &core.Profile{
 			ID:           "profile-" + userID,
 			UserID:       userID,
 			FullName:     userID,
@@ -144,18 +144,18 @@ func (s *Store) incrementRevisionLocked(userID string) int64 {
 // ProfileRepository
 // -----------------------------------------------------------------------------
 
-func (s *Store) GetProfile(_ context.Context, userID string) (*domain.Profile, error) {
+func (s *Store) GetProfile(_ context.Context, userID string) (*core.Profile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	prof, ok := s.profiles[userID]
 	if !ok {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	return clone(prof), nil
 }
 
-func (s *Store) UpsertProfile(_ context.Context, profile *domain.Profile) error {
+func (s *Store) UpsertProfile(_ context.Context, profile *core.Profile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -184,16 +184,16 @@ func (s *Store) IncrementMainRevision(_ context.Context, userID string) (int64, 
 	return s.incrementRevisionLocked(userID), nil
 }
 
-func (s *Store) GetSnapshot(_ context.Context, userID string) (*domain.MainProfileSnapshot, error) {
+func (s *Store) GetSnapshot(_ context.Context, userID string) (*core.MainProfileSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	prof := s.profiles[userID]
 	if prof == nil {
-		prof = &domain.Profile{ID: "profile-" + userID, UserID: userID}
+		prof = &core.Profile{ID: "profile-" + userID, UserID: userID}
 	}
 
-	snap := &domain.MainProfileSnapshot{
+	snap := &core.MainProfileSnapshot{
 		Profile:      *clone(prof),
 		MainRevision: prof.MainRevision,
 		ExportedAt:   time.Now().UTC(),
@@ -208,7 +208,7 @@ func (s *Store) GetSnapshot(_ context.Context, userID string) (*domain.MainProfi
 		if exp.UserID == userID {
 			expCopy := *clone(exp)
 			for _, f := range s.facts {
-				if f.UserID == userID && f.OwnerID == exp.ID && f.OwnerType == domain.OwnerTypeWorkExperience {
+				if f.UserID == userID && f.OwnerID == exp.ID && f.OwnerType == core.OwnerTypeWorkExperience {
 					expCopy.Facts = append(expCopy.Facts, *clone(f))
 				}
 			}
@@ -219,7 +219,7 @@ func (s *Store) GetSnapshot(_ context.Context, userID string) (*domain.MainProfi
 		if proj.UserID == userID {
 			projCopy := *clone(proj)
 			for _, f := range s.facts {
-				if f.UserID == userID && f.OwnerID == proj.ID && f.OwnerType == domain.OwnerTypeProject {
+				if f.UserID == userID && f.OwnerID == proj.ID && f.OwnerType == core.OwnerTypeProject {
 					projCopy.Facts = append(projCopy.Facts, *clone(f))
 				}
 			}
@@ -230,7 +230,7 @@ func (s *Store) GetSnapshot(_ context.Context, userID string) (*domain.MainProfi
 		if edu.UserID == userID {
 			eduCopy := *clone(edu)
 			for _, f := range s.facts {
-				if f.UserID == userID && f.OwnerID == edu.ID && f.OwnerType == domain.OwnerTypeEducation {
+				if f.UserID == userID && f.OwnerID == edu.ID && f.OwnerType == core.OwnerTypeEducation {
 					eduCopy.Facts = append(eduCopy.Facts, *clone(f))
 				}
 			}
@@ -251,7 +251,7 @@ func (s *Store) GetSnapshot(_ context.Context, userID string) (*domain.MainProfi
 	return clone(snap.ConsolidateSkills()), nil
 }
 
-func (s *Store) ReplaceCareerGraph(_ context.Context, userID string, snapshot *domain.MainProfileSnapshot) error {
+func (s *Store) ReplaceCareerGraph(_ context.Context, userID string, snapshot *core.MainProfileSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -287,7 +287,7 @@ func (s *Store) ReplaceCareerGraph(_ context.Context, userID string, snapshot *d
 	}
 
 	for _, sk := range snapshot.AllSkills() {
-		if !sk.IsGlobal && sk.UserID != domain.SystemUserID {
+		if !sk.IsGlobal && sk.UserID != core.SystemUserID {
 			sk.UserID = userID
 			s.skills[sk.ID] = clone(&sk)
 		}
@@ -298,7 +298,7 @@ func (s *Store) ReplaceCareerGraph(_ context.Context, userID string, snapshot *d
 		for _, f := range exp.Facts {
 			f.UserID = userID
 			f.OwnerID = exp.ID
-			f.OwnerType = domain.OwnerTypeWorkExperience
+			f.OwnerType = core.OwnerTypeWorkExperience
 			s.facts[f.ID] = clone(&f)
 		}
 	}
@@ -308,7 +308,7 @@ func (s *Store) ReplaceCareerGraph(_ context.Context, userID string, snapshot *d
 		for _, f := range proj.Facts {
 			f.UserID = userID
 			f.OwnerID = proj.ID
-			f.OwnerType = domain.OwnerTypeProject
+			f.OwnerType = core.OwnerTypeProject
 			s.facts[f.ID] = clone(&f)
 		}
 	}
@@ -318,7 +318,7 @@ func (s *Store) ReplaceCareerGraph(_ context.Context, userID string, snapshot *d
 		for _, f := range edu.Facts {
 			f.UserID = userID
 			f.OwnerID = edu.ID
-			f.OwnerType = domain.OwnerTypeEducation
+			f.OwnerType = core.OwnerTypeEducation
 			s.facts[f.ID] = clone(&f)
 		}
 	}
@@ -346,11 +346,11 @@ func (s *Store) ReplaceCareerGraph(_ context.Context, userID string, snapshot *d
 // Skills
 // -----------------------------------------------------------------------------
 
-func (s *Store) ListSkills(_ context.Context, userID string) ([]domain.Skill, error) {
+func (s *Store) ListSkills(_ context.Context, userID string) ([]core.Skill, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.Skill
+	var list []core.Skill
 	for _, sk := range s.skills {
 		if sk.UserID == userID || sk.IsGlobal {
 			list = append(list, *clone(sk))
@@ -359,11 +359,11 @@ func (s *Store) ListSkills(_ context.Context, userID string) ([]domain.Skill, er
 	return list, nil
 }
 
-func (s *Store) ListGlobalSkills(_ context.Context) ([]domain.Skill, error) {
+func (s *Store) ListGlobalSkills(_ context.Context) ([]core.Skill, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.Skill
+	var list []core.Skill
 	for _, sk := range s.skills {
 		if sk.IsGlobal {
 			list = append(list, *clone(sk))
@@ -372,7 +372,7 @@ func (s *Store) ListGlobalSkills(_ context.Context) ([]domain.Skill, error) {
 	return list, nil
 }
 
-func (s *Store) GetSkill(_ context.Context, userID, id string) (*domain.Skill, error) {
+func (s *Store) GetSkill(_ context.Context, userID, id string) (*core.Skill, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -381,39 +381,39 @@ func (s *Store) GetSkill(_ context.Context, userID, id string) (*domain.Skill, e
 			return clone(sk), nil
 		}
 	}
-	return nil, domain.ErrNotFound
+	return nil, core.ErrNotFound
 }
 
-func (s *Store) CreateSkill(_ context.Context, skill *domain.Skill) error {
+func (s *Store) CreateSkill(_ context.Context, skill *core.Skill) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if skill.IsGlobal && skill.UserID != domain.SystemUserID {
-		return fmt.Errorf("%w: only system may create global skills", domain.ErrForbidden)
+	if skill.IsGlobal && skill.UserID != core.SystemUserID {
+		return fmt.Errorf("%w: only system may create global skills", core.ErrForbidden)
 	}
 	if _, exists := s.skills[skill.ID]; exists {
-		return domain.ErrConflict
+		return core.ErrConflict
 	}
 	s.skills[skill.ID] = clone(skill)
-	if skill.UserID != domain.SystemUserID {
+	if skill.UserID != core.SystemUserID {
 		s.incrementRevisionLocked(skill.UserID)
 	}
 	return nil
 }
 
-func (s *Store) UpdateSkill(_ context.Context, skill *domain.Skill) error {
+func (s *Store) UpdateSkill(_ context.Context, skill *core.Skill) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	existing, exists := s.skills[skill.ID]
 	if !exists {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	if existing.IsGlobal {
-		return domain.ErrGlobalSkillImmutable
+		return core.ErrGlobalSkillImmutable
 	}
 	if existing.UserID != skill.UserID {
-		return domain.ErrForbidden
+		return core.ErrForbidden
 	}
 	s.skills[skill.ID] = clone(skill)
 	s.incrementRevisionLocked(skill.UserID)
@@ -426,29 +426,29 @@ func (s *Store) DeleteSkill(_ context.Context, userID, id string) error {
 
 	existing, exists := s.skills[id]
 	if !exists {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	if existing.IsGlobal {
-		return domain.ErrGlobalSkillImmutable
+		return core.ErrGlobalSkillImmutable
 	}
 	if existing.UserID != userID {
-		return domain.ErrForbidden
+		return core.ErrForbidden
 	}
 	delete(s.skills, id)
 	s.incrementRevisionLocked(userID)
 	return nil
 }
 
-func (s *Store) registerSkillsLocked(userID string, skills []domain.Skill) []domain.Skill {
-	resolved := make([]domain.Skill, len(skills))
+func (s *Store) registerSkillsLocked(userID string, skills []core.Skill) []core.Skill {
+	resolved := make([]core.Skill, len(skills))
 	for i, sk := range skills {
 		if sk.UserID == "" {
 			sk.UserID = userID
 		}
 		if sk.ID == "" {
-			sk.ID = domain.GenerateID("skill")
+			sk.ID = core.GenerateID("skill")
 		}
-		var found *domain.Skill
+		var found *core.Skill
 		for _, sSk := range s.skills {
 			if (sSk.UserID == userID || sSk.IsGlobal) && (sSk.ID == sk.ID || (sk.Name != "" && strings.EqualFold(sSk.Name, sk.Name))) {
 				found = sSk
@@ -469,11 +469,11 @@ func (s *Store) registerSkillsLocked(userID string, skills []domain.Skill) []dom
 // Work Experience
 // -----------------------------------------------------------------------------
 
-func (s *Store) ListExperiences(_ context.Context, userID string) ([]domain.WorkExperience, error) {
+func (s *Store) ListExperiences(_ context.Context, userID string) ([]core.WorkExperience, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.WorkExperience
+	var list []core.WorkExperience
 	for _, exp := range s.experiences {
 		if exp.UserID == userID {
 			list = append(list, *clone(exp))
@@ -482,7 +482,7 @@ func (s *Store) ListExperiences(_ context.Context, userID string) ([]domain.Work
 	return list, nil
 }
 
-func (s *Store) GetExperience(_ context.Context, userID, id string) (*domain.WorkExperience, error) {
+func (s *Store) GetExperience(_ context.Context, userID, id string) (*core.WorkExperience, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -491,15 +491,15 @@ func (s *Store) GetExperience(_ context.Context, userID, id string) (*domain.Wor
 			return clone(exp), nil
 		}
 	}
-	return nil, domain.ErrNotFound
+	return nil, core.ErrNotFound
 }
 
-func (s *Store) CreateExperience(_ context.Context, exp *domain.WorkExperience) error {
+func (s *Store) CreateExperience(_ context.Context, exp *core.WorkExperience) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.experiences[exp.ID]; exists {
-		return domain.ErrConflict
+		return core.ErrConflict
 	}
 	exp.Skills = s.registerSkillsLocked(exp.UserID, exp.Skills)
 	s.experiences[exp.ID] = clone(exp)
@@ -507,13 +507,13 @@ func (s *Store) CreateExperience(_ context.Context, exp *domain.WorkExperience) 
 	return nil
 }
 
-func (s *Store) UpdateExperience(_ context.Context, exp *domain.WorkExperience) error {
+func (s *Store) UpdateExperience(_ context.Context, exp *core.WorkExperience) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	existing, exists := s.experiences[exp.ID]
 	if !exists || existing.UserID != exp.UserID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	exp.Skills = s.registerSkillsLocked(exp.UserID, exp.Skills)
 	s.experiences[exp.ID] = clone(exp)
@@ -527,7 +527,7 @@ func (s *Store) DeleteExperience(_ context.Context, userID, id string) error {
 
 	existing, exists := s.experiences[id]
 	if !exists || existing.UserID != userID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	delete(s.experiences, id)
 	s.incrementRevisionLocked(userID)
@@ -538,11 +538,11 @@ func (s *Store) DeleteExperience(_ context.Context, userID, id string) error {
 // Projects
 // -----------------------------------------------------------------------------
 
-func (s *Store) ListProjects(_ context.Context, userID string) ([]domain.Project, error) {
+func (s *Store) ListProjects(_ context.Context, userID string) ([]core.Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.Project
+	var list []core.Project
 	for _, proj := range s.projects {
 		if proj.UserID == userID {
 			list = append(list, *clone(proj))
@@ -551,7 +551,7 @@ func (s *Store) ListProjects(_ context.Context, userID string) ([]domain.Project
 	return list, nil
 }
 
-func (s *Store) GetProject(_ context.Context, userID, id string) (*domain.Project, error) {
+func (s *Store) GetProject(_ context.Context, userID, id string) (*core.Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -560,15 +560,15 @@ func (s *Store) GetProject(_ context.Context, userID, id string) (*domain.Projec
 			return clone(proj), nil
 		}
 	}
-	return nil, domain.ErrNotFound
+	return nil, core.ErrNotFound
 }
 
-func (s *Store) CreateProject(_ context.Context, proj *domain.Project) error {
+func (s *Store) CreateProject(_ context.Context, proj *core.Project) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.projects[proj.ID]; exists {
-		return domain.ErrConflict
+		return core.ErrConflict
 	}
 	proj.Skills = s.registerSkillsLocked(proj.UserID, proj.Skills)
 	s.projects[proj.ID] = clone(proj)
@@ -576,13 +576,13 @@ func (s *Store) CreateProject(_ context.Context, proj *domain.Project) error {
 	return nil
 }
 
-func (s *Store) UpdateProject(_ context.Context, proj *domain.Project) error {
+func (s *Store) UpdateProject(_ context.Context, proj *core.Project) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	existing, exists := s.projects[proj.ID]
 	if !exists || existing.UserID != proj.UserID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	proj.Skills = s.registerSkillsLocked(proj.UserID, proj.Skills)
 	s.projects[proj.ID] = clone(proj)
@@ -596,7 +596,7 @@ func (s *Store) DeleteProject(_ context.Context, userID, id string) error {
 
 	existing, exists := s.projects[id]
 	if !exists || existing.UserID != userID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	delete(s.projects, id)
 	s.incrementRevisionLocked(userID)
@@ -607,11 +607,11 @@ func (s *Store) DeleteProject(_ context.Context, userID, id string) error {
 // Education
 // -----------------------------------------------------------------------------
 
-func (s *Store) ListEducation(_ context.Context, userID string) ([]domain.Education, error) {
+func (s *Store) ListEducation(_ context.Context, userID string) ([]core.Education, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.Education
+	var list []core.Education
 	for _, edu := range s.education {
 		if edu.UserID == userID {
 			list = append(list, *clone(edu))
@@ -620,7 +620,7 @@ func (s *Store) ListEducation(_ context.Context, userID string) ([]domain.Educat
 	return list, nil
 }
 
-func (s *Store) GetEducation(_ context.Context, userID, id string) (*domain.Education, error) {
+func (s *Store) GetEducation(_ context.Context, userID, id string) (*core.Education, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -629,28 +629,28 @@ func (s *Store) GetEducation(_ context.Context, userID, id string) (*domain.Educ
 			return clone(edu), nil
 		}
 	}
-	return nil, domain.ErrNotFound
+	return nil, core.ErrNotFound
 }
 
-func (s *Store) CreateEducation(_ context.Context, edu *domain.Education) error {
+func (s *Store) CreateEducation(_ context.Context, edu *core.Education) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.education[edu.ID]; exists {
-		return domain.ErrConflict
+		return core.ErrConflict
 	}
 	s.education[edu.ID] = clone(edu)
 	s.incrementRevisionLocked(edu.UserID)
 	return nil
 }
 
-func (s *Store) UpdateEducation(_ context.Context, edu *domain.Education) error {
+func (s *Store) UpdateEducation(_ context.Context, edu *core.Education) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	existing, exists := s.education[edu.ID]
 	if !exists || existing.UserID != edu.UserID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	s.education[edu.ID] = clone(edu)
 	s.incrementRevisionLocked(edu.UserID)
@@ -663,7 +663,7 @@ func (s *Store) DeleteEducation(_ context.Context, userID, id string) error {
 
 	existing, exists := s.education[id]
 	if !exists || existing.UserID != userID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	delete(s.education, id)
 	s.incrementRevisionLocked(userID)
@@ -674,11 +674,11 @@ func (s *Store) DeleteEducation(_ context.Context, userID, id string) error {
 // Certifications
 // -----------------------------------------------------------------------------
 
-func (s *Store) ListCertifications(_ context.Context, userID string) ([]domain.Certification, error) {
+func (s *Store) ListCertifications(_ context.Context, userID string) ([]core.Certification, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.Certification
+	var list []core.Certification
 	for _, cert := range s.certifications {
 		if cert.UserID == userID {
 			list = append(list, *clone(cert))
@@ -687,7 +687,7 @@ func (s *Store) ListCertifications(_ context.Context, userID string) ([]domain.C
 	return list, nil
 }
 
-func (s *Store) GetCertification(_ context.Context, userID, id string) (*domain.Certification, error) {
+func (s *Store) GetCertification(_ context.Context, userID, id string) (*core.Certification, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -696,28 +696,28 @@ func (s *Store) GetCertification(_ context.Context, userID, id string) (*domain.
 			return clone(cert), nil
 		}
 	}
-	return nil, domain.ErrNotFound
+	return nil, core.ErrNotFound
 }
 
-func (s *Store) CreateCertification(_ context.Context, cert *domain.Certification) error {
+func (s *Store) CreateCertification(_ context.Context, cert *core.Certification) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.certifications[cert.ID]; exists {
-		return domain.ErrConflict
+		return core.ErrConflict
 	}
 	s.certifications[cert.ID] = clone(cert)
 	s.incrementRevisionLocked(cert.UserID)
 	return nil
 }
 
-func (s *Store) UpdateCertification(_ context.Context, cert *domain.Certification) error {
+func (s *Store) UpdateCertification(_ context.Context, cert *core.Certification) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	existing, exists := s.certifications[cert.ID]
 	if !exists || existing.UserID != cert.UserID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	s.certifications[cert.ID] = clone(cert)
 	s.incrementRevisionLocked(cert.UserID)
@@ -730,7 +730,7 @@ func (s *Store) DeleteCertification(_ context.Context, userID, id string) error 
 
 	existing, exists := s.certifications[id]
 	if !exists || existing.UserID != userID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	delete(s.certifications, id)
 	s.incrementRevisionLocked(userID)
@@ -741,11 +741,11 @@ func (s *Store) DeleteCertification(_ context.Context, userID, id string) error 
 // Facts
 // -----------------------------------------------------------------------------
 
-func (s *Store) ListFactsByOwner(_ context.Context, userID, ownerType, ownerID string) ([]domain.Fact, error) {
+func (s *Store) ListFactsByOwner(_ context.Context, userID, ownerType, ownerID string) ([]core.Fact, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.Fact
+	var list []core.Fact
 	for _, f := range s.facts {
 		if f.UserID == userID && string(f.OwnerType) == ownerType && f.OwnerID == ownerID {
 			list = append(list, *clone(f))
@@ -754,7 +754,7 @@ func (s *Store) ListFactsByOwner(_ context.Context, userID, ownerType, ownerID s
 	return list, nil
 }
 
-func (s *Store) GetFact(_ context.Context, userID, id string) (*domain.Fact, error) {
+func (s *Store) GetFact(_ context.Context, userID, id string) (*core.Fact, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -763,15 +763,15 @@ func (s *Store) GetFact(_ context.Context, userID, id string) (*domain.Fact, err
 			return clone(f), nil
 		}
 	}
-	return nil, domain.ErrNotFound
+	return nil, core.ErrNotFound
 }
 
-func (s *Store) CreateFact(_ context.Context, fact *domain.Fact) error {
+func (s *Store) CreateFact(_ context.Context, fact *core.Fact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.facts[fact.ID]; exists {
-		return domain.ErrConflict
+		return core.ErrConflict
 	}
 	fact.Skills = s.registerSkillsLocked(fact.UserID, fact.Skills)
 	s.facts[fact.ID] = clone(fact)
@@ -779,13 +779,13 @@ func (s *Store) CreateFact(_ context.Context, fact *domain.Fact) error {
 	return nil
 }
 
-func (s *Store) UpdateFact(_ context.Context, fact *domain.Fact) error {
+func (s *Store) UpdateFact(_ context.Context, fact *core.Fact) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	existing, exists := s.facts[fact.ID]
 	if !exists || existing.UserID != fact.UserID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	fact.Skills = s.registerSkillsLocked(fact.UserID, fact.Skills)
 	s.facts[fact.ID] = clone(fact)
@@ -799,7 +799,7 @@ func (s *Store) DeleteFact(_ context.Context, userID, id string) error {
 
 	existing, exists := s.facts[id]
 	if !exists || existing.UserID != userID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	delete(s.facts, id)
 	s.incrementRevisionLocked(userID)
@@ -810,42 +810,42 @@ func (s *Store) DeleteFact(_ context.Context, userID, id string) error {
 // Presets
 // -----------------------------------------------------------------------------
 
-func (s *Store) ListPresets(_ context.Context, userID string) ([]domain.Preset, error) {
+func (s *Store) ListPresets(_ context.Context, userID string) ([]core.Preset, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.Preset
+	var list []core.Preset
 	for _, pr := range s.presets {
-		if pr.UserID == userID || pr.UserID == domain.SystemUserID || strings.HasPrefix(pr.ID, "builtin-") || pr.IsBuiltIn() {
+		if pr.UserID == userID || pr.UserID == core.SystemUserID || strings.HasPrefix(pr.ID, "builtin-") || pr.IsBuiltIn() {
 			list = append(list, *clone(pr))
 		}
 	}
 	return list, nil
 }
 
-func (s *Store) GetPreset(_ context.Context, userID, id string) (*domain.Preset, error) {
+func (s *Store) GetPreset(_ context.Context, userID, id string) (*core.Preset, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	pr, ok := s.presets[id]
-	if !ok || (pr.UserID != userID && pr.UserID != domain.SystemUserID && !strings.HasPrefix(pr.ID, "builtin-") && !pr.IsBuiltIn()) {
-		return nil, domain.ErrNotFound
+	if !ok || (pr.UserID != userID && pr.UserID != core.SystemUserID && !strings.HasPrefix(pr.ID, "builtin-") && !pr.IsBuiltIn()) {
+		return nil, core.ErrNotFound
 	}
 	return clone(pr), nil
 }
 
-func (s *Store) CreatePreset(_ context.Context, preset *domain.Preset) error {
+func (s *Store) CreatePreset(_ context.Context, preset *core.Preset) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if preset == nil {
-		return domain.ErrValidation
+		return core.ErrValidation
 	}
 	if preset.Language == "" {
-		preset.Language = domain.DefaultLanguage
+		preset.Language = core.DefaultLanguage
 	}
 	if _, exists := s.presets[preset.ID]; exists {
-		return domain.ErrConflict
+		return core.ErrConflict
 	}
 	now := time.Now().UTC()
 	if preset.CreatedAt.IsZero() {
@@ -856,25 +856,25 @@ func (s *Store) CreatePreset(_ context.Context, preset *domain.Preset) error {
 	return nil
 }
 
-func (s *Store) UpdatePreset(_ context.Context, preset *domain.Preset) error {
+func (s *Store) UpdatePreset(_ context.Context, preset *core.Preset) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if preset == nil {
-		return domain.ErrValidation
+		return core.ErrValidation
 	}
 	if preset.IsBuiltIn() || strings.HasPrefix(preset.ID, "builtin-") {
-		return domain.ErrStrategyImmutable
+		return core.ErrStrategyImmutable
 	}
 	existing, exists := s.presets[preset.ID]
 	if !exists || existing.UserID != preset.UserID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	if existing.IsBuiltIn() || strings.HasPrefix(existing.ID, "builtin-") {
-		return domain.ErrStrategyImmutable
+		return core.ErrStrategyImmutable
 	}
 	if preset.Language == "" {
-		preset.Language = domain.DefaultLanguage
+		preset.Language = core.DefaultLanguage
 	}
 	preset.UpdatedAt = time.Now().UTC()
 	s.presets[preset.ID] = clone(preset)
@@ -885,15 +885,15 @@ func (s *Store) DeletePreset(_ context.Context, userID, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if strings.HasPrefix(id, "builtin-") || userID == domain.SystemUserID {
-		return domain.ErrStrategyImmutable
+	if strings.HasPrefix(id, "builtin-") || userID == core.SystemUserID {
+		return core.ErrStrategyImmutable
 	}
 	existing, exists := s.presets[id]
 	if !exists || existing.UserID != userID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	if existing.IsBuiltIn() || strings.HasPrefix(existing.ID, "builtin-") {
-		return domain.ErrStrategyImmutable
+		return core.ErrStrategyImmutable
 	}
 	delete(s.presets, id)
 	return nil
@@ -903,43 +903,43 @@ func (s *Store) DeletePreset(_ context.Context, userID, id string) error {
 // Templates
 // -----------------------------------------------------------------------------
 
-func (s *Store) ListTemplates(_ context.Context, userID string) ([]domain.TemplateSet, error) {
+func (s *Store) ListTemplates(_ context.Context, userID string) ([]core.TemplateSet, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.TemplateSet
+	var list []core.TemplateSet
 	for _, tmpl := range s.templates {
-		if tmpl.UserID == userID || tmpl.IsBuiltIn || tmpl.UserID == domain.SystemUserID {
+		if tmpl.UserID == userID || tmpl.IsBuiltIn || tmpl.UserID == core.SystemUserID {
 			list = append(list, *clone(tmpl))
 		}
 	}
 	return list, nil
 }
 
-func (s *Store) GetTemplate(_ context.Context, userID, id string) (*domain.TemplateSet, error) {
+func (s *Store) GetTemplate(_ context.Context, userID, id string) (*core.TemplateSet, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	tmpl, ok := s.templates[id]
 	if !ok {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
-	if tmpl.UserID != userID && !tmpl.IsBuiltIn && tmpl.UserID != domain.SystemUserID {
-		return nil, domain.ErrNotFound
+	if tmpl.UserID != userID && !tmpl.IsBuiltIn && tmpl.UserID != core.SystemUserID {
+		return nil, core.ErrNotFound
 	}
 	return clone(tmpl), nil
 }
 
-func (s *Store) CreateTemplate(_ context.Context, tmpl *domain.TemplateSet) error {
+func (s *Store) CreateTemplate(_ context.Context, tmpl *core.TemplateSet) error {
 	if tmpl == nil {
-		return fmt.Errorf("%w: template set cannot be nil", domain.ErrValidation)
+		return fmt.Errorf("%w: template set cannot be nil", core.ErrValidation)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.templates[tmpl.ID]; exists {
-		return domain.ErrConflict
+		return core.ErrConflict
 	}
 	now := time.Now().UTC()
 	if tmpl.CreatedAt.IsZero() {
@@ -950,12 +950,12 @@ func (s *Store) CreateTemplate(_ context.Context, tmpl *domain.TemplateSet) erro
 	return nil
 }
 
-func (s *Store) UpdateTemplate(_ context.Context, tmpl *domain.TemplateSet) error {
+func (s *Store) UpdateTemplate(_ context.Context, tmpl *core.TemplateSet) error {
 	if tmpl == nil {
-		return fmt.Errorf("%w: template set cannot be nil", domain.ErrValidation)
+		return fmt.Errorf("%w: template set cannot be nil", core.ErrValidation)
 	}
-	if tmpl.IsBuiltIn || strings.HasPrefix(tmpl.ID, "builtin-") || tmpl.UserID == domain.SystemUserID {
-		return domain.ErrStrategyImmutable
+	if tmpl.IsBuiltIn || strings.HasPrefix(tmpl.ID, "builtin-") || tmpl.UserID == core.SystemUserID {
+		return core.ErrStrategyImmutable
 	}
 
 	s.mu.Lock()
@@ -963,13 +963,13 @@ func (s *Store) UpdateTemplate(_ context.Context, tmpl *domain.TemplateSet) erro
 
 	existing, exists := s.templates[tmpl.ID]
 	if !exists {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
-	if existing.IsBuiltIn || strings.HasPrefix(existing.ID, "builtin-") || existing.UserID == domain.SystemUserID {
-		return domain.ErrStrategyImmutable
+	if existing.IsBuiltIn || strings.HasPrefix(existing.ID, "builtin-") || existing.UserID == core.SystemUserID {
+		return core.ErrStrategyImmutable
 	}
 	if existing.UserID != tmpl.UserID {
-		return domain.ErrForbidden
+		return core.ErrForbidden
 	}
 	tmpl.UpdatedAt = time.Now().UTC()
 	s.templates[tmpl.ID] = clone(tmpl)
@@ -982,13 +982,13 @@ func (s *Store) DeleteTemplate(_ context.Context, userID, id string) error {
 
 	existing, exists := s.templates[id]
 	if !exists {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
-	if existing.IsBuiltIn || strings.HasPrefix(existing.ID, "builtin-") || existing.UserID == domain.SystemUserID {
-		return domain.ErrStrategyImmutable
+	if existing.IsBuiltIn || strings.HasPrefix(existing.ID, "builtin-") || existing.UserID == core.SystemUserID {
+		return core.ErrStrategyImmutable
 	}
 	if existing.UserID != userID {
-		return domain.ErrForbidden
+		return core.ErrForbidden
 	}
 	delete(s.templates, id)
 	return nil
@@ -998,7 +998,7 @@ func (s *Store) DeleteTemplate(_ context.Context, userID, id string) error {
 // Branches
 // -----------------------------------------------------------------------------
 
-func (s *Store) ListBranches(_ context.Context, userID string) ([]domain.Branch, error) {
+func (s *Store) ListBranches(_ context.Context, userID string) ([]core.Branch, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1007,7 +1007,7 @@ func (s *Store) ListBranches(_ context.Context, userID string) ([]domain.Branch,
 		currentMainRev = prof.MainRevision
 	}
 
-	var list []domain.Branch
+	var list []core.Branch
 	for _, br := range s.branches {
 		if br.UserID == userID {
 			bCopy := clone(br)
@@ -1026,13 +1026,13 @@ func (s *Store) ListBranches(_ context.Context, userID string) ([]domain.Branch,
 	return list, nil
 }
 
-func (s *Store) GetBranch(_ context.Context, userID, id string) (*domain.Branch, error) {
+func (s *Store) GetBranch(_ context.Context, userID, id string) (*core.Branch, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	br, ok := s.branches[id]
 	if !ok || (userID != "" && br.UserID != userID) {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 
 	var currentMainRev int64
@@ -1045,12 +1045,12 @@ func (s *Store) GetBranch(_ context.Context, userID, id string) (*domain.Branch,
 	return bCopy, nil
 }
 
-func (s *Store) CreateBranch(_ context.Context, branch *domain.Branch) error {
+func (s *Store) CreateBranch(_ context.Context, branch *core.Branch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.branches[branch.ID]; exists {
-		return domain.ErrConflict
+		return core.ErrConflict
 	}
 	now := time.Now().UTC()
 	if branch.CreatedAt.IsZero() {
@@ -1061,12 +1061,12 @@ func (s *Store) CreateBranch(_ context.Context, branch *domain.Branch) error {
 	return nil
 }
 
-func (s *Store) UpdateBranch(_ context.Context, branch *domain.Branch) error {
+func (s *Store) UpdateBranch(_ context.Context, branch *core.Branch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.branches[branch.ID]; !exists {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	branch.UpdatedAt = time.Now().UTC()
 	s.branches[branch.ID] = clone(branch)
@@ -1079,10 +1079,10 @@ func (s *Store) DeleteBranch(_ context.Context, userID, id string) error {
 
 	br, ok := s.branches[id]
 	if !ok || br.UserID != userID {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	if br.IsDefault {
-		return fmt.Errorf("%w: cannot delete default branch", domain.ErrDefaultBranchImmutable)
+		return fmt.Errorf("%w: cannot delete default branch", core.ErrDefaultBranchImmutable)
 	}
 
 	for vID, v := range s.versions {
@@ -1098,7 +1098,7 @@ func (s *Store) DeleteBranch(_ context.Context, userID, id string) error {
 // Versions
 // -----------------------------------------------------------------------------
 
-func syncVersionIDs(v *domain.BranchVersion) {
+func syncVersionIDs(v *core.BranchVersion) {
 	if v == nil {
 		return
 	}
@@ -1110,7 +1110,7 @@ func syncVersionIDs(v *domain.BranchVersion) {
 	}
 }
 
-func (s *Store) CreateVersion(_ context.Context, version *domain.BranchVersion) error {
+func (s *Store) CreateVersion(_ context.Context, version *core.BranchVersion) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1137,7 +1137,7 @@ func (s *Store) CreateVersion(_ context.Context, version *domain.BranchVersion) 
 
 	version.VersionNumber = maxVer + 1
 	if version.Status == "" {
-		version.Status = domain.VersionStatusPending
+		version.Status = core.VersionStatusPending
 	}
 	if version.CreatedAt.IsZero() {
 		version.CreatedAt = time.Now().UTC()
@@ -1147,16 +1147,16 @@ func (s *Store) CreateVersion(_ context.Context, version *domain.BranchVersion) 
 	return nil
 }
 
-func (s *Store) GetVersion(_ context.Context, branchID, versionID string) (*domain.BranchVersion, error) {
+func (s *Store) GetVersion(_ context.Context, branchID, versionID string) (*core.BranchVersion, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	v, ok := s.versions[versionID]
 	if !ok {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	if branchID != "" && v.ResumeID != branchID && v.BranchID != branchID {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 
 	copyV := clone(v)
@@ -1164,7 +1164,7 @@ func (s *Store) GetVersion(_ context.Context, branchID, versionID string) (*doma
 	return copyV, nil
 }
 
-func (s *Store) GetVersionByNumber(_ context.Context, branchID string, versionNumber int) (*domain.BranchVersion, error) {
+func (s *Store) GetVersionByNumber(_ context.Context, branchID string, versionNumber int) (*core.BranchVersion, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1175,14 +1175,14 @@ func (s *Store) GetVersionByNumber(_ context.Context, branchID string, versionNu
 			return copyV, nil
 		}
 	}
-	return nil, domain.ErrNotFound
+	return nil, core.ErrNotFound
 }
 
-func (s *Store) GetVersionsByIDs(_ context.Context, versionIDs []string) ([]domain.BranchVersion, error) {
+func (s *Store) GetVersionsByIDs(_ context.Context, versionIDs []string) ([]core.BranchVersion, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []domain.BranchVersion
+	var result []core.BranchVersion
 	for _, id := range versionIDs {
 		if v, ok := s.versions[id]; ok {
 			copyV := clone(v)
@@ -1193,11 +1193,11 @@ func (s *Store) GetVersionsByIDs(_ context.Context, versionIDs []string) ([]doma
 	return result, nil
 }
 
-func (s *Store) ListVersions(_ context.Context, branchID string) ([]domain.BranchVersion, error) {
+func (s *Store) ListVersions(_ context.Context, branchID string) ([]core.BranchVersion, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.BranchVersion
+	var list []core.BranchVersion
 	for _, v := range s.versions {
 		if v.ResumeID == branchID || v.BranchID == branchID {
 			copyV := clone(v)
@@ -1213,24 +1213,24 @@ func (s *Store) ListVersions(_ context.Context, branchID string) ([]domain.Branc
 	return list, nil
 }
 
-func (s *Store) UpdateVersionStatus(_ context.Context, versionID string, status domain.VersionStatus, errMsg string) error {
+func (s *Store) UpdateVersionStatus(_ context.Context, versionID string, status core.VersionStatus, errMsg string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	v, ok := s.versions[versionID]
 	if !ok {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	v.Status = status
 	v.ErrorMessage = errMsg
-	if status == domain.VersionStatusCompleted || status == domain.VersionStatusCompletedWithWarnings || status == domain.VersionStatusFailed {
+	if status == core.VersionStatusCompleted || status == core.VersionStatusCompletedWithWarnings || status == core.VersionStatusFailed {
 		now := time.Now().UTC()
 		v.CompletedAt = &now
 	}
 	return nil
 }
 
-func (s *Store) CompleteVersion(_ context.Context, version *domain.BranchVersion) error {
+func (s *Store) CompleteVersion(_ context.Context, version *core.BranchVersion) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1244,14 +1244,14 @@ func (s *Store) CompleteVersion(_ context.Context, version *domain.BranchVersion
 	now := time.Now().UTC()
 	version.CompletedAt = &now
 	if version.Status == "" {
-		version.Status = domain.VersionStatusCompleted
+		version.Status = core.VersionStatusCompleted
 	}
 
 	s.versions[version.ID] = clone(version)
 
 	br, ok := s.branches[parentID]
 	if !ok {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	br.ActiveVersionID = &version.ID
 	br.LastSyncedMainRevision = version.MainRevisionUsed
@@ -1269,16 +1269,16 @@ func (s *Store) CompleteVersion(_ context.Context, version *domain.BranchVersion
 	return nil
 }
 
-func (s *Store) UpdateVersionATSScore(_ context.Context, versionID string, atsScore *domain.ATSScore) error {
+func (s *Store) UpdateVersionATSScore(_ context.Context, versionID string, atsScore *core.ATSScore) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	v, ok := s.versions[versionID]
 	if !ok {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 	if atsScore != nil && v.ATSScore != nil {
-		return fmt.Errorf("%w: ATS score already exists for version %s", domain.ErrConflict, versionID)
+		return fmt.Errorf("%w: ATS score already exists for version %s", core.ErrConflict, versionID)
 	}
 	if atsScore != nil {
 		scoreCopy := clone(atsScore)
@@ -1309,8 +1309,8 @@ func (s *Store) FailInterruptedVersions(_ context.Context, reason string) error 
 
 	now := time.Now().UTC()
 	for _, v := range s.versions {
-		if v.Status == domain.VersionStatusPending || v.Status == domain.VersionStatusProcessing {
-			v.Status = domain.VersionStatusFailed
+		if v.Status == core.VersionStatusPending || v.Status == core.VersionStatusProcessing {
+			v.Status = core.VersionStatusFailed
 			v.ErrorMessage = reason
 			v.CompletedAt = &now
 		}
@@ -1322,12 +1322,12 @@ func (s *Store) FailInterruptedVersions(_ context.Context, reason string) error 
 // PDFParseJobRepository
 // -----------------------------------------------------------------------------
 
-func (s *Store) CreateJob(_ context.Context, job *domain.PDFParseJob) error {
+func (s *Store) CreateJob(_ context.Context, job *core.PDFParseJob) error {
 	if job == nil {
-		return fmt.Errorf("%w: job cannot be nil", domain.ErrValidation)
+		return fmt.Errorf("%w: job cannot be nil", core.ErrValidation)
 	}
 	if job.ID == "" || job.UserID == "" {
-		return fmt.Errorf("%w: job id and user_id are required", domain.ErrValidation)
+		return fmt.Errorf("%w: job id and user_id are required", core.ErrValidation)
 	}
 
 	s.mu.Lock()
@@ -1344,12 +1344,12 @@ func (s *Store) CreateJob(_ context.Context, job *domain.PDFParseJob) error {
 	return nil
 }
 
-func (s *Store) GetJob(_ context.Context, userID, jobID string) (*domain.PDFParseJob, error) {
+func (s *Store) GetJob(_ context.Context, userID, jobID string) (*core.PDFParseJob, error) {
 	if userID == "" {
-		return nil, fmt.Errorf("%w: user id cannot be empty", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: user id cannot be empty", core.ErrValidation)
 	}
 	if jobID == "" {
-		return nil, fmt.Errorf("%w: job id cannot be empty", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: job id cannot be empty", core.ErrValidation)
 	}
 
 	s.mu.RLock()
@@ -1357,14 +1357,14 @@ func (s *Store) GetJob(_ context.Context, userID, jobID string) (*domain.PDFPars
 
 	job, ok := s.pdfJobs[jobID]
 	if !ok || job.UserID != userID {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	return clone(job), nil
 }
 
-func (s *Store) UpdateJobStatus(_ context.Context, jobID string, status domain.PDFParseJobStatus, result any, errMsg string) error {
+func (s *Store) UpdateJobStatus(_ context.Context, jobID string, status core.PDFParseJobStatus, result any, errMsg string) error {
 	if jobID == "" {
-		return fmt.Errorf("%w: job id cannot be empty", domain.ErrValidation)
+		return fmt.Errorf("%w: job id cannot be empty", core.ErrValidation)
 	}
 
 	s.mu.Lock()
@@ -1372,7 +1372,7 @@ func (s *Store) UpdateJobStatus(_ context.Context, jobID string, status domain.P
 
 	job, ok := s.pdfJobs[jobID]
 	if !ok {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
 
 	now := time.Now().UTC()
@@ -1393,7 +1393,7 @@ func (s *Store) UpdateJobStatus(_ context.Context, jobID string, status domain.P
 			job.Result = result
 		}
 	}
-	if status == domain.PDFParseJobStatusCompleted || status == domain.PDFParseJobStatusFailed {
+	if status == core.PDFParseJobStatusCompleted || status == core.PDFParseJobStatusFailed {
 		job.CompletedAt = &now
 	}
 	return nil
@@ -1405,8 +1405,8 @@ func (s *Store) FailInterruptedJobs(_ context.Context, reason string) error {
 
 	now := time.Now().UTC()
 	for _, job := range s.pdfJobs {
-		if job.Status == domain.PDFParseJobStatusPending || job.Status == domain.PDFParseJobStatusProcessing {
-			job.Status = domain.PDFParseJobStatusFailed
+		if job.Status == core.PDFParseJobStatusPending || job.Status == core.PDFParseJobStatusProcessing {
+			job.Status = core.PDFParseJobStatusFailed
 			job.ErrorMessage = reason
 			job.UpdatedAt = now
 			job.CompletedAt = &now
@@ -1417,7 +1417,7 @@ func (s *Store) FailInterruptedJobs(_ context.Context, reason string) error {
 
 func (s *Store) CleanupCompletedJobs(_ context.Context, userID string, olderThan time.Duration) error {
 	if userID == "" {
-		return fmt.Errorf("%w: user id cannot be empty", domain.ErrValidation)
+		return fmt.Errorf("%w: user id cannot be empty", core.ErrValidation)
 	}
 
 	s.mu.Lock()
@@ -1425,7 +1425,7 @@ func (s *Store) CleanupCompletedJobs(_ context.Context, userID string, olderThan
 
 	cutoff := time.Now().UTC().Add(-olderThan)
 	for id, job := range s.pdfJobs {
-		if job.UserID == userID && (job.Status == domain.PDFParseJobStatusCompleted || job.Status == domain.PDFParseJobStatusFailed) {
+		if job.UserID == userID && (job.Status == core.PDFParseJobStatusCompleted || job.Status == core.PDFParseJobStatusFailed) {
 			if (job.CompletedAt != nil && job.CompletedAt.Before(cutoff)) || (job.CompletedAt == nil && job.UpdatedAt.Before(cutoff)) {
 				delete(s.pdfJobs, id)
 			}
@@ -1438,9 +1438,9 @@ func (s *Store) CleanupCompletedJobs(_ context.Context, userID string, olderThan
 // Quota
 // -----------------------------------------------------------------------------
 
-func (s *Store) GetQuota(_ context.Context, userID string) (*domain.TenantQuota, error) {
+func (s *Store) GetQuota(_ context.Context, userID string) (*core.TenantQuota, error) {
 	if userID == "" {
-		return nil, fmt.Errorf("%w: user id cannot be empty", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: user id cannot be empty", core.ErrValidation)
 	}
 
 	s.mu.Lock()
@@ -1449,7 +1449,7 @@ func (s *Store) GetQuota(_ context.Context, userID string) (*domain.TenantQuota,
 	now := time.Now().UTC()
 	quota, ok := s.quotas[userID]
 	if !ok {
-		quota = &domain.TenantQuota{
+		quota = &core.TenantQuota{
 			UserID:             userID,
 			DailyRequestsUsed:  0,
 			DailyRequestLimit:  50,
@@ -1473,13 +1473,13 @@ func (s *Store) GetQuota(_ context.Context, userID string) (*domain.TenantQuota,
 func (s *Store) ReserveQuota(
 	_ context.Context,
 	userID string,
-	op domain.LLMOperationType,
+	op core.LLMOperationType,
 	estimatedTokens int,
 	dailyLimit int,
 	monthlyLimit int,
-) (*domain.LLMUsageRecord, error) {
+) (*core.LLMUsageRecord, error) {
 	if userID == "" {
-		return nil, fmt.Errorf("%w: user id cannot be empty", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: user id cannot be empty", core.ErrValidation)
 	}
 
 	s.mu.Lock()
@@ -1496,7 +1496,7 @@ func (s *Store) ReserveQuota(
 		if monthlyLimit > 0 {
 			mLimit = monthlyLimit
 		}
-		quota = &domain.TenantQuota{
+		quota = &core.TenantQuota{
 			UserID:             userID,
 			DailyRequestsUsed:  0,
 			DailyRequestLimit:  dLimit,
@@ -1521,22 +1521,22 @@ func (s *Store) ReserveQuota(
 	}
 
 	if quota.DailyRequestsUsed+1 > quota.DailyRequestLimit {
-		return nil, domain.ErrQuotaExceeded
+		return nil, core.ErrQuotaExceeded
 	}
 	if quota.MonthlyTokensUsed+estimatedTokens > quota.MonthlyTokenLimit {
-		return nil, domain.ErrQuotaExceeded
+		return nil, core.ErrQuotaExceeded
 	}
 
 	quota.DailyRequestsUsed++
 	quota.MonthlyTokensUsed += estimatedTokens
 	quota.UpdatedAt = now
 
-	record := &domain.LLMUsageRecord{
+	record := &core.LLMUsageRecord{
 		ID:              fmt.Sprintf("usage-%d", time.Now().UnixNano()),
 		UserID:          userID,
 		Operation:       op,
 		EstimatedTokens: estimatedTokens,
-		Status:          domain.ReservationStatusPending,
+		Status:          core.ReservationStatusPending,
 		CreatedAt:       now,
 	}
 	s.usageRecords[record.ID] = record
@@ -1544,9 +1544,9 @@ func (s *Store) ReserveQuota(
 	return clone(record), nil
 }
 
-func (s *Store) CommitUsage(_ context.Context, reservationID string, usage domain.TokenUsage) error {
+func (s *Store) CommitUsage(_ context.Context, reservationID string, usage core.TokenUsage) error {
 	if reservationID == "" {
-		return fmt.Errorf("%w: reservation id cannot be empty", domain.ErrValidation)
+		return fmt.Errorf("%w: reservation id cannot be empty", core.ErrValidation)
 	}
 
 	s.mu.Lock()
@@ -1554,9 +1554,9 @@ func (s *Store) CommitUsage(_ context.Context, reservationID string, usage domai
 
 	record, ok := s.usageRecords[reservationID]
 	if !ok {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
-	if record.Status != domain.ReservationStatusPending {
+	if record.Status != core.ReservationStatusPending {
 		return nil
 	}
 
@@ -1567,7 +1567,7 @@ func (s *Store) CommitUsage(_ context.Context, reservationID string, usage domai
 	}
 
 	now := time.Now().UTC()
-	record.Status = domain.ReservationStatusCommitted
+	record.Status = core.ReservationStatusCommitted
 	record.PromptTokens = usage.PromptTokens
 	record.CompletionTokens = usage.CompletionTokens
 	record.TotalTokens = usage.TotalTokens
@@ -1577,7 +1577,7 @@ func (s *Store) CommitUsage(_ context.Context, reservationID string, usage domai
 
 func (s *Store) ReleaseQuota(_ context.Context, reservationID string, errMsg string) error {
 	if reservationID == "" {
-		return fmt.Errorf("%w: reservation id cannot be empty", domain.ErrValidation)
+		return fmt.Errorf("%w: reservation id cannot be empty", core.ErrValidation)
 	}
 
 	s.mu.Lock()
@@ -1585,9 +1585,9 @@ func (s *Store) ReleaseQuota(_ context.Context, reservationID string, errMsg str
 
 	record, ok := s.usageRecords[reservationID]
 	if !ok {
-		return domain.ErrNotFound
+		return core.ErrNotFound
 	}
-	if record.Status != domain.ReservationStatusPending {
+	if record.Status != core.ReservationStatusPending {
 		return nil
 	}
 
@@ -1596,14 +1596,14 @@ func (s *Store) ReleaseQuota(_ context.Context, reservationID string, errMsg str
 		quota.UpdatedAt = time.Now().UTC()
 	}
 
-	record.Status = domain.ReservationStatusReleased
+	record.Status = core.ReservationStatusReleased
 	record.ErrorMessage = errMsg
 	return nil
 }
 
-func (s *Store) ListUsageRecords(_ context.Context, userID string, limit int) ([]domain.LLMUsageRecord, error) {
+func (s *Store) ListUsageRecords(_ context.Context, userID string, limit int) ([]core.LLMUsageRecord, error) {
 	if userID == "" {
-		return nil, fmt.Errorf("%w: user id cannot be empty", domain.ErrValidation)
+		return nil, fmt.Errorf("%w: user id cannot be empty", core.ErrValidation)
 	}
 	if limit <= 0 {
 		limit = 50
@@ -1612,7 +1612,7 @@ func (s *Store) ListUsageRecords(_ context.Context, userID string, limit int) ([
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []domain.LLMUsageRecord
+	var list []core.LLMUsageRecord
 	for _, rec := range s.usageRecords {
 		if rec.UserID == userID {
 			list = append(list, *clone(rec))
@@ -1633,20 +1633,20 @@ func (s *Store) ListUsageRecords(_ context.Context, userID string, limit int) ([
 // Users
 // -----------------------------------------------------------------------------
 
-func (s *Store) GetUser(_ context.Context, id string) (*domain.User, error) {
+func (s *Store) GetUser(_ context.Context, id string) (*core.User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	u, ok := s.users[id]
 	if !ok {
-		return nil, domain.ErrNotFound
+		return nil, core.ErrNotFound
 	}
 	return clone(u), nil
 }
 
-func (s *Store) UpsertUser(_ context.Context, user *domain.User) error {
+func (s *Store) UpsertUser(_ context.Context, user *core.User) error {
 	if user == nil || user.ID == "" {
-		return domain.ErrValidation
+		return core.ErrValidation
 	}
 
 	s.mu.Lock()
@@ -1667,8 +1667,8 @@ func (s *Store) UpsertUser(_ context.Context, user *domain.User) error {
 	existing.Email = user.Email
 	existing.FullName = user.FullName
 	// Preserve existing admin role unless explicitly promoted
-	if existing.Role == domain.UserRoleAdmin && user.Role != domain.UserRoleAdmin {
-		existing.Role = domain.UserRoleAdmin
+	if existing.Role == core.UserRoleAdmin && user.Role != core.UserRoleAdmin {
+		existing.Role = core.UserRoleAdmin
 	} else if user.Role != "" {
 		existing.Role = user.Role
 	}

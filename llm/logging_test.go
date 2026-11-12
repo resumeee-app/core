@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 type parsedLogRecord struct {
@@ -58,12 +58,12 @@ func TestLLMLogging_ClientProvider(t *testing.T) {
 	client := &fakeTransportClient{
 		name:         ProviderGemini,
 		defaultModel: defaultGeminiModel,
-		completeFn: func(_ context.Context, _ domain.LLMCompletionRequest) (*domain.LLMCompletionResponse, error) {
-			return &domain.LLMCompletionResponse{
+		completeFn: func(_ context.Context, _ core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+			return &core.LLMCompletionResponse{
 				Text:       sampleRespStr,
 				RawBody:    sampleRespStr,
 				StatusCode: http.StatusOK,
-				Usage:      domain.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+				Usage:      core.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
 			}, nil
 		},
 	}

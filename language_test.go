@@ -1,35 +1,35 @@
-package domain_test
+package core_test
 
 import (
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 func TestValidateLanguage_Defaults(t *testing.T) {
-	lang, err := domain.ValidateLanguage("")
+	lang, err := core.ValidateLanguage("")
 	if err != nil {
 		t.Fatalf("expected nil error for empty language, got: %v", err)
 	}
-	if lang != domain.DefaultLanguage {
-		t.Fatalf("expected default language %q, got: %q", domain.DefaultLanguage, lang)
+	if lang != core.DefaultLanguage {
+		t.Fatalf("expected default language %q, got: %q", core.DefaultLanguage, lang)
 	}
 
-	langSpace, err := domain.ValidateLanguage("   ")
+	langSpace, err := core.ValidateLanguage("   ")
 	if err != nil {
 		t.Fatalf("expected nil error for whitespace language, got: %v", err)
 	}
-	if langSpace != domain.DefaultLanguage {
-		t.Fatalf("expected default language %q, got: %q", domain.DefaultLanguage, langSpace)
+	if langSpace != core.DefaultLanguage {
+		t.Fatalf("expected default language %q, got: %q", core.DefaultLanguage, langSpace)
 	}
 }
 
 func TestValidateLanguage_SupportedLanguages(t *testing.T) {
-	for _, expected := range domain.SupportedLanguages {
+	for _, expected := range core.SupportedLanguages {
 		t.Run(expected, func(t *testing.T) {
-			got, err := domain.ValidateLanguage(expected)
+			got, err := core.ValidateLanguage(expected)
 			if err != nil {
 				t.Fatalf("expected valid language %q, got error: %v", expected, err)
 			}
@@ -63,7 +63,7 @@ func TestValidateLanguage_CaseInsensitiveAndCodes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.input, func(t *testing.T) {
-			got, err := domain.ValidateLanguage(tc.input)
+			got, err := core.ValidateLanguage(tc.input)
 			if err != nil {
 				t.Fatalf("unexpected error for %q: %v", tc.input, err)
 			}
@@ -93,12 +93,12 @@ func TestValidateLanguage_RTLRejected(t *testing.T) {
 
 	for _, rtl := range rtlCases {
 		t.Run(rtl, func(t *testing.T) {
-			_, err := domain.ValidateLanguage(rtl)
+			_, err := core.ValidateLanguage(rtl)
 			if err == nil {
 				t.Fatalf("expected error for RTL language %q, got nil", rtl)
 			}
-			if !errors.Is(err, domain.ErrRTLLanguageNotSupported) {
-				t.Fatalf("expected errors.Is(err, domain.ErrRTLLanguageNotSupported), got: %v", err)
+			if !errors.Is(err, core.ErrRTLLanguageNotSupported) {
+				t.Fatalf("expected errors.Is(err, core.ErrRTLLanguageNotSupported), got: %v", err)
 			}
 			if !strings.Contains(strings.ToLower(err.Error()), "right-to-left") {
 				t.Fatalf("expected error message to mention right-to-left, got: %v", err)
@@ -116,12 +116,12 @@ func TestValidateLanguage_Unsupported(t *testing.T) {
 
 	for _, tc := range unsupportedCases {
 		t.Run(tc, func(t *testing.T) {
-			_, err := domain.ValidateLanguage(tc)
+			_, err := core.ValidateLanguage(tc)
 			if err == nil {
 				t.Fatalf("expected error for unsupported language %q, got nil", tc)
 			}
-			if !errors.Is(err, domain.ErrUnsupportedLanguage) {
-				t.Fatalf("expected errors.Is(err, domain.ErrUnsupportedLanguage), got: %v", err)
+			if !errors.Is(err, core.ErrUnsupportedLanguage) {
+				t.Fatalf("expected errors.Is(err, core.ErrUnsupportedLanguage), got: %v", err)
 			}
 			if !strings.Contains(strings.ToLower(err.Error()), "unsupported") {
 				t.Fatalf("expected error message to mention unsupported, got: %v", err)
@@ -131,29 +131,29 @@ func TestValidateLanguage_Unsupported(t *testing.T) {
 }
 
 func TestTailoringStrategy_DefaultLanguageOnSave(t *testing.T) {
-	strat := domain.TailoringStrategy{
+	strat := core.TailoringStrategy{
 		Name: "Custom Strategy",
 	}
 	if err := strat.Normalize(); err != nil {
 		t.Fatalf("Normalize failed: %v", err)
 	}
-	if strat.Language != domain.DefaultLanguage {
-		t.Fatalf("expected language %q, got %q", domain.DefaultLanguage, strat.Language)
+	if strat.Language != core.DefaultLanguage {
+		t.Fatalf("expected language %q, got %q", core.DefaultLanguage, strat.Language)
 	}
 }
 
 func TestTailoringStrategy_EffectiveLanguage(t *testing.T) {
-	var nilStrat *domain.TailoringStrategy
-	if got := nilStrat.EffectiveLanguage(); got != domain.DefaultLanguage {
-		t.Fatalf("expected nil strategy to have effective language %q, got: %q", domain.DefaultLanguage, got)
+	var nilStrat *core.TailoringStrategy
+	if got := nilStrat.EffectiveLanguage(); got != core.DefaultLanguage {
+		t.Fatalf("expected nil strategy to have effective language %q, got: %q", core.DefaultLanguage, got)
 	}
 
-	emptyStrat := &domain.TailoringStrategy{Language: "   "}
-	if got := emptyStrat.EffectiveLanguage(); got != domain.DefaultLanguage {
-		t.Fatalf("expected empty language strategy to have effective language %q, got: %q", domain.DefaultLanguage, got)
+	emptyStrat := &core.TailoringStrategy{Language: "   "}
+	if got := emptyStrat.EffectiveLanguage(); got != core.DefaultLanguage {
+		t.Fatalf("expected empty language strategy to have effective language %q, got: %q", core.DefaultLanguage, got)
 	}
 
-	strat := &domain.TailoringStrategy{Language: "Spanish"}
+	strat := &core.TailoringStrategy{Language: "Spanish"}
 	if got := strat.EffectiveLanguage(); got != "Spanish" {
 		t.Fatalf("expected Spanish, got: %q", got)
 	}

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 	"github.com/resumeee-app/resumeee-core/privacy"
 )
@@ -13,7 +13,7 @@ import (
 type mockPrivacyProvider struct {
 	name         string
 	defaultModel string
-	tailoredResp *domain.GenerationResponse
+	tailoredResp *core.GenerationResponse
 	completeText string
 }
 
@@ -31,12 +31,12 @@ func (m *mockPrivacyProvider) DefaultModel() string {
 	return "mock-model"
 }
 
-func (m *mockPrivacyProvider) GenerateTailoredResume(ctx context.Context, req domain.GenerationRequest) (*domain.GenerationResponse, error) {
+func (m *mockPrivacyProvider) GenerateTailoredResume(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
 	if m.tailoredResp != nil {
 		copyResp := *m.tailoredResp
 		return &copyResp, nil
 	}
-	return &domain.GenerationResponse{}, nil
+	return &core.GenerationResponse{}, nil
 }
 
 func (m *mockPrivacyProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
@@ -50,20 +50,20 @@ func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 	mockProv := &mockPrivacyProvider{
 		name:         "openai",
 		defaultModel: "gpt-4o",
-		tailoredResp: &domain.GenerationResponse{
-			TailoredContent: domain.TailoredContent{
+		tailoredResp: &core.GenerationResponse{
+			TailoredContent: core.TailoredContent{
 				Summary: "Results-driven engineer " + privacy.PlaceholderFullName + " reachable at " + privacy.PlaceholderEmail + " or " + privacy.PlaceholderPhone + ". Portfolio: " + privacy.PlaceholderWebsite + ". Handle: candidate-social-1.",
-				Experiences: []domain.TailoredExperience{
+				Experiences: []core.TailoredExperience{
 					{
 						Company:       "Acme",
 						DutiesSummary: privacy.PlaceholderFullName + " led distributed infrastructure.",
-						Bullets: []domain.TailoredBullet{
+						Bullets: []core.TailoredBullet{
 							{Text: privacy.PlaceholderFullName + " scaled throughput by 300%."},
 						},
 					},
 				},
 			},
-			GapReport: domain.GapReport{
+			GapReport: core.GapReport{
 				OverallMatchSummary: privacy.PlaceholderFullName + " satisfies all requirements.",
 			},
 		},
@@ -73,22 +73,22 @@ func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 	reg.Register(mockProv)
 	adapter := llm.NewServiceAdapter(reg)
 
-	candidateProf := &domain.Profile{
+	candidateProf := &core.Profile{
 		FullName: "Alice Walker",
 		Email:    "alice.walker@example.org",
 		Phone:    "+1 555 432 1098",
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "GitHub", Username: "alicewalker", URL: "https://github.com/alicewalker"},
 			{Network: "Website", URL: "https://alice.dev"},
 		},
 	}
 
-	req := domain.GenerationRequest{
-		BranchContext: domain.Branch{
+	req := core.GenerationRequest{
+		BranchContext: core.Branch{
 			ProviderOverride: "openai",
 			ModelOverride:    "gpt-4o",
 		},
-		MainProfile: &domain.MainProfileSnapshot{
+		MainProfile: &core.MainProfileSnapshot{
 			Profile: *candidateProf,
 		},
 	}
@@ -140,20 +140,20 @@ func TestServiceAdapter_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 	reg.Register(mockProv)
 	adapter := llm.NewServiceAdapter(reg)
 
-	candidateProf := &domain.Profile{
+	candidateProf := &core.Profile{
 		FullName: "Alice Walker",
 		Email:    "alice.walker@example.org",
-		Profiles: []domain.SocialLink{
+		Profiles: []core.SocialLink{
 			{Network: "GitHub", Username: "alicewalker", URL: "https://github.com/alicewalker"},
 		},
 	}
 
-	req := domain.GenerationRequest{
-		BranchContext: domain.Branch{
+	req := core.GenerationRequest{
+		BranchContext: core.Branch{
 			ProviderOverride: "openai",
 			ModelOverride:    "gpt-4o",
 		},
-		MainProfile: &domain.MainProfileSnapshot{
+		MainProfile: &core.MainProfileSnapshot{
 			Profile: *candidateProf,
 		},
 	}

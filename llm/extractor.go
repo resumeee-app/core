@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/services/profile"
 )
 
@@ -18,7 +18,7 @@ type ResumeExtractor interface {
 // UsageResumeExtractor extends ResumeExtractor with token usage reporting.
 type UsageResumeExtractor interface {
 	ResumeExtractor
-	ExtractResumeWithUsage(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, domain.TokenUsage, error)
+	ExtractResumeWithUsage(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, core.TokenUsage, error)
 }
 
 // Completer abstracts text-based completion for LLM extraction tasks.
@@ -29,7 +29,7 @@ type Completer interface {
 // UsageCompleter extends Completer with token usage reporting.
 type UsageCompleter interface {
 	Completer
-	CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, domain.TokenUsage, error)
+	CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, core.TokenUsage, error)
 }
 
 // CompleterFunc allows using an ordinary function as a Completer.
@@ -48,15 +48,15 @@ type RawCompleter interface {
 // RawUsageCompleter is an optional interface implemented by LLM providers supporting raw text completions with token usage.
 type RawUsageCompleter interface {
 	RawCompleter
-	CompleteTextWithUsage(ctx context.Context, systemPrompt, userPrompt, model string) (string, domain.TokenUsage, error)
+	CompleteTextWithUsage(ctx context.Context, systemPrompt, userPrompt, model string) (string, core.TokenUsage, error)
 }
 
 // ExtractResumeWithTokenUsage extracts a structured resume using the extractor and returns the parsed resume,
 // token usage (defaulting to defaultTokens if reported as 0), and any error encountered.
-func ExtractResumeWithTokenUsage(ctx context.Context, extractor ResumeExtractor, text, provider, model string, defaultTokens int) (*profile.JSONResume, domain.TokenUsage, error) {
+func ExtractResumeWithTokenUsage(ctx context.Context, extractor ResumeExtractor, text, provider, model string, defaultTokens int) (*profile.JSONResume, core.TokenUsage, error) {
 	var (
 		extracted *profile.JSONResume
-		usage     domain.TokenUsage
+		usage     core.TokenUsage
 		err       error
 	)
 	if ue, ok := extractor.(UsageResumeExtractor); ok {
@@ -89,7 +89,7 @@ func NewDefaultResumeExtractor(registry *Registry) ResumeExtractor {
 }
 
 // AvailableModels returns available configured models if the completer is backed by a Registry.
-func (e *resumeExtractor) AvailableModels() []domain.ModelOption {
+func (e *resumeExtractor) AvailableModels() []core.ModelOption {
 	if rc, ok := e.completer.(*registryCompleter); ok && rc.registry != nil {
 		return rc.registry.AvailableModels()
 	}
@@ -112,9 +112,9 @@ func (rc *registryCompleter) Complete(ctx context.Context, systemPrompt, userPro
 }
 
 // CompleteWithUsage delegates raw text completion and captures token usage from the resolved LLM provider.
-func (rc *registryCompleter) CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, domain.TokenUsage, error) {
+func (rc *registryCompleter) CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, core.TokenUsage, error) {
 	if rc.registry == nil {
-		return "", domain.TokenUsage{}, ErrNoProviders
+		return "", core.TokenUsage{}, ErrNoProviders
 	}
 
 	targetProvider := provider
@@ -122,12 +122,12 @@ func (rc *registryCompleter) CompleteWithUsage(ctx context.Context, systemPrompt
 		targetProvider = rc.registry.DefaultProvider()
 	}
 	if strings.TrimSpace(targetProvider) == "" {
-		return "", domain.TokenUsage{}, ErrNoProviders
+		return "", core.TokenUsage{}, ErrNoProviders
 	}
 
 	p, err := rc.registry.Get(targetProvider)
 	if err != nil {
-		return "", domain.TokenUsage{}, err
+		return "", core.TokenUsage{}, err
 	}
 
 	targetModel := model
@@ -145,10 +145,10 @@ func (rc *registryCompleter) CompleteWithUsage(ctx context.Context, systemPrompt
 
 	if raw, ok := p.(RawCompleter); ok {
 		text, err := raw.CompleteText(ctx, systemPrompt, userPrompt, targetModel)
-		return text, domain.TokenUsage{}, err
+		return text, core.TokenUsage{}, err
 	}
 
-	return "", domain.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion", ErrInvalidResponse, p.Name())
+	return "", core.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion", ErrInvalidResponse, p.Name())
 }
 
 // ExtractResume parses unstructured resume text into a structured JSONResume document.
@@ -158,48 +158,48 @@ func (e *resumeExtractor) ExtractResume(ctx context.Context, text string, provid
 }
 
 // ExtractResumeWithUsage parses unstructured resume text into a structured JSONResume document and reports token usage.
-func (e *resumeExtractor) ExtractResumeWithUsage(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, domain.TokenUsage, error) {
+func (e *resumeExtractor) ExtractResumeWithUsage(ctx context.Context, text string, provider string, model string) (*profile.JSONResume, core.TokenUsage, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, domain.TokenUsage{}, err
+		return nil, core.TokenUsage{}, err
 	}
 
 	trimmedText := strings.TrimSpace(text)
 	if trimmedText == "" {
-		return nil, domain.TokenUsage{}, fmt.Errorf("%w: empty resume text", domain.ErrValidation)
+		return nil, core.TokenUsage{}, fmt.Errorf("%w: empty resume text", core.ErrValidation)
 	}
 
 	if e.completer == nil {
-		return nil, domain.TokenUsage{}, fmt.Errorf("%w: no completer configured", domain.ErrValidation)
+		return nil, core.TokenUsage{}, fmt.Errorf("%w: no completer configured", core.ErrValidation)
 	}
 
 	prompts, err := BuildResumeExtractPrompt(trimmedText)
 	if err != nil {
-		return nil, domain.TokenUsage{}, fmt.Errorf("failed to build resume extraction prompt: %w", err)
+		return nil, core.TokenUsage{}, fmt.Errorf("failed to build resume extraction prompt: %w", err)
 	}
 
 	var rawResponse string
-	var usage domain.TokenUsage
+	var usage core.TokenUsage
 	if uc, ok := e.completer.(UsageCompleter); ok {
 		rawResponse, usage, err = uc.CompleteWithUsage(ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model)
 	} else {
 		rawResponse, err = e.completer.Complete(ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model)
 	}
 	if err != nil {
-		return nil, domain.TokenUsage{}, err
+		return nil, core.TokenUsage{}, err
 	}
 
 	if err := ctx.Err(); err != nil {
-		return nil, domain.TokenUsage{}, err
+		return nil, core.TokenUsage{}, err
 	}
 
 	cleanedJSON := ExtractJSON(rawResponse)
 	if strings.TrimSpace(cleanedJSON) == "" {
-		return nil, domain.TokenUsage{}, fmt.Errorf("%w: empty or missing JSON in LLM response", domain.ErrValidation)
+		return nil, core.TokenUsage{}, fmt.Errorf("%w: empty or missing JSON in LLM response", core.ErrValidation)
 	}
 
 	var resume profile.JSONResume
 	if err := json.Unmarshal([]byte(cleanedJSON), &resume); err != nil {
-		return nil, domain.TokenUsage{}, fmt.Errorf("%w: failed to parse structured LLM response: %v", domain.ErrValidation, err)
+		return nil, core.TokenUsage{}, fmt.Errorf("%w: failed to parse structured LLM response: %v", core.ErrValidation, err)
 	}
 
 	return &resume, usage, nil

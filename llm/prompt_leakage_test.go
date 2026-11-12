@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 	"github.com/resumeee-app/resumeee-core/validator"
@@ -14,21 +14,21 @@ import (
 
 // makeLeakageTestRequest constructs a generation request containing extensive internal multi-tenancy,
 // database timestamp, audit, configuration, and metadata fields.
-func makeLeakageTestRequest() domain.GenerationRequest {
+func makeLeakageTestRequest() core.GenerationRequest {
 	tenantID := "usr-tenant-999"
 	profileID := "profile-usr-tenant-999"
 	now := time.Date(2026, 3, 15, 10, 30, 0, 0, time.UTC)
 	created := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	updated := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	startDate := domain.NewDate(2020, 1, 1)
+	startDate := core.NewDate(2020, 1, 1)
 	hours := 40
 
-	return domain.GenerationRequest{
+	return core.GenerationRequest{
 		GlobalRules:        "Tier 1 global writing rule.",
 		PresetInstructions: "Tier 2 preset instructions.",
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{
 				ID:                 profileID,
 				UserID:             tenantID,
 				FullName:           "Candidate Zero",
@@ -36,15 +36,15 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 				Email:              "candidate.zero@example.com",
 				Phone:              "+1 (555) 000-1111",
 				Summary:            "Experienced systems architect.",
-				Location:           domain.Location{City: "San Francisco", Region: "CA", CountryCode: "US"},
-				Profiles:           []domain.SocialLink{{Network: "GitHub", Username: "candzero", URL: "https://github.com/candzero"}},
+				Location:           core.Location{City: "San Francisco", Region: "CA", CountryCode: "US"},
+				Profiles:           []core.SocialLink{{Network: "GitHub", Username: "candzero", URL: "https://github.com/candzero"}},
 				GlobalWritingRules: "Do not use passive voice.",
 				MainRevision:       42,
 				Metadata:           map[string]any{"internal_billing_tier": "enterprise", "system_tag": "vip"},
 				CreatedAt:          created,
 				UpdatedAt:          updated,
 			},
-			Skills: []domain.Skill{
+			Skills: []core.Skill{
 				{
 					ID:              "uuid-skill-100",
 					ShortID:         "sk-1",
@@ -61,18 +61,18 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 					UpdatedAt:       updated,
 				},
 			},
-			Experiences: []domain.WorkExperience{
+			Experiences: []core.WorkExperience{
 				{
 					ID:                "uuid-exp-200",
 					ShortID:           "exp-1",
 					UserID:            tenantID,
 					Company:           "Stripe",
 					RoleTitle:         "Staff Infrastructure Engineer",
-					EmploymentType:    domain.EmploymentTypeFullTime,
+					EmploymentType:    core.EmploymentTypeFullTime,
 					StartDate:         startDate,
-					Location:          domain.Location{City: "San Francisco", Region: "CA", CountryCode: "US"},
-					CompanyLocation:   domain.Location{City: "South San Francisco", Region: "CA", CountryCode: "US"},
-					CompanyContact:    &domain.ContactDetail{Type: domain.ContactTypeEmail, Value: "hr@stripe.com"},
+					Location:          core.Location{City: "San Francisco", Region: "CA", CountryCode: "US"},
+					CompanyLocation:   core.Location{City: "South San Francisco", Region: "CA", CountryCode: "US"},
+					CompanyContact:    &core.ContactDetail{Type: core.ContactTypeEmail, Value: "hr@stripe.com"},
 					HoursPerWeek:      &hours,
 					SupervisorName:    "Jane Supervisor",
 					SupervisorContact: "jane.supervisor@stripe.com",
@@ -80,16 +80,16 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 					Metadata:          map[string]any{"internal_payroll_code": "ST-999"},
 					CreatedAt:         created,
 					UpdatedAt:         updated,
-					Facts: []domain.Fact{
+					Facts: []core.Fact{
 						{
 							ID:        "uuid-fact-300",
 							ShortID:   "fact-1",
 							UserID:    tenantID,
 							OwnerID:   "uuid-exp-200",
-							OwnerType: domain.OwnerTypeWorkExperience,
+							OwnerType: core.OwnerTypeWorkExperience,
 							Statement: "Architected multi-region consensus ledger",
 							Impact:    "Reduced global transaction latency by 42%",
-							Skills: []domain.Skill{
+							Skills: []core.Skill{
 								{
 									ID:       "uuid-skill-100",
 									ShortID:  "sk-1",
@@ -104,7 +104,7 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 					},
 				},
 			},
-			Projects: []domain.Project{
+			Projects: []core.Project{
 				{
 					ID:        "uuid-proj-400",
 					ShortID:   "proj-1",
@@ -118,7 +118,7 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 					UpdatedAt: updated,
 				},
 			},
-			Education: []domain.Education{
+			Education: []core.Education{
 				{
 					ID:          "uuid-edu-500",
 					ShortID:     "edu-1",
@@ -128,13 +128,13 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 					Field:       "Computer Science",
 					StartDate:   &startDate,
 					Score:       "3.95 GPA",
-					Location:    domain.Location{City: "Stanford", Region: "CA", CountryCode: "US"},
+					Location:    core.Location{City: "Stanford", Region: "CA", CountryCode: "US"},
 					Metadata:    map[string]any{"student_id_hash": "st-888"},
 					CreatedAt:   created,
 					UpdatedAt:   updated,
 				},
 			},
-			Certifications: []domain.Certification{
+			Certifications: []core.Certification{
 				{
 					ID:        "uuid-cert-600",
 					ShortID:   "cert-1",
@@ -147,13 +147,13 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 					UpdatedAt: updated,
 				},
 			},
-			Facts: []domain.Fact{
+			Facts: []core.Fact{
 				{
 					ID:        "uuid-fact-standalone-700",
 					ShortID:   "fact-2",
 					UserID:    tenantID,
 					OwnerID:   "uuid-proj-400",
-					OwnerType: domain.OwnerTypeProject,
+					OwnerType: core.OwnerTypeProject,
 					Statement: "Implemented snapshot compression protocol",
 					Impact:    "Decreased log compaction time by 60%",
 					CreatedAt: created,
@@ -163,27 +163,27 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 			MainRevision:  42,
 			ExportedAt:    now,
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRole:         "Staff Systems Architect",
 			TargetCompany:      "Cloudflare",
 			TargetRequirements: "Distributed consensus and high-throughput systems.",
 			BranchInstructions: "Emphasize zero-downtime consensus transitions.",
 		},
-		PriorVersion: &domain.TailoredContent{
+		PriorVersion: &core.TailoredContent{
 			Summary: "Prior active summary with no leaks.",
-			Experiences: []domain.TailoredExperience{
+			Experiences: []core.TailoredExperience{
 				{
 					SourceEntityID:    "uuid-exp-200",
 					Company:           "Stripe",
 					RoleTitle:         "Staff Infrastructure Engineer",
 					StartDate:         startDate,
-					Location:          domain.Location{City: "CanaryPriorExpCity"},
-					CompanyLocation:   domain.Location{City: "CanaryPriorCompanyCity"},
-					CompanyContact:    &domain.ContactDetail{Type: domain.ContactTypeEmail, Value: "canary-prior-hr@stripe.com"},
+					Location:          core.Location{City: "CanaryPriorExpCity"},
+					CompanyLocation:   core.Location{City: "CanaryPriorCompanyCity"},
+					CompanyContact:    &core.ContactDetail{Type: core.ContactTypeEmail, Value: "canary-prior-hr@stripe.com"},
 					HoursPerWeek:      &hours,
 					SupervisorName:    "Canary Prior Supervisor",
 					SupervisorContact: "canary-prior-supervisor@stripe.com",
-					Bullets: []domain.TailoredBullet{
+					Bullets: []core.TailoredBullet{
 						{
 							Text:          "Prior tailored bullet",
 							SourceFactIDs: []string{"uuid-fact-300"},
@@ -191,13 +191,13 @@ func makeLeakageTestRequest() domain.GenerationRequest {
 					},
 				},
 			},
-			Education: []domain.TailoredEducation{
+			Education: []core.TailoredEducation{
 				{
 					SourceEntityID: "uuid-edu-500",
 					Institution:    "Stanford University",
 					Degree:         "M.S.",
 					Field:          "Computer Science",
-					Location:       domain.Location{City: "CanaryPriorEduCity"},
+					Location:       core.Location{City: "CanaryPriorEduCity"},
 				},
 			},
 		},
@@ -307,22 +307,22 @@ func TestBuildPrompt_PreventsInternalDataLeakage(t *testing.T) {
 	}
 
 	// Verify provenance validation round-trip succeeds with short IDs generated in response
-	mockLLMResponse := &domain.TailoredContent{
+	mockLLMResponse := &core.TailoredContent{
 		Summary: "Results-oriented architect with deep distributed consensus expertise.",
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category:       "Systems",
 				Skills:         []string{"Distributed Consensus"},
 				SourceSkillIDs: []string{"sk-1"},
 			},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Stripe",
 				RoleTitle:      "Staff Infrastructure Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2020, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:           "Architected multi-region consensus ledger reducing latency by 42%.",
 						SourceFactIDs:  []string{"fact-1"},
@@ -331,11 +331,11 @@ func TestBuildPrompt_PreventsInternalDataLeakage(t *testing.T) {
 				},
 			},
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{
 				SourceEntityID: "proj-1",
 				Name:           "RaftCore",
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Implemented snapshot compression protocol decreasing compaction by 60%.",
 						SourceFactIDs: []string{"fact-2"},
@@ -343,7 +343,7 @@ func TestBuildPrompt_PreventsInternalDataLeakage(t *testing.T) {
 				},
 			},
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{
 				SourceEntityID: "edu-1",
 				Institution:    "Stanford University",
@@ -352,7 +352,7 @@ func TestBuildPrompt_PreventsInternalDataLeakage(t *testing.T) {
 				StartDate:      &req.MainProfile.Experiences[0].StartDate,
 			},
 		},
-		Certifications: []domain.TailoredCert{
+		Certifications: []core.TailoredCert{
 			{
 				SourceEntityID: "cert-1",
 				Name:           "AWS Solutions Architect Professional",
@@ -398,22 +398,22 @@ func TestBuildGapAnalysisPrompt_PreventsInternalDataLeakage(t *testing.T) {
 func TestNonTailoringFields_PreservedInRenderedOutput(t *testing.T) {
 	req := makeLeakageTestRequest()
 
-	mockLLMResponse := &domain.TailoredContent{
+	mockLLMResponse := &core.TailoredContent{
 		Summary: "Tailored summary.",
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category:       "Systems",
 				Skills:         []string{"Distributed Consensus"},
 				SourceSkillIDs: []string{"sk-1"},
 			},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-1",
 				Company:        "Stripe",
 				RoleTitle:      "Staff Infrastructure Engineer",
-				StartDate:      domain.NewDate(2020, 1, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2020, 1, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Architected multi-region consensus ledger",
 						SourceFactIDs: []string{"fact-1"},
@@ -421,7 +421,7 @@ func TestNonTailoringFields_PreservedInRenderedOutput(t *testing.T) {
 				},
 			},
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{
 				SourceEntityID: "edu-1",
 				Institution:    "Stanford University",
@@ -463,7 +463,7 @@ func TestNonTailoringFields_PreservedInRenderedOutput(t *testing.T) {
 		t.Errorf("expected education Location.City %q, got %q", "Stanford", edu.Location.City)
 	}
 
-	tmpl := &domain.TemplateSet{
+	tmpl := &core.TemplateSet{
 		HTMLTemplate: `<div><h1>{{.FullName}}</h1><p>{{.Email}} | {{.Phone}} | {{.Location.City}}</p><p>{{(index .Profiles 0).Username}}</p>{{range .Experiences}}<p>{{.Company}} - {{.Location.City}} - {{.CompanyLocation.City}} - {{.SupervisorName}} - {{.SupervisorContact}} - {{.CompanyContact.Value}} - {{.HoursPerWeek}}</p>{{end}}{{range .Education}}<p>{{.Institution}} - {{.Location.City}}</p>{{end}}</div>`,
 		MarkdownTemplate: `# {{.FullName}}
 {{.Email}} | {{.Phone}} | {{.Location.City}} | {{(index .Profiles 0).Username}}

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // Provider identifier constants.
@@ -19,24 +19,24 @@ const (
 // Authentication failure sentinel errors.
 var (
 	// ErrMissingBearerHeader indicates the Authorization header was missing or not prefixed with Bearer.
-	ErrMissingBearerHeader = fmt.Errorf("%w: missing or invalid authorization header", domain.ErrUnauthorized)
+	ErrMissingBearerHeader = fmt.Errorf("%w: missing or invalid authorization header", core.ErrUnauthorized)
 
 	// ErrEmptyBearerToken indicates the Bearer token payload was blank or composed only of whitespace.
-	ErrEmptyBearerToken = fmt.Errorf("%w: bearer token is empty", domain.ErrUnauthorized)
+	ErrEmptyBearerToken = fmt.Errorf("%w: bearer token is empty", core.ErrUnauthorized)
 
 	// ErrProviderNotConfigured indicates the authentication provider was nil or not configured.
-	ErrProviderNotConfigured = fmt.Errorf("%w: authentication provider not configured", domain.ErrUnauthorized)
+	ErrProviderNotConfigured = fmt.Errorf("%w: authentication provider not configured", core.ErrUnauthorized)
 )
 
 // RequestAuthenticator inspects and authenticates incoming HTTP requests.
 type RequestAuthenticator interface {
-	AuthenticateRequest(r *http.Request) (*domain.TokenInfo, error)
+	AuthenticateRequest(r *http.Request) (*core.TokenInfo, error)
 }
 
 // Provider represents a full authentication provider supporting both direct HTTP request inspection
 // and bearer token verification.
 type Provider interface {
-	domain.AuthProvider
+	core.AuthProvider
 	RequestAuthenticator
 }
 

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // processJob coordinates end-to-end execution of a background resume generation pipeline job.
@@ -16,7 +16,7 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 	}
 
 	// 1. Transition version status to processing
-	if err := p.branchRepo.UpdateVersionStatus(ctx, job.VersionID, domain.VersionStatusProcessing, ""); err != nil {
+	if err := p.branchRepo.UpdateVersionStatus(ctx, job.VersionID, core.VersionStatusProcessing, ""); err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to update version status to processing", "version_id", job.VersionID, "err", err)
 		}
@@ -55,7 +55,7 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 		return
 	}
 
-	var preset *domain.Preset
+	var preset *core.Preset
 	if branch.PresetID != nil && *branch.PresetID != "" && p.presetRepo != nil {
 		pr, err := p.presetRepo.GetPreset(ctx, job.UserID, *branch.PresetID)
 		if err == nil {
@@ -64,7 +64,7 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 	}
 
 	// Continuity: Prior version context
-	var priorContent *domain.TailoredContent
+	var priorContent *core.TailoredContent
 	if branch.ActiveVersionID != nil && *branch.ActiveVersionID != "" {
 		activeVer, err := p.branchRepo.GetVersion(ctx, branch.ID, *branch.ActiveVersionID)
 		if err == nil && activeVer != nil {
@@ -90,7 +90,7 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 
 	targetLang := preset.EffectiveLanguage()
 
-	req := domain.GenerationRequest{
+	req := core.GenerationRequest{
 		Model:              model,
 		ReasoningLevel:     reasoningLevel,
 		MainProfile:        snapshot,
@@ -174,9 +174,9 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 		return
 	}
 
-	status := domain.VersionStatusCompleted
+	status := core.VersionStatusCompleted
 	if len(warnings) > 0 {
-		status = domain.VersionStatusCompletedWithWarnings
+		status = core.VersionStatusCompletedWithWarnings
 	}
 
 	ver.Status = status
@@ -190,7 +190,7 @@ func (p *Pool) processJob(ctx context.Context, job GenerationJob) {
 	}
 	ver.TailoredContent = sanitizedContent
 	if resp.GapReport.MatchScore == nil {
-		score := domain.CalculateDeterministicMatchScore(resp.GapReport.MissingRequirements)
+		score := core.CalculateDeterministicMatchScore(resp.GapReport.MissingRequirements)
 		resp.GapReport.MatchScore = &score
 	}
 	ver.GapReport = &resp.GapReport
@@ -223,7 +223,7 @@ func (p *Pool) failJob(ctx context.Context, versionID, errMsg string) {
 	if p.branchRepo != nil {
 		failCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := p.branchRepo.UpdateVersionStatus(failCtx, versionID, domain.VersionStatusFailed, errMsg); err != nil {
+		if err := p.branchRepo.UpdateVersionStatus(failCtx, versionID, core.VersionStatusFailed, errMsg); err != nil {
 			if p.logger != nil {
 				p.logger.Error("failed to record version failure status in repository", "version_id", versionID, "error", err)
 			}

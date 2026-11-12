@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // LeanProfile represents a sanitized profile header containing only candidate headline and professional summary.
@@ -36,9 +36,9 @@ type LeanExperience struct {
 	ID             string                `json:"id"`
 	Company        string                `json:"company"`
 	RoleTitle      string                `json:"role_title"`
-	EmploymentType domain.EmploymentType `json:"employment_type,omitempty"`
-	StartDate      domain.Date           `json:"start_date"`
-	EndDate        *domain.Date          `json:"end_date,omitempty"`
+	EmploymentType core.EmploymentType `json:"employment_type,omitempty"`
+	StartDate      core.Date           `json:"start_date"`
+	EndDate        *core.Date          `json:"end_date,omitempty"`
 	IsCurrent      bool                  `json:"is_current,omitempty"`
 	DutiesSummary  string                `json:"duties_summary,omitempty"`
 	Facts          []LeanFact            `json:"facts,omitempty"`
@@ -51,8 +51,8 @@ type LeanProject struct {
 	Name      string       `json:"name"`
 	Role      string       `json:"role,omitempty"`
 	URL       string       `json:"url,omitempty"`
-	StartDate *domain.Date `json:"start_date,omitempty"`
-	EndDate   *domain.Date `json:"end_date,omitempty"`
+	StartDate *core.Date `json:"start_date,omitempty"`
+	EndDate   *core.Date `json:"end_date,omitempty"`
 	Summary   string       `json:"summary,omitempty"`
 	Facts     []LeanFact   `json:"facts,omitempty"`
 	Skills    []LeanSkill  `json:"skills,omitempty"`
@@ -64,8 +64,8 @@ type LeanEducation struct {
 	Institution string       `json:"institution"`
 	Degree      string       `json:"degree,omitempty"`
 	Field       string       `json:"field,omitempty"`
-	StartDate   *domain.Date `json:"start_date,omitempty"`
-	EndDate     *domain.Date `json:"end_date,omitempty"`
+	StartDate   *core.Date `json:"start_date,omitempty"`
+	EndDate     *core.Date `json:"end_date,omitempty"`
 	Score       string       `json:"score,omitempty"`
 	Facts       []LeanFact   `json:"facts,omitempty"`
 }
@@ -75,7 +75,7 @@ type LeanCertification struct {
 	ID      string       `json:"id"`
 	Name    string       `json:"name"`
 	Issuer  string       `json:"issuer,omitempty"`
-	Date    *domain.Date `json:"date,omitempty"`
+	Date    *core.Date `json:"date,omitempty"`
 	URL     string       `json:"url,omitempty"`
 	Summary string       `json:"summary,omitempty"`
 }
@@ -94,8 +94,8 @@ type LeanMainProfile struct {
 	Facts          []LeanFact          `json:"facts,omitempty"`
 }
 
-// projectLeanSkills converts a slice of domain.Skill entities into LeanSkill DTOs with short IDs.
-func projectLeanSkills(skills []domain.Skill) []LeanSkill {
+// projectLeanSkills converts a slice of core.Skill entities into LeanSkill DTOs with short IDs.
+func projectLeanSkills(skills []core.Skill) []LeanSkill {
 	if len(skills) == 0 {
 		return nil
 	}
@@ -113,8 +113,8 @@ func projectLeanSkills(skills []domain.Skill) []LeanSkill {
 	return res
 }
 
-// projectLeanFact converts a single domain.Fact into a LeanFact DTO with a specified owner short ID.
-func projectLeanFact(f domain.Fact, ownerID string) LeanFact {
+// projectLeanFact converts a single core.Fact into a LeanFact DTO with a specified owner short ID.
+func projectLeanFact(f core.Fact, ownerID string) LeanFact {
 	var ownerType string
 	if f.OwnerType != "" {
 		ownerType = string(f.OwnerType)
@@ -129,8 +129,8 @@ func projectLeanFact(f domain.Fact, ownerID string) LeanFact {
 	}
 }
 
-// projectLeanFacts converts a slice of domain.Fact entities into LeanFact DTOs with short IDs.
-func projectLeanFacts(facts []domain.Fact, ownerShortID string) []LeanFact {
+// projectLeanFacts converts a slice of core.Fact entities into LeanFact DTOs with short IDs.
+func projectLeanFacts(facts []core.Fact, ownerShortID string) []LeanFact {
 	if len(facts) == 0 {
 		return nil
 	}
@@ -157,7 +157,7 @@ func projectLeanFacts(facts []domain.Fact, ownerShortID string) []LeanFact {
 //
 // Returns:
 //   - A new LeanMainProfile instance, or nil if snap is nil.
-func ProjectLeanMainProfile(snap *domain.MainProfileSnapshot, idMap map[string]string) *LeanMainProfile {
+func ProjectLeanMainProfile(snap *core.MainProfileSnapshot, idMap map[string]string) *LeanMainProfile {
 	if snap == nil {
 		return nil
 	}

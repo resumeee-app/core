@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 	"github.com/resumeee-app/resumeee-core/privacy"
 )
@@ -19,17 +19,17 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 	realGitHub := "https://github.com/alexmercer-dev"
 	realUsername := "alexmercer-dev"
 
-	req := domain.GenerationRequest{
+	req := core.GenerationRequest{
 		GlobalRules:        "Tier 1: Always highlight " + realName + "'s distributed systems background. Reach at " + realEmail + ".",
 		PresetInstructions: "Tier 2: Emphasize " + realName + "'s metrics.",
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{
 				FullName: realName,
 				Headline: "Principal Cloud Architect (" + realName + ")",
 				Email:    realEmail,
 				Phone:    realPhone,
 				Summary:  realName + " is a distributed systems expert. Contact: " + realEmail + ", Phone: " + realPhone + ", Web: " + realWebsite + ".",
-				Profiles: []domain.SocialLink{
+				Profiles: []core.SocialLink{
 					{Network: "LinkedIn", Username: "alexmercer", URL: realLinkedIn},
 					{Network: "GitHub", Username: realUsername, URL: realGitHub},
 				},
@@ -37,7 +37,7 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 					"website": realWebsite,
 				},
 			},
-			Experiences: []domain.WorkExperience{
+			Experiences: []core.WorkExperience{
 				{
 					ID:                "exp-1",
 					ShortID:           "exp-1",
@@ -46,7 +46,7 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 					DutiesSummary:     realName + " oversaw infrastructure engineering.",
 					SupervisorName:    "Jane Director",
 					SupervisorContact: realEmail,
-					Facts: []domain.Fact{
+					Facts: []core.Fact{
 						{
 							ID:        "fact-1",
 							ShortID:   "f-1",
@@ -56,7 +56,7 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 					},
 				},
 			},
-			Projects: []domain.Project{
+			Projects: []core.Project{
 				{
 					ID:      "proj-1",
 					ShortID: "proj-1",
@@ -67,13 +67,13 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 			},
 			ExportedAt: time.Now(),
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRole:         "Staff Systems Engineer",
 			TargetCompany:      "Stripe",
 			TargetRequirements: "Looking for an engineer with " + realName + "'s caliber at " + realEmail + ".",
 			BranchInstructions: "Direct attention to " + realName + "'s Raft expertise.",
 		},
-		PriorVersion: &domain.TailoredContent{
+		PriorVersion: &core.TailoredContent{
 			Summary: "Prior active summary for " + realName + " (" + realEmail + ").",
 		},
 	}
@@ -133,20 +133,20 @@ func TestBuildGapAnalysisPrompt_ContactPrivacyMasking(t *testing.T) {
 	realEmail := "samantha.ray@fintech.net"
 	realPhone := "+1 (555) 999-8888"
 
-	req := domain.GenerationRequest{
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{
+	req := core.GenerationRequest{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{
 				FullName: realName,
 				Email:    realEmail,
 				Phone:    realPhone,
 				Summary:  realName + " has 10+ years in distributed databases.",
 			},
-			Skills: []domain.Skill{
+			Skills: []core.Skill{
 				{ID: "sk-1", ShortID: "sk-1", Name: "Go"},
 			},
 			ExportedAt: time.Now(),
 		},
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			TargetRole:         "Lead Database Engineer",
 			TargetCompany:      "Cockroach Labs",
 			TargetRequirements: "Candidate like " + realName + " with strong Go internals.",

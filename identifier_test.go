@@ -1,10 +1,10 @@
-package domain_test
+package core_test
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // TestGenerateShortID_Prefixes verifies that GenerateShortID attaches the correct entity prefixes,
@@ -15,7 +15,7 @@ func TestGenerateShortID_Prefixes(t *testing.T) {
 
 	for _, prefix := range prefixes {
 		t.Run("Prefix_"+prefix, func(t *testing.T) {
-			id := domain.GenerateShortID(prefix)
+			id := core.GenerateShortID(prefix)
 			if !strings.HasPrefix(id, prefix+"-") {
 				t.Fatalf("expected prefix %q-, got %q", prefix, id)
 			}
@@ -39,7 +39,7 @@ func TestGenerateID_Prefixes(t *testing.T) {
 	prefixes := []string{"exp", "fact", "skill", "proj", "edu", "cert"}
 	for _, prefix := range prefixes {
 		t.Run("Prefix_"+prefix, func(t *testing.T) {
-			id := domain.GenerateID(prefix)
+			id := core.GenerateID(prefix)
 			if !strings.HasPrefix(id, prefix+"-") {
 				t.Fatalf("expected prefix %q-, got %q", prefix, id)
 			}
@@ -94,7 +94,7 @@ func TestShortenID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actual := domain.ShortenID(tt.input)
+			actual := core.ShortenID(tt.input)
 			if actual != tt.expected {
 				t.Fatalf("ShortenID(%q) = %q; expected %q", tt.input, actual, tt.expected)
 			}
@@ -107,12 +107,12 @@ func TestShortenID(t *testing.T) {
 func TestEffectiveShortID(t *testing.T) {
 	tests := []struct {
 		name     string
-		entity   domain.ShortIdentifiable
+		entity   core.ShortIdentifiable
 		expected string
 	}{
 		{
 			name: "WorkExperience_ExplicitShortID",
-			entity: domain.WorkExperience{
+			entity: core.WorkExperience{
 				ID:      "exp-9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
 				ShortID: "exp-1",
 			},
@@ -120,21 +120,21 @@ func TestEffectiveShortID(t *testing.T) {
 		},
 		{
 			name: "WorkExperience_FallbackUUID",
-			entity: domain.WorkExperience{
+			entity: core.WorkExperience{
 				ID: "exp-9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
 			},
 			expected: "exp-9b1deb4d",
 		},
 		{
 			name: "WorkExperience_FallbackShort",
-			entity: domain.WorkExperience{
+			entity: core.WorkExperience{
 				ID: "exp-1",
 			},
 			expected: "exp-1",
 		},
 		{
 			name: "Fact_ExplicitShortID",
-			entity: domain.Fact{
+			entity: core.Fact{
 				ID:      "fact-3db884b2-f155-442b-9e0a-ef5f8b96d997",
 				ShortID: "fact-42",
 			},
@@ -142,14 +142,14 @@ func TestEffectiveShortID(t *testing.T) {
 		},
 		{
 			name: "Fact_FallbackUUID",
-			entity: domain.Fact{
+			entity: core.Fact{
 				ID: "fact-3db884b2-f155-442b-9e0a-ef5f8b96d997",
 			},
 			expected: "fact-3db884b2",
 		},
 		{
 			name: "Skill_ExplicitShortID",
-			entity: domain.Skill{
+			entity: core.Skill{
 				ID:      "skill-87654321-3b7d-4bad-9bdd-2b0d7b3dcb6d",
 				ShortID: "skill-go",
 			},
@@ -157,7 +157,7 @@ func TestEffectiveShortID(t *testing.T) {
 		},
 		{
 			name: "Project_ExplicitShortID",
-			entity: domain.Project{
+			entity: core.Project{
 				ID:      "proj-11112222-3b7d-4bad-9bdd-2b0d7b3dcb6d",
 				ShortID: "proj-resumeee",
 			},
@@ -165,7 +165,7 @@ func TestEffectiveShortID(t *testing.T) {
 		},
 		{
 			name: "Education_ExplicitShortID",
-			entity: domain.Education{
+			entity: core.Education{
 				ID:      "edu-33334444-3b7d-4bad-9bdd-2b0d7b3dcb6d",
 				ShortID: "edu-mit",
 			},
@@ -173,7 +173,7 @@ func TestEffectiveShortID(t *testing.T) {
 		},
 		{
 			name: "Certification_ExplicitShortID",
-			entity: domain.Certification{
+			entity: core.Certification{
 				ID:      "cert-55556666-3b7d-4bad-9bdd-2b0d7b3dcb6d",
 				ShortID: "cert-cka",
 			},

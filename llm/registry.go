@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 )
 
 // DefaultLLMDebugDir is the default directory for writing prompt debug artifacts.
@@ -74,7 +74,7 @@ func RegisterClients(reg *Registry, cfg ProviderConfig, clientOpts ...Option) {
 // according to the 4-tier resolution hierarchy.
 type Registry struct {
 	mu              sync.RWMutex
-	providers       map[string]domain.LLMProvider
+	providers       map[string]core.LLMProvider
 	defaultProvider string
 	defaultModel    string
 	explicitDefault bool
@@ -87,15 +87,15 @@ type Registry struct {
 func NewRegistry(opts ...Option) *Registry {
 	baseOpts := applyOptions(opts, "", "")
 	return &Registry{
-		providers: make(map[string]domain.LLMProvider),
+		providers: make(map[string]core.LLMProvider),
 		debugger:  baseOpts.promptDebugger,
 		opts:      opts,
 	}
 }
 
-// RegisterClient wraps a transport-only domain.LLMClient with prompt compilation and observability,
+// RegisterClient wraps a transport-only core.LLMClient with prompt compilation and observability,
 // and registers it in the Registry.
-func (r *Registry) RegisterClient(client domain.LLMClient, extraOpts ...Option) {
+func (r *Registry) RegisterClient(client core.LLMClient, extraOpts ...Option) {
 	if client == nil {
 		return
 	}
@@ -104,7 +104,7 @@ func (r *Registry) RegisterClient(client domain.LLMClient, extraOpts ...Option) 
 }
 
 // Register adds an LLMProvider to the registry and updates the system default provider hierarchy.
-func (r *Registry) Register(provider domain.LLMProvider) {
+func (r *Registry) Register(provider core.LLMProvider) {
 	if provider == nil {
 		return
 	}
@@ -149,7 +149,7 @@ func (r *Registry) recomputeDefaultLocked() {
 }
 
 // Get returns the named provider, handling aliases (such as openai-compat).
-func (r *Registry) Get(name string) (domain.LLMProvider, error) {
+func (r *Registry) Get(name string) (core.LLMProvider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -220,7 +220,7 @@ func (r *Registry) SetDefault(provider, model string) {
 // 1. GenerationRequest overrides (req.Model, req.BranchContext.ProviderOverride)
 // 2. Branch overrides (branch.ProviderOverride, branch.ModelOverride)
 // 3. System fallbacks (Registry default provider and model)
-func (r *Registry) Resolve(req domain.GenerationRequest, _ *domain.Preset, _ *domain.Profile) (domain.LLMProvider, string, error) {
+func (r *Registry) Resolve(req core.GenerationRequest, _ *core.Preset, _ *core.Profile) (core.LLMProvider, string, error) {
 	r.mu.RLock()
 	hasProviders := len(r.providers) > 0
 	r.mu.RUnlock()
@@ -300,11 +300,11 @@ func providerDisplayPrefix(name string) string {
 // AvailableModels returns a list of configured default models from active providers.
 // Only providers registered in the registry (i.e. having active credentials) are included.
 // The list is safe for public exposure and contains zero credentials or secrets.
-func (r *Registry) AvailableModels() []domain.ModelOption {
+func (r *Registry) AvailableModels() []core.ModelOption {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var models []domain.ModelOption
+	var models []core.ModelOption
 
 	providers := make([]string, 0, len(r.providers))
 	seen := make(map[string]bool)
@@ -340,7 +340,7 @@ func (r *Registry) AvailableModels() []domain.ModelOption {
 		defMod := defaultModelForProvider(p)
 		isDefault := ((r.defaultProvider == p || (p == ProviderCompat && r.defaultProvider == ProviderCompatAlt)) &&
 			(r.defaultModel == defMod || r.defaultModel == ""))
-		models = append(models, domain.ModelOption{
+		models = append(models, core.ModelOption{
 			Provider:    p,
 			Model:       defMod,
 			DisplayName: fmt.Sprintf("%s — %s", providerDisplayPrefix(p), defMod),
@@ -349,15 +349,15 @@ func (r *Registry) AvailableModels() []domain.ModelOption {
 	}
 
 	if models == nil {
-		models = []domain.ModelOption{}
+		models = []core.ModelOption{}
 	}
 	return models
 }
 
 // Compile-time interface assertions.
 var (
-	_ domain.LLMClient = (*GeminiProvider)(nil)
-	_ domain.LLMClient = (*OpenAIProvider)(nil)
-	_ domain.LLMClient = (*AnthropicProvider)(nil)
-	_ domain.LLMClient = (*CompatProvider)(nil)
+	_ core.LLMClient = (*GeminiProvider)(nil)
+	_ core.LLMClient = (*OpenAIProvider)(nil)
+	_ core.LLMClient = (*AnthropicProvider)(nil)
+	_ core.LLMClient = (*CompatProvider)(nil)
 )

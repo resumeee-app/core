@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 )
 
@@ -378,13 +378,13 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 
 	t.Run("EdgeCases_ContactDelimitersAndOmissions", func(t *testing.T) {
 		// Profile with no email, only phone and location
-		partialProf := &domain.Profile{
+		partialProf := &core.Profile{
 			FullName: "Solo Phone Candidate",
 			Phone:    "+1-555-0199",
-			Location: domain.Location{City: "Seattle", Region: "WA"},
+			Location: core.Location{City: "Seattle", Region: "WA"},
 		}
 
-		for _, tmpl := range []domain.TemplateSet{
+		for _, tmpl := range []core.TemplateSet{
 			renderer.ATSMinimalTemplate(),
 			renderer.ATSHybridTechTemplate(),
 			renderer.ATSExecutiveCleanTemplate(),
@@ -413,15 +413,15 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 	})
 
 	t.Run("EdgeCases_JSONLDEmptyFirstSkillGroup", func(t *testing.T) {
-		prof := &domain.Profile{FullName: "Skill Tester"}
-		tailored := &domain.TailoredContent{
-			SkillGroups: []domain.TailoredSkillGroup{
+		prof := &core.Profile{FullName: "Skill Tester"}
+		tailored := &core.TailoredContent{
+			SkillGroups: []core.TailoredSkillGroup{
 				{Category: "Empty Group", Skills: []string{}},
 				{Category: "Active Group", Skills: []string{"Docker", "Kubernetes"}},
 			},
 		}
 
-		for _, tmpl := range []domain.TemplateSet{
+		for _, tmpl := range []core.TemplateSet{
 			renderer.ATSMinimalTemplate(),
 			renderer.ATSHybridTechTemplate(),
 			renderer.ATSExecutiveCleanTemplate(),
@@ -441,15 +441,15 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 	})
 
 	t.Run("EdgeCases_CertificationAndEducationEmptyDates", func(t *testing.T) {
-		prof := &domain.Profile{FullName: "Date Tester"}
-		tailored := &domain.TailoredContent{
-			Education: []domain.TailoredEducation{
+		prof := &core.Profile{FullName: "Date Tester"}
+		tailored := &core.TailoredContent{
+			Education: []core.TailoredEducation{
 				{
 					Degree:      "B.S.",
 					Institution: "State University",
 				},
 			},
-			Certifications: []domain.TailoredCert{
+			Certifications: []core.TailoredCert{
 				{
 					Name:   "Security+",
 					Issuer: "CompTIA",
@@ -457,7 +457,7 @@ func TestATSTemplateOptions_StructuresAndPlaintextFormatting(t *testing.T) {
 			},
 		}
 
-		for _, tmpl := range []domain.TemplateSet{
+		for _, tmpl := range []core.TemplateSet{
 			renderer.ATSMinimalTemplate(),
 			renderer.ATSHybridTechTemplate(),
 			renderer.ATSExecutiveCleanTemplate(),

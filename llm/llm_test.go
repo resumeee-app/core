@@ -9,27 +9,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/domain"
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
-var sampleResponse = domain.GenerationResponse{
-	TailoredContent: domain.TailoredContent{
+var sampleResponse = core.GenerationResponse{
+	TailoredContent: core.TailoredContent{
 		Summary: "Staff Systems Engineer specializing in low-latency distributed storage engines.",
-		SkillGroups: []domain.TailoredSkillGroup{
+		SkillGroups: []core.TailoredSkillGroup{
 			{
 				Category:       "Systems Programming",
 				Skills:         []string{"Go", "Rust", "C++"},
 				SourceSkillIDs: []string{"skill-uuid-1", "skill-uuid-2"},
 			},
 		},
-		Experiences: []domain.TailoredExperience{
+		Experiences: []core.TailoredExperience{
 			{
 				SourceEntityID: "exp-uuid-1",
 				Company:        "Acme Corp",
 				RoleTitle:      "Staff Engineer",
-				StartDate:      domain.NewDate(2021, 3, 1),
-				Bullets: []domain.TailoredBullet{
+				StartDate:      core.NewDate(2021, 3, 1),
+				Bullets: []core.TailoredBullet{
 					{
 						Text:           "Reduced p99 replication latency by 45% via raft batch pipelining.",
 						SourceFactIDs:  []string{"fact-uuid-101", "fact-uuid-102"},
@@ -38,11 +38,11 @@ var sampleResponse = domain.GenerationResponse{
 				},
 			},
 		},
-		Projects: []domain.TailoredProject{
+		Projects: []core.TailoredProject{
 			{
 				SourceEntityID: "proj-uuid-1",
 				Name:           "QuantumFS",
-				Bullets: []domain.TailoredBullet{
+				Bullets: []core.TailoredBullet{
 					{
 						Text:          "Authored append-only distributed log in Go with deterministic fault testing.",
 						SourceFactIDs: []string{"fact-uuid-201"},
@@ -50,58 +50,58 @@ var sampleResponse = domain.GenerationResponse{
 				},
 			},
 		},
-		Education: []domain.TailoredEducation{
+		Education: []core.TailoredEducation{
 			{
 				SourceEntityID: "edu-uuid-1",
 				Institution:    "Carnegie Mellon University",
 				Degree:         "B.S.",
 				Field:          "Computer Science",
-				StartDate:      domain.DatePtr(domain.NewDate(2013, 9, 1)),
+				StartDate:      core.DatePtr(core.NewDate(2013, 9, 1)),
 			},
 		},
-		Certifications: []domain.TailoredCert{
+		Certifications: []core.TailoredCert{
 			{
 				SourceEntityID: "cert-uuid-1",
 				Name:           "Certified Kubernetes Administrator",
 				Issuer:         "CNCF",
-				Date:           domain.DatePtr(domain.NewDate(2022, 6, 15)),
+				Date:           core.DatePtr(core.NewDate(2022, 6, 15)),
 			},
 		},
 	},
-	GapReport: domain.GapReport{
+	GapReport: core.GapReport{
 		OverallMatchSummary: "Exceptional alignment with distributed systems core requirements.",
-		MissingRequirements: []domain.GapItem{
+		MissingRequirements: []core.GapItem{
 			{
 				Requirement:      "Kafka Streams operational production experience",
-				Importance:       domain.GapImportancePreferred,
+				Importance:       core.GapImportancePreferred,
 				ClarifyingPrompt: "Have you operated Kafka Streams applications at high partition counts?",
 			},
 		},
 	},
 }
 
-func sampleRequest() domain.GenerationRequest {
-	return domain.GenerationRequest{
+func sampleRequest() core.GenerationRequest {
+	return core.GenerationRequest{
 		Model: "test-model-override",
-		MainProfile: &domain.MainProfileSnapshot{
-			Profile: domain.Profile{
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{
 				FullName:           "Ada Lovelace",
 				GlobalWritingRules: "Rule 1: Always highlight algorithmic complexity.",
 			},
-			Skills: []domain.Skill{
+			Skills: []core.Skill{
 				{ID: "skill-uuid-1", Name: "Go"},
 			},
-			Experiences: []domain.WorkExperience{
+			Experiences: []core.WorkExperience{
 				{ID: "exp-uuid-1", Company: "Acme Corp", RoleTitle: "Staff Engineer"},
 			},
-			Facts: []domain.Fact{
+			Facts: []core.Fact{
 				{ID: "fact-uuid-101", Statement: "Implemented batching in Raft layer."},
 			},
 			ExportedAt: time.Now(),
 		},
 		GlobalRules:        "Never use passive voice.",
 		PresetInstructions: "Maintain strict 1-page formatting constraints.",
-		BranchContext: domain.Branch{
+		BranchContext: core.Branch{
 			ID:                 "branch-uuid-1",
 			Name:               "Stripe Backend",
 			TargetRole:         "Staff Distributed Systems Engineer",
@@ -111,7 +111,7 @@ func sampleRequest() domain.GenerationRequest {
 			PinnedEntityIDs:    []string{"exp-uuid-1"},
 			ExcludedEntityIDs:  []string{"proj-uuid-99"},
 		},
-		PriorVersion: &domain.TailoredContent{
+		PriorVersion: &core.TailoredContent{
 			Summary: "Prior refined summary by user.",
 		},
 	}
@@ -120,14 +120,14 @@ func sampleRequest() domain.GenerationRequest {
 type fakeTransportClient struct {
 	name         string
 	defaultModel string
-	models       []domain.ModelOption
-	completeFn   func(ctx context.Context, req domain.LLMCompletionRequest) (*domain.LLMCompletionResponse, error)
+	models       []core.ModelOption
+	completeFn   func(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error)
 }
 
 func (f *fakeTransportClient) Name() string                  { return f.name }
 func (f *fakeTransportClient) DefaultModel() string          { return f.defaultModel }
-func (f *fakeTransportClient) Models() []domain.ModelOption  { return f.models }
-func (f *fakeTransportClient) Complete(ctx context.Context, req domain.LLMCompletionRequest) (*domain.LLMCompletionResponse, error) {
+func (f *fakeTransportClient) Models() []core.ModelOption  { return f.models }
+func (f *fakeTransportClient) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	if f.completeFn != nil {
 		return f.completeFn(ctx, req)
 	}
@@ -199,17 +199,17 @@ func TestClientProvider_GenerateTailoredResume_SuccessAndFences(t *testing.T) {
 	rawBytes, _ := json.Marshal(sampleResponse)
 	fencedText := "Here is the output:\n```json\n" + string(rawBytes) + "\n```\n"
 
-	var capturedReq domain.LLMCompletionRequest
+	var capturedReq core.LLMCompletionRequest
 	client := &fakeTransportClient{
 		name:         ProviderGemini,
 		defaultModel: defaultGeminiModel,
-		completeFn: func(_ context.Context, req domain.LLMCompletionRequest) (*domain.LLMCompletionResponse, error) {
+		completeFn: func(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 			capturedReq = req
-			return &domain.LLMCompletionResponse{
+			return &core.LLMCompletionResponse{
 				Text:       fencedText,
 				RawBody:    fencedText,
 				StatusCode: http.StatusOK,
-				Usage: domain.TokenUsage{
+				Usage: core.TokenUsage{
 					PromptTokens:     120,
 					CompletionTokens: 80,
 					TotalTokens:      200,
@@ -241,13 +241,13 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 	r.Register(&fakeProvider{name: ProviderAnthropic})
 	r.SetDefault(ProviderGemini, "gemini-default")
 
-	req := domain.GenerationRequest{
-		BranchContext: domain.Branch{
+	req := core.GenerationRequest{
+		BranchContext: core.Branch{
 			ProviderOverride: ProviderAnthropic,
 			ModelOverride:    "claude-branch",
 		},
 	}
-	prof := &domain.Profile{}
+	prof := &core.Profile{}
 
 	p, m, err := r.Resolve(req, nil, prof)
 	if err != nil {
@@ -280,7 +280,7 @@ func TestRegistry_PrecedenceResolution(t *testing.T) {
 
 func TestRegistry_AliasesAndErrors(t *testing.T) {
 	r := NewRegistry()
-	_, _, err := r.Resolve(domain.GenerationRequest{}, nil, nil)
+	_, _, err := r.Resolve(core.GenerationRequest{}, nil, nil)
 	if !errors.Is(err, ErrNoProviders) {
 		t.Errorf("expected ErrNoProviders, got %v", err)
 	}
@@ -371,6 +371,6 @@ type fakeProvider struct {
 }
 
 func (f *fakeProvider) Name() string { return f.name }
-func (f *fakeProvider) GenerateTailoredResume(_ context.Context, _ domain.GenerationRequest) (*domain.GenerationResponse, error) {
+func (f *fakeProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
 	return &sampleResponse, nil
 }

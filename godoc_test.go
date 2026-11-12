@@ -1,4 +1,4 @@
-package domain_test
+package core_test
 
 import (
 	"go/parser"

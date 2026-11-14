@@ -31,6 +31,14 @@ func (m *mockSanitizerProvider) DefaultModel() string {
 	return "mock-model"
 }
 
+func (m *mockSanitizerProvider) Models() []core.ModelOption {
+	return nil
+}
+
+func (m *mockSanitizerProvider) SupportsStructuredOutput(_ string) bool {
+	return false
+}
+
 func (m *mockSanitizerProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
 	if m.tailoredResp != nil {
 		copyResp := *m.tailoredResp
@@ -39,11 +47,11 @@ func (m *mockSanitizerProvider) GenerateTailoredResume(_ context.Context, _ core
 	return &core.GenerationResponse{}, nil
 }
 
-func (m *mockSanitizerProvider) CompleteText(_ context.Context, _, _, _ string) (string, error) {
+func (m *mockSanitizerProvider) CompleteStructured(_ context.Context, _ string, _ core.LLMCompletionRequest) (string, core.TokenUsage, error) {
 	if m.completeText != "" {
-		return m.completeText, nil
+		return m.completeText, core.TokenUsage{}, nil
 	}
-	return `{"gap_report":{"overall_match_summary":"Candidate matches criteria","missing_requirements":[]}}`, nil
+	return `{"gap_report":{"overall_match_summary":"Candidate matches criteria","missing_requirements":[]}}`, core.TokenUsage{}, nil
 }
 
 func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {

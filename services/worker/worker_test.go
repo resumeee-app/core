@@ -120,6 +120,10 @@ func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRe
 	return &resp.GapReport, nil
 }
 
+func (m *mockLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+	return &core.ATSSimulationResponse{}, nil
+}
+
 type testWorkerEnv struct {
 	db           any
 	profileRepo  core.ProfileRepository
@@ -366,6 +370,10 @@ func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req core.Gene
 		return nil, err
 	}
 	return &resp.GapReport, nil
+}
+
+func (m *blockingMockLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+	return &core.ATSSimulationResponse{}, nil
 }
 
 // 3. Graceful Shutdown & Drain Test
@@ -1466,6 +1474,11 @@ func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provi
 	return &core.JSONResume{}, nil
 }
 
+func (c *callbackResumeExtractor) ExtractResumeWithUsage(ctx context.Context, text, provider, model string) (*core.JSONResume, core.TokenUsage, error) {
+	res, err := c.ExtractResume(ctx, text, provider, model)
+	return res, core.TokenUsage{}, err
+}
+
 type callbackLLM struct {
 	fn func(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error)
 }
@@ -1483,6 +1496,10 @@ func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req core.Generati
 		return nil, err
 	}
 	return &resp.GapReport, nil
+}
+
+func (m *callbackLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+	return &core.ATSSimulationResponse{}, nil
 }
 
 // 16. GenerationJob Per-Tenant Concurrency Cap Test

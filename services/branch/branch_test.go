@@ -46,6 +46,7 @@ type testBranchEnv struct {
 	svc          branch.Service
 	branchRepo   core.BranchRepository
 	profileRepo  core.ProfileRepository
+	templateRepo core.TemplateRepository
 	enqueuer     *stubEnqueuer
 	defaultUser  string
 	branchID     string
@@ -159,6 +160,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 		svc:          svc,
 		branchRepo:   branchRepo,
 		profileRepo:  profileRepo,
+		templateRepo: templateRepo,
 		enqueuer:     enqueuer,
 		defaultUser:  defaultUser,
 		branchID:     created.ID,
@@ -938,6 +940,10 @@ func (s *stubLLMService) GenerateGapAnalysis(_ context.Context, _ core.Generatio
 	return nil, s.err
 }
 
+func (s *stubLLMService) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+	return &core.ATSSimulationResponse{}, s.err
+}
+
 func TestService_AnalyzeGaps(t *testing.T) {
 	ctx := context.Background()
 
@@ -999,6 +1005,38 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 		if len(report.IdentifiedGaps) != 2 {
 			t.Errorf("expected 2 identified gaps alias, got %d", len(report.IdentifiedGaps))
+		}
+	})
+
+	t.Run("returns error and releases quota when LLMService returns a nil report without error", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+		spyQuota := &spyQuotaRepo{}
+
+		svcWithLLM := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			QuotaRepo:   spyQuota,
+			JobEnqueuer: env.enqueuer,
+			Validator:   validator.New(),
+			Renderer:    renderer.NewTemplateRenderer(),
+			LLMService:  &stubLLMService{}, // GenerateGapAnalysis returns (nil, nil)
+		})
+
+		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
+		if err == nil {
+			t.Fatalf("expected error for nil gap report, got report %+v", report)
+		}
+		if report != nil {
+			t.Errorf("expected nil report on error, got %+v", report)
+		}
+
+		spyQuota.mu.Lock()
+		defer spyQuota.mu.Unlock()
+		if len(spyQuota.releases) != 1 {
+			t.Errorf("expected quota reservation to be released once, got %d releases", len(spyQuota.releases))
+		}
+		if len(spyQuota.commits) != 0 {
+			t.Errorf("expected no committed usage for a failed analysis, got %d commits", len(spyQuota.commits))
 		}
 	})
 
@@ -1676,7 +1714,7 @@ func TestService_SimulateATS(t *testing.T) {
 		svc := branch.NewService(branch.Config{
 			BranchRepo:   env.branchRepo,
 			ProfileRepo:  env.profileRepo,
-			TemplateRepo: env.branchRepo.(core.TemplateRepository),
+			TemplateRepo: env.templateRepo,
 			Renderer:     renderer.NewTemplateRenderer(),
 			LLMService:   sim,
 		})
@@ -1893,7 +1931,7 @@ func TestService_SimulateATS(t *testing.T) {
 		svcRender := branch.NewService(branch.Config{
 			BranchRepo:   env.branchRepo,
 			ProfileRepo:  env.profileRepo,
-			TemplateRepo: env.branchRepo.(core.TemplateRepository),
+			TemplateRepo: env.templateRepo,
 			Renderer:     renderer.NewTemplateRenderer(),
 			LLMService:   sim,
 		})

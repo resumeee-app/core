@@ -377,7 +377,13 @@ type fakeProvider struct {
 	name string
 }
 
-func (f *fakeProvider) Name() string { return f.name }
+func (f *fakeProvider) Name() string                           { return f.name }
+func (f *fakeProvider) DefaultModel() string                   { return "" }
+func (f *fakeProvider) Models() []core.ModelOption             { return nil }
+func (f *fakeProvider) SupportsStructuredOutput(_ string) bool { return false }
+func (f *fakeProvider) CompleteStructured(_ context.Context, _ string, _ core.LLMCompletionRequest) (string, core.TokenUsage, error) {
+	return "", core.TokenUsage{}, nil
+}
 func (f *fakeProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
 	return &sampleResponse, nil
 }
@@ -467,8 +473,8 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 		})
 	}
 
-	t.Run("custom RawUsageCompleter implementing StructuredOutputCapable without StructuredCompleter keeps <response_schema>", func(t *testing.T) {
-		rawProv := &capableRawOnlyProvider{
+	t.Run("custom provider with SupportsStructuredOutput=false keeps <response_schema> and omits ResponseSchema", func(t *testing.T) {
+		customProv := &unstructuredCustomProvider{
 			name: "custom-raw",
 			responses: []string{
 				gapJSON,
@@ -477,7 +483,7 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 			},
 		}
 		reg := NewRegistry()
-		reg.Register(rawProv)
+		reg.Register(customProv)
 		adapter := NewServiceAdapter(reg)
 
 		req := sampleRequest()
@@ -492,38 +498,51 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("SimulateATS failed: %v", err)
 		}
-		if len(rawProv.sysPrompts) != 3 {
-			t.Fatalf("expected 3 raw text calls (gap + ats extract + ats match), got %d", len(rawProv.sysPrompts))
+		if len(customProv.reqs) != 3 {
+			t.Fatalf("expected 3 structured calls (gap + ats extract + ats match), got %d", len(customProv.reqs))
 		}
-		for i, sys := range rawProv.sysPrompts {
-			if strings.Count(sys, "<response_schema>") != 1 {
-				t.Errorf("raw call %d: expected <response_schema> preserved for non-StructuredCompleter provider, got count=%d", i, strings.Count(sys, "<response_schema>"))
+		for i, creq := range customProv.reqs {
+			if strings.Count(creq.SystemPrompt, "<response_schema>") != 1 {
+				t.Errorf("call %d: expected <response_schema> preserved when SupportsStructuredOutput=false, got count=%d", i, strings.Count(creq.SystemPrompt, "<response_schema>"))
 			}
+			if creq.ResponseSchema != nil {
+				t.Errorf("call %d: expected nil ResponseSchema when SupportsStructuredOutput=false", i)
+			}
+		}
+	})
+
+	t.Run("GenerateGapAnalysis falls back to GenerateTailoredResume when CompleteStructured returns empty output", func(t *testing.T) {
+		reg := NewRegistry()
+		reg.Register(&fakeProvider{name: ProviderCompat})
+		adapter := NewServiceAdapter(reg)
+
+		report, err := adapter.GenerateGapAnalysis(context.Background(), sampleRequest())
+		if err != nil {
+			t.Fatalf("GenerateGapAnalysis fallback failed: %v", err)
+		}
+		if report.OverallMatchSummary != sampleResponse.GapReport.OverallMatchSummary {
+			t.Errorf("expected fallback gap summary %q, got %q", sampleResponse.GapReport.OverallMatchSummary, report.OverallMatchSummary)
 		}
 	})
 }
 
-type capableRawOnlyProvider struct {
-	name       string
-	responses  []string
-	sysPrompts []string
+type unstructuredCustomProvider struct {
+	name      string
+	responses []string
+	reqs      []core.LLMCompletionRequest
 }
 
-func (p *capableRawOnlyProvider) Name() string { return p.name }
+func (p *unstructuredCustomProvider) Name() string                           { return p.name }
+func (p *unstructuredCustomProvider) DefaultModel() string                   { return "custom-model" }
+func (p *unstructuredCustomProvider) Models() []core.ModelOption             { return nil }
+func (p *unstructuredCustomProvider) SupportsStructuredOutput(_ string) bool { return false }
 
-func (p *capableRawOnlyProvider) SupportsStructuredOutput(_ string) bool { return true }
-
-func (p *capableRawOnlyProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
+func (p *unstructuredCustomProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
 	return nil, errors.New("unused")
 }
 
-func (p *capableRawOnlyProvider) CompleteText(ctx context.Context, sys, usr, model string) (string, error) {
-	txt, _, err := p.CompleteTextWithUsage(ctx, sys, usr, model)
-	return txt, err
-}
-
-func (p *capableRawOnlyProvider) CompleteTextWithUsage(_ context.Context, sys, _, _ string) (string, core.TokenUsage, error) {
-	idx := len(p.sysPrompts)
-	p.sysPrompts = append(p.sysPrompts, sys)
+func (p *unstructuredCustomProvider) CompleteStructured(_ context.Context, _ string, req core.LLMCompletionRequest) (string, core.TokenUsage, error) {
+	idx := len(p.reqs)
+	p.reqs = append(p.reqs, req)
 	return p.responses[idx], core.TokenUsage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10}, nil
 }

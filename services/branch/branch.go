@@ -811,24 +811,18 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*co
 			MainProfile:    snapshot,
 			BranchContext:  *branch,
 		}
-		if analyzer, ok := s.llmService.(interface {
-			GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error)
-		}); ok {
-			r, err := analyzer.GenerateGapAnalysis(ctx, req)
-			if err != nil {
-				retErr = fmt.Errorf("gap analysis generation failed: %w", err)
-				return nil, retErr
-			}
-			report = r
-		} else {
-			resp, err := s.llmService.GenerateTailoredResume(ctx, req)
-			if err != nil {
-				retErr = fmt.Errorf("gap analysis fallback generation failed: %w", err)
-				return nil, retErr
-			}
-			report = &resp.GapReport
-			usage = resp.Usage
+		r, err := s.llmService.GenerateGapAnalysis(ctx, req)
+		if err != nil {
+			retErr = fmt.Errorf("gap analysis generation failed: %w", err)
+			return nil, retErr
 		}
+		// Reject (nil, nil) explicitly: setting retErr releases the quota reservation
+		// instead of committing usage, and prevents dereferencing a nil report below.
+		if r == nil {
+			retErr = errors.New("gap analysis generation failed: llm service returned no gap report")
+			return nil, retErr
+		}
+		report = r
 	} else {
 		// Fallback to active version gap report if present
 		if activeVer != nil && activeVer.GapReport != nil {
@@ -1184,22 +1178,20 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 
 	var atsScore *core.ATSScore
 	if s.llmService != nil {
-		if simulator, ok := s.llmService.(interface {
-			SimulateATS(ctx context.Context, req core.ATSSimulationRequest) (*core.ATSSimulationResponse, error)
-		}); ok {
-			model := branch.ModelOverride
-			simResp, simErr := simulator.SimulateATS(ctx, core.ATSSimulationRequest{
-				Model:          model,
-				ReasoningLevel: branch.ReasoningLevel,
-				ResumeText:     resumeText,
-				FormatUsed:     formatUsed,
-				BranchContext:  *branch,
-				MainProfile:    snapshot,
-			})
-			if simErr != nil {
-				retErr = fmt.Errorf("ats simulation failed: %w", simErr)
-				return nil, retErr
-			}
+		model := branch.ModelOverride
+		simResp, simErr := s.llmService.SimulateATS(ctx, core.ATSSimulationRequest{
+			Model:          model,
+			ReasoningLevel: branch.ReasoningLevel,
+			ResumeText:     resumeText,
+			FormatUsed:     formatUsed,
+			BranchContext:  *branch,
+			MainProfile:    snapshot,
+		})
+		if simErr != nil {
+			retErr = fmt.Errorf("ats simulation failed: %w", simErr)
+			return nil, retErr
+		}
+		if simResp != nil {
 			scoreCopy := simResp.Score
 			atsScore = &scoreCopy
 			usage = simResp.Usage
@@ -1222,3 +1214,6 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 
 	return atsScore, nil
 }
+
+// Compile-time interface assertion verifying service satisfies Service.
+var _ Service = (*service)(nil)

@@ -175,27 +175,13 @@ type LLMClient interface {
 	Complete(ctx context.Context, req LLMCompletionRequest) (*LLMCompletionResponse, error)
 }
 
-// StructuredOutputCapable is an optional capability interface implemented by LLM providers
-// or clients that can report whether a given model supports provider-native structured outputs.
-type StructuredOutputCapable interface {
-	SupportsStructuredOutput(model string) bool
-}
-
-// SupportsStructuredOutput returns true when target implements StructuredOutputCapable and
-// reports native structured output support for the specified model.
-func SupportsStructuredOutput(target any, model string) bool {
-	if target == nil {
-		return false
-	}
-	if capProv, ok := target.(StructuredOutputCapable); ok {
-		return capProv.SupportsStructuredOutput(model)
-	}
-	return false
-}
-
-// LLMProvider abstracts interactions with generative AI model providers.
+// LLMProvider abstracts capability-aware model catalog, structured completion, and resume tailoring operations across generative AI providers.
 type LLMProvider interface {
 	Name() string
+	DefaultModel() string
+	Models() []ModelOption
+	SupportsStructuredOutput(model string) bool
+	CompleteStructured(ctx context.Context, operation string, req LLMCompletionRequest) (string, TokenUsage, error)
 	GenerateTailoredResume(ctx context.Context, req GenerationRequest) (*GenerationResponse, error)
 }
 
@@ -227,10 +213,11 @@ type PDFJobEnqueuer interface {
 	EnqueuePDFJob(task PDFParseJobTask) error
 }
 
-// LLMService abstracts multi-provider prompt generation and structured response.
+// LLMService abstracts multi-provider resume tailoring, qualification gap analysis, and ATS perception simulation.
 type LLMService interface {
 	GenerateTailoredResume(ctx context.Context, req GenerationRequest) (*GenerationResponse, error)
 	GenerateGapAnalysis(ctx context.Context, req GenerationRequest) (*GapReport, error)
+	SimulateATS(ctx context.Context, req ATSSimulationRequest) (*ATSSimulationResponse, error)
 }
 
 // PromptCompiler abstracts compilation of structured generation prompts for preview.
@@ -425,13 +412,8 @@ type ProvenanceValidator interface {
 	ValidateStrict(content *TailoredContent, snapshot *MainProfileSnapshot, branch *Branch) error
 }
 
-// ResumeExtractor abstracts LLM-driven unstructured text extraction into standard JSONResume.
+// ResumeExtractor abstracts LLM-driven unstructured text extraction into standard JSONResume with token usage accounting.
 type ResumeExtractor interface {
 	ExtractResume(ctx context.Context, text string, provider string, model string) (*JSONResume, error)
-}
-
-// UsageResumeExtractor extends ResumeExtractor with token usage reporting.
-type UsageResumeExtractor interface {
-	ResumeExtractor
 	ExtractResumeWithUsage(ctx context.Context, text string, provider string, model string) (*JSONResume, TokenUsage, error)
 }

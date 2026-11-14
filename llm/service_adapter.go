@@ -82,26 +82,25 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 	}
 	req.Model = model
 
-	if canExecuteProviderCompletion(provider) {
-		supportsStructured := supportsNativeStructuredCall(provider, model)
-		prompts, pErr := BuildGapAnalysisPromptWithOptions(req, PromptOptions{NativeStructuredOutput: supportsStructured})
-		if pErr != nil {
-			return nil, pErr
-		}
-		text, _, cErr := (structuredCall{
-			Provider:       provider,
-			Operation:      "GenerateGapAnalysis",
-			Model:          model,
-			Prompts:        prompts,
-			Schema:         GapAnalysisResponseSchema(),
-			SchemaName:     "gap_analysis_response",
-			ReasoningLevel: req.ReasoningLevel,
-		}).execute(ctx)
-		if cErr != nil {
-			return nil, cErr
-		}
+	supportsStructured := provider.SupportsStructuredOutput(model)
+	prompts, pErr := BuildGapAnalysisPromptWithOptions(req, PromptOptions{NativeStructuredOutput: supportsStructured})
+	if pErr != nil {
+		return nil, pErr
+	}
+	text, _, cErr := (structuredCall{
+		Provider:       provider,
+		Operation:      "GenerateGapAnalysis",
+		Model:          model,
+		Prompts:        prompts,
+		Schema:         GapAnalysisResponseSchema(),
+		SchemaName:     "gap_analysis_response",
+		ReasoningLevel: req.ReasoningLevel,
+	}).execute(ctx)
+	if cErr != nil {
+		return nil, cErr
+	}
 
-		cleaned := ExtractJSON(text)
+	if cleaned := ExtractJSON(text); strings.TrimSpace(cleaned) != "" {
 		var wrapper struct {
 			GapReport *core.GapReport `json:"gap_report"`
 		}
@@ -120,10 +119,13 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 		}
 	}
 
-	// Fallback to full generation if lightweight analysis is unavailable or returns unrecognized output
+	// Fallback to full generation if lightweight analysis returns empty or unrecognized output
 	resp, err := provider.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("%w: empty generation response during gap analysis fallback from provider %s", ErrInvalidResponse, provider.Name())
 	}
 	session := sanitizer.NewSessionFromRequest(req)
 	session.DeobfuscateGenerationResponse(resp)
@@ -174,7 +176,7 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulation
 		return nil, err
 	}
 
-	supportsStructured := supportsNativeStructuredCall(provider, model)
+	supportsStructured := provider.SupportsStructuredOutput(model)
 	promptOpts := PromptOptions{NativeStructuredOutput: supportsStructured}
 
 	// Stage 1: ATS Content Extraction & Extraction Confidence Score
@@ -264,3 +266,6 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulation
 		Usage: totalUsage,
 	}, nil
 }
+
+// Compile-time interface assertion verifying ServiceAdapter satisfies core.LLMService.
+var _ core.LLMService = (*ServiceAdapter)(nil)

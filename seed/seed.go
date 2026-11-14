@@ -302,27 +302,42 @@ func renderDefaultFallback(_ *core.TemplateSet, profile *core.Profile, _ *core.T
 	return html, md, txt
 }
 
-// SeedDefaultData idempotently populates built-in templates, presets, default user profile,
-// and default resume branch across any storage backend implementing the domain repository interfaces.
-//
-// Parameters:
-//   - ctx: The execution context.
-//   - profileRepo: The profile repository instance.
-//   - branchRepo: The branch repository instance.
-//   - templateRepo: The template repository instance.
-//   - presetRepo: The preset repository instance.
-//   - defaultUserID: Optional target user ID (defaults to "default").
-//
-// Returns:
-//   - error: Non-nil if seeding fails at any step.
+// SeedDefaultData idempotently populates built-in templates, presets, global skills,
+// default user profile, and default resume branch across any storage backend implementing core.Store.
 func SeedDefaultData(
+	ctx context.Context,
+	store core.Store,
+	defaultUserID ...string,
+) error {
+	if store == nil {
+		return errors.New("store cannot be nil")
+	}
+	return SeedDefaultDataRepos(
+		ctx,
+		store.Profile(),
+		store.Branch(),
+		store.Template(),
+		store.Preset(),
+		store.User(),
+		defaultUserID...,
+	)
+}
+
+// SeedDefaultDataRepos idempotently populates built-in templates, presets, global skills,
+// default user profile, and default resume branch using explicit repository handles.
+func SeedDefaultDataRepos(
 	ctx context.Context,
 	profileRepo core.ProfileRepository,
 	branchRepo core.BranchRepository,
 	templateRepo core.TemplateRepository,
 	presetRepo core.PresetRepository,
+	userRepo core.UserRepository,
 	defaultUserID ...string,
 ) error {
+	if profileRepo == nil || branchRepo == nil || templateRepo == nil || presetRepo == nil {
+		return fmt.Errorf("%w: profile, branch, template, and preset repositories cannot be nil", core.ErrValidation)
+	}
+
 	targetUserID := "default"
 	if len(defaultUserID) > 0 && defaultUserID[0] != "" {
 		targetUserID = defaultUserID[0]
@@ -363,9 +378,5 @@ func SeedDefaultData(
 	}
 
 	// 3. Ensure Default Tenant is provisioned
-	var userRepo core.UserRepository
-	if ur, ok := profileRepo.(core.UserRepository); ok {
-		userRepo = ur
-	}
 	return EnsureTenantProvisionedRepos(ctx, profileRepo, branchRepo, templateRepo, userRepo, targetUserID)
 }

@@ -46,6 +46,7 @@ type testBranchEnv struct {
 	svc          branch.Service
 	branchRepo   core.BranchRepository
 	profileRepo  core.ProfileRepository
+	templateRepo core.TemplateRepository
 	enqueuer     *stubEnqueuer
 	defaultUser  string
 	branchID     string
@@ -159,6 +160,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 		svc:          svc,
 		branchRepo:   branchRepo,
 		profileRepo:  profileRepo,
+		templateRepo: templateRepo,
 		enqueuer:     enqueuer,
 		defaultUser:  defaultUser,
 		branchID:     created.ID,
@@ -938,6 +940,10 @@ func (s *stubLLMService) GenerateGapAnalysis(_ context.Context, _ core.Generatio
 	return nil, s.err
 }
 
+func (s *stubLLMService) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+	return &core.ATSSimulationResponse{}, s.err
+}
+
 func TestService_AnalyzeGaps(t *testing.T) {
 	ctx := context.Background()
 
@@ -1676,7 +1682,7 @@ func TestService_SimulateATS(t *testing.T) {
 		svc := branch.NewService(branch.Config{
 			BranchRepo:   env.branchRepo,
 			ProfileRepo:  env.profileRepo,
-			TemplateRepo: env.branchRepo.(core.TemplateRepository),
+			TemplateRepo: env.templateRepo,
 			Renderer:     renderer.NewTemplateRenderer(),
 			LLMService:   sim,
 		})
@@ -1893,7 +1899,7 @@ func TestService_SimulateATS(t *testing.T) {
 		svcRender := branch.NewService(branch.Config{
 			BranchRepo:   env.branchRepo,
 			ProfileRepo:  env.profileRepo,
-			TemplateRepo: env.branchRepo.(core.TemplateRepository),
+			TemplateRepo: env.templateRepo,
 			Renderer:     renderer.NewTemplateRenderer(),
 			LLMService:   sim,
 		})

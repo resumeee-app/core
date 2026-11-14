@@ -76,7 +76,7 @@ func NewSeeded(ctx context.Context, defaultUserID ...string) (*Store, error) {
 	if len(defaultUserID) > 0 && defaultUserID[0] != "" {
 		targetUserID = defaultUserID[0]
 	}
-	if err := seed.SeedDefaultData(ctx, s, s, s, s, targetUserID); err != nil {
+	if err := seed.SeedDefaultData(ctx, s, targetUserID); err != nil {
 		return nil, fmt.Errorf("seeding in-memory store: %w", err)
 	}
 	return s, nil

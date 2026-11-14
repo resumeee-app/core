@@ -29,21 +29,24 @@ func (p *sequencedATSProvider) DefaultModel() string {
 	return p.defaultModel
 }
 
+func (p *sequencedATSProvider) Models() []core.ModelOption {
+	return nil
+}
+
+func (p *sequencedATSProvider) SupportsStructuredOutput(_ string) bool {
+	return false
+}
+
 func (p *sequencedATSProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
 	return &core.GenerationResponse{}, nil
 }
 
-func (p *sequencedATSProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
-	text, _, err := p.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
-	return text, err
-}
-
-func (p *sequencedATSProvider) CompleteTextWithUsage(_ context.Context, systemPrompt, userPrompt, _ string) (string, core.TokenUsage, error) {
+func (p *sequencedATSProvider) CompleteStructured(_ context.Context, _ string, req core.LLMCompletionRequest) (string, core.TokenUsage, error) {
 	idx := p.calls
 	p.calls++
 	p.prompts = append(p.prompts, llm.PromptPayload{
-		SystemPrompt: systemPrompt,
-		UserPrompt:   userPrompt,
+		SystemPrompt: req.SystemPrompt,
+		UserPrompt:   req.UserPrompt,
 	})
 	if idx < len(p.errs) && p.errs[idx] != nil {
 		return "", core.TokenUsage{}, p.errs[idx]

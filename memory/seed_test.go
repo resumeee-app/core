@@ -15,7 +15,7 @@ func TestSeedDefaultData_Agnostic(t *testing.T) {
 	store := memory.New()
 	targetUserID := "seeded-user-1"
 
-	if err := seed.SeedDefaultData(ctx, store, store, store, store, targetUserID); err != nil {
+	if err := seed.SeedDefaultData(ctx, store, targetUserID); err != nil {
 		t.Fatalf("SeedDefaultData failed: %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestSeedDefaultData_SystemPresetsAndTemplates(t *testing.T) {
 	store := memory.New()
 	targetUserID := "user-alice"
 
-	if err := seed.SeedDefaultData(ctx, store, store, store, store, targetUserID); err != nil {
+	if err := seed.SeedDefaultData(ctx, store, targetUserID); err != nil {
 		t.Fatalf("SeedDefaultData failed: %v", err)
 	}
 
@@ -134,7 +134,7 @@ func TestEnsureTenantProvisioned(t *testing.T) {
 	store := memory.New()
 
 	// Seed system data first
-	if err := seed.SeedDefaultData(ctx, store, store, store, store, "default"); err != nil {
+	if err := seed.SeedDefaultData(ctx, store, "default"); err != nil {
 		t.Fatalf("seeding default data: %v", err)
 	}
 
@@ -190,7 +190,7 @@ func TestEnsureTenantProvisioned_Concurrent(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 
-	if err := seed.SeedDefaultData(ctx, store, store, store, store, "default"); err != nil {
+	if err := seed.SeedDefaultData(ctx, store, "default"); err != nil {
 		t.Fatalf("seeding default data: %v", err)
 	}
 
@@ -222,5 +222,54 @@ func TestEnsureTenantProvisioned_Concurrent(t *testing.T) {
 	}
 	if len(branches) != 1 {
 		t.Errorf("expected exactly 1 branch, got %d", len(branches))
+	}
+}
+
+// profileOnlyRepo exposes only core.ProfileRepository so tests can verify SeedDefaultDataRepos
+// does not rely on type-asserting a ProfileRepository into a core.UserRepository.
+type profileOnlyRepo struct {
+	core.ProfileRepository
+}
+
+// TestSeedDefaultDataRepos_DecoupledUserRepository verifies that SeedDefaultData and SeedDefaultDataRepos
+// provision users through the explicit userRepo parameter even when profileRepo does not implement UserRepository.
+func TestSeedDefaultDataRepos_DecoupledUserRepository(t *testing.T) {
+	ctx := context.Background()
+	backing := memory.New()
+	profileRepo := profileOnlyRepo{ProfileRepository: backing}
+
+	if err := seed.SeedDefaultData(ctx, nil); err == nil {
+		t.Fatal("expected error for nil store")
+	}
+
+	bundle := &core.StoreBundle{
+		ProfileRepo:  profileRepo,
+		BranchRepo:   backing,
+		PresetRepo:   backing,
+		TemplateRepo: backing,
+		UserRepo:     backing,
+	}
+	if err := seed.SeedDefaultData(ctx, bundle, "decoupled-user"); err != nil {
+		t.Fatalf("SeedDefaultData with StoreBundle failed: %v", err)
+	}
+
+	user1, err := backing.User().GetUser(ctx, "decoupled-user")
+	if err != nil {
+		t.Fatalf("expected decoupled-user to be provisioned via StoreBundle: %v", err)
+	}
+	if user1.ID != "decoupled-user" {
+		t.Errorf("expected provisioned user ID decoupled-user, got %s", user1.ID)
+	}
+
+	if err := seed.SeedDefaultDataRepos(ctx, profileRepo, backing, backing, backing, backing, "decoupled-user-2"); err != nil {
+		t.Fatalf("SeedDefaultDataRepos failed: %v", err)
+	}
+
+	user2, err := backing.User().GetUser(ctx, "decoupled-user-2")
+	if err != nil {
+		t.Fatalf("expected decoupled-user-2 to be provisioned via SeedDefaultDataRepos: %v", err)
+	}
+	if user2.ID != "decoupled-user-2" {
+		t.Errorf("expected provisioned user ID decoupled-user-2, got %s", user2.ID)
 	}
 }

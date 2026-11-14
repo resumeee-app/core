@@ -94,8 +94,8 @@ func (c *PromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.Prompt
 			profile = &req.MainProfile.Profile
 		}
 		provider, model, err := c.registry.Resolve(req, req.Preset, profile)
-		if err == nil {
-			native = core.SupportsStructuredOutput(provider, model)
+		if err == nil && provider != nil {
+			native = provider.SupportsStructuredOutput(model)
 		} else {
 			native = false
 		}
@@ -717,3 +717,6 @@ func projectPriorVersion(prior *core.TailoredContent, idMap map[string]string) *
 
 	return projected
 }
+
+// Compile-time interface assertion verifying PromptCompiler satisfies core.PromptCompiler.
+var _ core.PromptCompiler = (*PromptCompiler)(nil)

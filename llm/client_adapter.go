@@ -24,18 +24,6 @@ const (
 	defaultCompatModel    = "default"
 )
 
-// ModelCatalogProvider is implemented by providers that expose their default model and model catalog.
-type ModelCatalogProvider interface {
-	DefaultModel() string
-	Models() []core.ModelOption
-}
-
-// StructuredCompleter is implemented by providers capable of dispatching transport-level
-// completion requests (both native structured output and prompt-schema fallback) with token usage.
-type StructuredCompleter interface {
-	CompleteStructuredWithUsage(ctx context.Context, operation string, req core.LLMCompletionRequest) (string, core.TokenUsage, error)
-}
-
 // ClientProvider wraps a pure transport core.LLMClient with prompt compilation,
 // JSON schema attachment, structured observability logging, and domain response unmarshaling.
 type ClientProvider struct {
@@ -44,7 +32,7 @@ type ClientProvider struct {
 	logger       *slog.Logger
 }
 
-// NewClientProvider wraps a transport-only core.LLMClient into a full core.LLMProvider and StructuredCompleter.
+// NewClientProvider wraps a transport-only core.LLMClient into a full core.LLMProvider.
 func NewClientProvider(client core.LLMClient, opts ...Option) *ClientProvider {
 	fallbackModel := "default"
 	if client != nil && strings.TrimSpace(client.DefaultModel()) != "" {
@@ -101,6 +89,7 @@ func (p *ClientProvider) SupportsStructuredOutput(model string) bool {
 	return p.client.SupportsStructuredOutput(resolved)
 }
 
+// completeWithTrace dispatches a transport completion request with structured observability logging.
 func (p *ClientProvider) completeWithTrace(ctx context.Context, operation string, req core.LLMCompletionRequest) (compResp *core.LLMCompletionResponse, retErr error) {
 	if p == nil || p.client == nil {
 		return nil, ErrNoProviders
@@ -190,9 +179,9 @@ func (p *ClientProvider) GenerateTailoredResume(ctx context.Context, req core.Ge
 	return &parsed, nil
 }
 
-// CompleteStructuredWithUsage dispatches a transport completion request with optional native
+// CompleteStructured dispatches a transport completion request with optional native
 // structured output schema and returns trimmed text alongside token usage.
-func (p *ClientProvider) CompleteStructuredWithUsage(ctx context.Context, operation string, req core.LLMCompletionRequest) (string, core.TokenUsage, error) {
+func (p *ClientProvider) CompleteStructured(ctx context.Context, operation string, req core.LLMCompletionRequest) (string, core.TokenUsage, error) {
 	compResp, err := p.completeWithTrace(ctx, operation, req)
 	if err != nil {
 		return "", core.TokenUsage{}, err
@@ -200,7 +189,7 @@ func (p *ClientProvider) CompleteStructuredWithUsage(ctx context.Context, operat
 	return strings.TrimSpace(compResp.Text), compResp.Usage, nil
 }
 
-// CompleteText implements RawCompleter by delegating to CompleteTextWithUsage.
+// CompleteText dispatches an unstructured/raw text completion request by delegating to CompleteTextWithUsage.
 func (p *ClientProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
 	text, _, err := p.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
 	return text, err
@@ -208,7 +197,7 @@ func (p *ClientProvider) CompleteText(ctx context.Context, systemPrompt, userPro
 
 // CompleteTextWithUsage dispatches an unstructured/raw text completion request to the underlying LLMClient.
 func (p *ClientProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt, userPrompt, model string) (string, core.TokenUsage, error) {
-	return p.CompleteStructuredWithUsage(ctx, "CompleteText", core.LLMCompletionRequest{
+	return p.CompleteStructured(ctx, "CompleteText", core.LLMCompletionRequest{
 		Model:        model,
 		SystemPrompt: systemPrompt,
 		UserPrompt:   userPrompt,
@@ -227,32 +216,8 @@ type structuredCall struct {
 	ReasoningLevel string
 }
 
-func canExecuteProviderCompletion(provider core.LLMProvider) bool {
-	if provider == nil {
-		return false
-	}
-	if _, ok := provider.(StructuredCompleter); ok {
-		return true
-	}
-	if _, ok := provider.(RawUsageCompleter); ok {
-		return true
-	}
-	if _, ok := provider.(RawCompleter); ok {
-		return true
-	}
-	return false
-}
-
-func supportsNativeStructuredCall(provider core.LLMProvider, model string) bool {
-	if provider == nil {
-		return false
-	}
-	if _, ok := provider.(StructuredCompleter); !ok {
-		return false
-	}
-	return core.SupportsStructuredOutput(provider, model)
-}
-
+// execute dispatches the completion request through the resolved core.LLMProvider,
+// attaching the native JSON Schema only when supported by the target model.
 func (c structuredCall) execute(ctx context.Context) (string, core.TokenUsage, error) {
 	if c.Provider == nil {
 		return "", core.TokenUsage{}, ErrNoProviders
@@ -263,32 +228,18 @@ func (c structuredCall) execute(ctx context.Context) (string, core.TokenUsage, e
 		usrPrompt = c.Prompts.UserPrompt
 	}
 
-	if sc, ok := c.Provider.(StructuredCompleter); ok {
-		compReq := core.LLMCompletionRequest{
-			Model:          c.Model,
-			SystemPrompt:   sysPrompt,
-			UserPrompt:     usrPrompt,
-			ReasoningLevel: c.ReasoningLevel,
-		}
-		if c.Schema != nil && supportsNativeStructuredCall(c.Provider, c.Model) {
-			compReq.ResponseSchema = c.Schema
-			compReq.SchemaName = c.SchemaName
-		}
-		return sc.CompleteStructuredWithUsage(ctx, c.Operation, compReq)
+	compReq := core.LLMCompletionRequest{
+		Model:          c.Model,
+		SystemPrompt:   sysPrompt,
+		UserPrompt:     usrPrompt,
+		ReasoningLevel: c.ReasoningLevel,
 	}
-
-	if rawUsage, ok := c.Provider.(RawUsageCompleter); ok {
-		return rawUsage.CompleteTextWithUsage(ctx, sysPrompt, usrPrompt, c.Model)
+	if c.Schema != nil && c.Provider.SupportsStructuredOutput(c.Model) {
+		compReq.ResponseSchema = c.Schema
+		compReq.SchemaName = c.SchemaName
 	}
-
-	if raw, ok := c.Provider.(RawCompleter); ok {
-		text, err := raw.CompleteText(ctx, sysPrompt, usrPrompt, c.Model)
-		return text, core.TokenUsage{}, err
-	}
-
-	opLabel := strings.TrimSpace(c.Operation)
-	if opLabel == "" {
-		opLabel = "completion"
-	}
-	return "", core.TokenUsage{}, fmt.Errorf("%w: provider %s does not support completion for %s", ErrInvalidResponse, c.Provider.Name(), opLabel)
+	return c.Provider.CompleteStructured(ctx, c.Operation, compReq)
 }
+
+// Compile-time interface assertion verifying ClientProvider satisfies core.LLMProvider.
+var _ core.LLMProvider = (*ClientProvider)(nil)

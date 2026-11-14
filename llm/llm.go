@@ -136,6 +136,7 @@ func (r *Registry) Register(provider core.LLMProvider) {
 	}
 }
 
+// recomputeDefaultLocked selects the highest-priority registered provider and its default model.
 func (r *Registry) recomputeDefaultLocked() {
 	priority := []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderOllama, ProviderCompat, ProviderCompatAlt}
 	for _, pName := range priority {
@@ -144,8 +145,8 @@ func (r *Registry) recomputeDefaultLocked() {
 			if pName == ProviderCompatAlt {
 				r.defaultProvider = ProviderCompat
 			}
-			if mcp, ok := prov.(ModelCatalogProvider); ok && strings.TrimSpace(mcp.DefaultModel()) != "" {
-				r.defaultModel = mcp.DefaultModel()
+			if dm := strings.TrimSpace(prov.DefaultModel()); dm != "" {
+				r.defaultModel = dm
 			} else {
 				r.defaultModel = defaultModelForProvider(r.defaultProvider)
 			}
@@ -155,8 +156,8 @@ func (r *Registry) recomputeDefaultLocked() {
 	if r.defaultProvider == "" {
 		for name, prov := range r.providers {
 			r.defaultProvider = name
-			if mcp, ok := prov.(ModelCatalogProvider); ok && strings.TrimSpace(mcp.DefaultModel()) != "" {
-				r.defaultModel = mcp.DefaultModel()
+			if dm := strings.TrimSpace(prov.DefaultModel()); dm != "" {
+				r.defaultModel = dm
 			} else {
 				r.defaultModel = defaultModelForProvider(name)
 			}
@@ -267,8 +268,8 @@ func (r *Registry) Resolve(req core.GenerationRequest, _ *core.Preset, _ *core.P
 		modelName = m
 	} else if r.DefaultModel() != "" && r.DefaultProvider() == provider.Name() {
 		modelName = r.DefaultModel()
-	} else if mcp, ok := provider.(ModelCatalogProvider); ok && strings.TrimSpace(mcp.DefaultModel()) != "" {
-		modelName = mcp.DefaultModel()
+	} else if dm := strings.TrimSpace(provider.DefaultModel()); dm != "" {
+		modelName = dm
 	} else {
 		modelName = defaultModelForProvider(provider.Name())
 	}
@@ -339,9 +340,9 @@ func (r *Registry) AvailableModels() []core.ModelOption {
 		if !ok && p == ProviderCompat {
 			prov = r.providers[ProviderCompatAlt]
 		}
-		if mcp, ok := prov.(ModelCatalogProvider); ok {
-			if customCatalog := mcp.Models(); len(customCatalog) > 0 {
-				defMod := mcp.DefaultModel()
+		if prov != nil {
+			if customCatalog := prov.Models(); len(customCatalog) > 0 {
+				defMod := prov.DefaultModel()
 				for _, item := range customCatalog {
 					cp := item
 					cp.IsDefault = (r.defaultProvider == p && (r.defaultModel == cp.Model || (r.defaultModel == "" && cp.Model == defMod)))
@@ -368,11 +369,13 @@ func (r *Registry) AvailableModels() []core.ModelOption {
 	return models
 }
 
-// Compile-time interface assertions ensuring all concrete provider adapters satisfy core.LLMClient before registration in Registry.
+// Compile-time interface assertions ensuring all concrete provider adapters satisfy core.LLMClient
+// and Registry satisfies core.ModelEnumerator.
 var (
-	_ core.LLMClient = (*GeminiProvider)(nil)
-	_ core.LLMClient = (*OpenAIProvider)(nil)
-	_ core.LLMClient = (*AnthropicProvider)(nil)
-	_ core.LLMClient = (*OllamaProvider)(nil)
-	_ core.LLMClient = (*CompatProvider)(nil)
+	_ core.LLMClient       = (*GeminiProvider)(nil)
+	_ core.LLMClient       = (*OpenAIProvider)(nil)
+	_ core.LLMClient       = (*AnthropicProvider)(nil)
+	_ core.LLMClient       = (*OllamaProvider)(nil)
+	_ core.LLMClient       = (*CompatProvider)(nil)
+	_ core.ModelEnumerator = (*Registry)(nil)
 )

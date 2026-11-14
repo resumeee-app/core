@@ -2,13 +2,52 @@ package worker_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/llm"
+	"github.com/resumeee-app/resumeee-core/sanitizer"
 	"github.com/resumeee-app/resumeee-core/services/worker"
 )
+
+type sanitizerPipelineClient struct {
+	mu          sync.Mutex
+	capturedReq core.LLMCompletionRequest
+	resp        core.GenerationResponse
+}
+
+func (c *sanitizerPipelineClient) Name() string {
+	return llm.ProviderOpenAI
+}
+
+func (c *sanitizerPipelineClient) DefaultModel() string {
+	return "gpt-4o"
+}
+
+func (c *sanitizerPipelineClient) Models() []core.ModelOption {
+	return []core.ModelOption{{Provider: llm.ProviderOpenAI, Model: "gpt-4o", DisplayName: "GPT-4o", IsDefault: true}}
+}
+
+func (c *sanitizerPipelineClient) Complete(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+	c.mu.Lock()
+	c.capturedReq = req
+	respCopy := c.resp
+	c.mu.Unlock()
+
+	raw, err := json.Marshal(respCopy)
+	if err != nil {
+		return nil, err
+	}
+	return &core.LLMCompletionResponse{
+		Text:       string(raw),
+		StatusCode: 200,
+		Usage:      core.TokenUsage{PromptTokens: 120, CompletionTokens: 80, TotalTokens: 200},
+	}, nil
+}
 
 func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 	ctx := context.Background()
@@ -21,10 +60,10 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		FullName:           "Margaret Hamilton",
 		Email:              "margaret.hamilton@mit.edu",
 		Phone:              "+1 (617) 253-1000",
-		Headline:           "Director of Software Engineering",
-		Summary:            "Margaret Hamilton pioneered asynchronous executive software.",
+		Headline:           "Director of Software Engineering (Margaret Hamilton)",
+		Summary:            "Margaret Hamilton pioneered asynchronous executive software. Reach at margaret.hamilton@mit.edu or +1 (617) 253-1000. Web: https://margarethamilton.org.",
 		MainRevision:       2,
-		GlobalWritingRules: "Prioritize mission-critical systems and zero-bug principles.",
+		GlobalWritingRules: "Prioritize Margaret Hamilton's mission-critical systems and zero-bug principles.",
 		Profiles: []core.SocialLink{
 			{Network: "Website", URL: "https://margarethamilton.org"},
 			{Network: "GitHub", Username: "mhamilton", URL: "https://github.com/mhamilton"},
@@ -35,11 +74,12 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 	}
 
 	exp := core.WorkExperience{
-		ID:        "exp-apollo",
-		UserID:    env.defaultUser,
-		Company:   "MIT Instrumentation Lab",
-		RoleTitle: "Director of Software Engineering",
-		StartDate: core.NewDate(1965, 1, 1),
+		ID:            "exp-apollo",
+		UserID:        env.defaultUser,
+		Company:       "MIT Instrumentation Lab",
+		RoleTitle:     "Director of Software Engineering",
+		StartDate:     core.NewDate(1965, 1, 1),
+		DutiesSummary: "Margaret Hamilton led the Apollo flight software division.",
 	}
 	if err := env.profileRepo.CreateExperience(ctx, &exp); err != nil {
 		t.Fatalf("failed to create exp: %v", err)
@@ -50,44 +90,45 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		UserID:    env.defaultUser,
 		OwnerID:   exp.ID,
 		OwnerType: core.OwnerTypeWorkExperience,
-		Statement: "Engineered Apollo guidance flight software.",
+		Statement: "Margaret Hamilton engineered Apollo guidance flight software.",
 	}
 	if err := env.profileRepo.CreateFact(ctx, &fact); err != nil {
 		t.Fatalf("failed to create fact: %v", err)
 	}
 
-	expID := exp.ID
-	factID := fact.ID
-
-	// LLM Service returns tailored content and gap report with candidate details
-	env.llm.mu.Lock()
-	env.llm.customResp = &core.GenerationResponse{
-		TailoredContent: core.TailoredContent{
-			Summary: "Pioneering software executive Margaret Hamilton with expertise in fault-tolerant asynchronous execution. Contact: margaret.hamilton@mit.edu or +1 (617) 253-1000. Portfolio: https://margarethamilton.org.",
-			Experiences: []core.TailoredExperience{
-				{
-					SourceEntityID: expID,
-					Company:        "MIT Instrumentation Lab",
-					RoleTitle:      "Director (Margaret Hamilton)",
-					StartDate:      core.NewDate(1965, 1, 1),
-					DutiesSummary:  "Margaret Hamilton designed Apollo guidance flight software.",
-					Bullets: []core.TailoredBullet{
-						{
-							Text:          "Margaret Hamilton engineered priority display and asynchronous recovery.",
-							SourceFactIDs: []string{factID},
+	// Transport client returns ONLY synthetic placeholders (simulating an external LLM echoing masked inputs).
+	transportClient := &sanitizerPipelineClient{
+		resp: core.GenerationResponse{
+			TailoredContent: core.TailoredContent{
+				Summary: "Pioneering software executive " + sanitizer.PlaceholderFullName + " with expertise in fault-tolerant asynchronous execution. Contact: " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". Portfolio: " + sanitizer.PlaceholderWebsite + ". GitHub: candidate-social-2.",
+				Experiences: []core.TailoredExperience{
+					{
+						SourceEntityID: exp.EffectiveShortID(),
+						Company:        "MIT Instrumentation Lab",
+						RoleTitle:      "Director of Software Engineering",
+						StartDate:      core.NewDate(1965, 1, 1),
+						DutiesSummary:  sanitizer.PlaceholderFullName + " designed Apollo guidance flight software.",
+						Bullets: []core.TailoredBullet{
+							{
+								Text:          sanitizer.PlaceholderFullName + " engineered priority display and asynchronous recovery.",
+								SourceFactIDs: []string{fact.EffectiveShortID()},
+							},
 						},
 					},
 				},
 			},
-		},
-		GapReport: core.GapReport{
-			OverallMatchSummary: "Margaret Hamilton exceeds all mission-critical reliability criteria.",
-			StrategicRecommendations: []string{
-				"Margaret Hamilton should highlight real-time operating systems.",
+			GapReport: core.GapReport{
+				OverallMatchSummary: sanitizer.PlaceholderFullName + " exceeds all mission-critical reliability criteria.",
+				StrategicRecommendations: []string{
+					sanitizer.PlaceholderFullName + " should highlight real-time operating systems at " + sanitizer.PlaceholderWebsite + ".",
+				},
 			},
 		},
 	}
-	env.llm.mu.Unlock()
+
+	reg := llm.NewRegistry()
+	reg.RegisterClient(transportClient)
+	realLLMService := llm.NewServiceAdapter(reg)
 
 	pool := worker.NewPool(worker.PoolConfig{
 		Concurrency:  1,
@@ -96,7 +137,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		ProfileRepo:  env.profileRepo,
 		PresetRepo:   env.presetRepo,
 		TemplateRepo: env.templateRepo,
-		LLMService:   env.llm,
+		LLMService:   realLLMService,
 		Validator:    env.validator,
 		Renderer:     env.renderer,
 	})
@@ -140,37 +181,89 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		t.Fatalf("expected version completed or completed_with_warnings, got %+v", completedVer)
 	}
 
-	// 1. Verify TailoredContent is stored with authentic details
-	if strings.Contains(completedVer.TailoredContent.Summary, "[John Doe]") {
-		t.Errorf("version TailoredContent.Summary contains placeholder [John Doe]")
+	// 1. Verify outbound LLM transport wire scrubbed all real candidate PII to deterministic placeholders
+	transportClient.mu.Lock()
+	outboundWire := transportClient.capturedReq.SystemPrompt + "\n" + transportClient.capturedReq.UserPrompt
+	transportClient.mu.Unlock()
+
+	for _, leaked := range []string{
+		"Margaret Hamilton",
+		"margaret.hamilton@mit.edu",
+		"+1 (617) 253-1000",
+		"https://margarethamilton.org",
+		"https://github.com/mhamilton",
+		"mhamilton",
+	} {
+		if strings.Contains(outboundWire, leaked) {
+			t.Errorf("outbound LLM transport prompt leaked authentic PII %q", leaked)
+		}
 	}
-	if !strings.Contains(completedVer.TailoredContent.Summary, "Margaret Hamilton") {
-		t.Errorf("version TailoredContent.Summary missing authentic name 'Margaret Hamilton'")
-	}
-	if !strings.Contains(completedVer.TailoredContent.Summary, "margaret.hamilton@mit.edu") {
-		t.Errorf("version TailoredContent.Summary missing authentic email 'margaret.hamilton@mit.edu'")
+	for _, mask := range []string{
+		sanitizer.PlaceholderFullName,
+		sanitizer.PlaceholderEmail,
+		sanitizer.PlaceholderPhone,
+		sanitizer.PlaceholderWebsite,
+	} {
+		if !strings.Contains(outboundWire, mask) {
+			t.Errorf("outbound LLM transport prompt missing expected placeholder %q", mask)
+		}
 	}
 
+	// 2. Verify stored TailoredContent has all placeholders restored to authentic candidate details
+	for _, placeholder := range []string{
+		sanitizer.PlaceholderFullName,
+		sanitizer.PlaceholderEmail,
+		sanitizer.PlaceholderPhone,
+		sanitizer.PlaceholderWebsite,
+		"candidate-social-2",
+	} {
+		if strings.Contains(completedVer.TailoredContent.Summary, placeholder) {
+			t.Errorf("version TailoredContent.Summary retained placeholder %q: %s", placeholder, completedVer.TailoredContent.Summary)
+		}
+	}
+	for _, authentic := range []string{
+		"Margaret Hamilton",
+		"margaret.hamilton@mit.edu",
+		"+1 (617) 253-1000",
+		"https://margarethamilton.org",
+		"mhamilton",
+	} {
+		if !strings.Contains(completedVer.TailoredContent.Summary, authentic) {
+			t.Errorf("version TailoredContent.Summary missing authentic value %q: %s", authentic, completedVer.TailoredContent.Summary)
+		}
+	}
+
+	if !strings.HasPrefix(completedVer.TailoredContent.Experiences[0].DutiesSummary, "Margaret Hamilton designed") {
+		t.Errorf("version DutiesSummary failed deobfuscation: %q", completedVer.TailoredContent.Experiences[0].DutiesSummary)
+	}
 	bulletText := completedVer.TailoredContent.Experiences[0].Bullets[0].Text
 	if !strings.HasPrefix(bulletText, "Margaret Hamilton engineered") {
-		t.Errorf("version bullet text unexpected: %q", bulletText)
+		t.Errorf("version bullet text failed deobfuscation: %q", bulletText)
 	}
 
-	// 2. Verify GapReport contains authentic details
-	if strings.Contains(completedVer.GapReport.OverallMatchSummary, "[John Doe]") {
-		t.Errorf("version GapReport contains placeholder [John Doe]")
+	// 3. Verify GapReport contains authentic details and zero placeholders
+	if strings.Contains(completedVer.GapReport.OverallMatchSummary, sanitizer.PlaceholderFullName) ||
+		!strings.Contains(completedVer.GapReport.OverallMatchSummary, "Margaret Hamilton") {
+		t.Errorf("version GapReport OverallMatchSummary failed deobfuscation: %q", completedVer.GapReport.OverallMatchSummary)
 	}
-	if !strings.Contains(completedVer.GapReport.OverallMatchSummary, "Margaret Hamilton") {
-		t.Errorf("version GapReport missing authentic name 'Margaret Hamilton'")
+	if len(completedVer.GapReport.StrategicRecommendations) == 0 ||
+		!strings.Contains(completedVer.GapReport.StrategicRecommendations[0], "Margaret Hamilton") ||
+		!strings.Contains(completedVer.GapReport.StrategicRecommendations[0], "https://margarethamilton.org") {
+		t.Errorf("version GapReport StrategicRecommendations failed deobfuscation: %+v", completedVer.GapReport.StrategicRecommendations)
 	}
 
-	// 3. Verify Rendered outputs are unobfuscated and show authentic contact details
+	// 4. Verify Rendered outputs are unobfuscated and show authentic contact details
 	assertRendered := func(format, content string) {
-		if strings.Contains(content, "[John Doe]") {
-			t.Errorf("%s contains placeholder [John Doe]", format)
-		}
-		if strings.Contains(content, "candidate@email.com") {
-			t.Errorf("%s contains placeholder candidate@email.com", format)
+		for _, placeholder := range []string{
+			sanitizer.PlaceholderFullName,
+			sanitizer.PlaceholderEmail,
+			sanitizer.PlaceholderPhone,
+			sanitizer.PlaceholderWebsite,
+			"candidate-social-2",
+		} {
+			if strings.Contains(content, placeholder) {
+				t.Errorf("%s retained placeholder %q", format, placeholder)
+			}
 		}
 		if !strings.Contains(content, "Margaret Hamilton") {
 			t.Errorf("%s missing authentic name 'Margaret Hamilton'", format)

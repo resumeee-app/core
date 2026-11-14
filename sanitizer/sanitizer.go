@@ -127,31 +127,21 @@ func NewSession(profile *core.Profile) *Session {
 		addPair(targetProfile.Email, PlaceholderEmail, false)
 	}
 
-	// 3. Phone
+	// 3. Phone (minimum 7 substantive digits required to avoid false positives on country codes like "+1")
 	cleanPhone := strings.TrimSpace(targetProfile.Phone)
-	if cleanPhone != "" {
-		// Minimum 7 substantive digits required to avoid false positives on country codes like "+1"
-		if countDigits(cleanPhone) >= 7 {
-			if isWordBounded(cleanPhone) {
-				addPair(cleanPhone, PlaceholderPhone, true)
-			} else {
-				// Phone starts with non-word rune (e.g. '+' or '(').
-				// Require leading boundary (^ or non-word, non-'+' character) and trailing word boundary \b.
-				// Delimiter character is captured in ${1} to prevent stripping preceding whitespace.
-				forwardMappings = append(forwardMappings, rawMapping{
-					source:        cleanPhone,
-					replacement:   PlaceholderPhone,
-					customPattern: fmt.Sprintf(`(?i)(^|[^\w+])%s\b`, regexp.QuoteMeta(cleanPhone)),
-					customReplace: fmt.Sprintf(`${1}%s`, PlaceholderPhone),
-				})
-				reverseMappings = append(reverseMappings, rawMapping{
-					source:      PlaceholderPhone,
-					replacement: cleanPhone,
-					wordBound:   false,
-				})
-			}
+	if cleanPhone != "" && countDigits(cleanPhone) >= 7 {
+		if isWordBounded(cleanPhone) {
+			addPair(cleanPhone, PlaceholderPhone, true)
 		} else {
-			// Substantive digits < 7: only register reverse deobfuscation rule for synthetic placeholder
+			// Phone starts with non-word rune (e.g. '+' or '(').
+			// Require leading boundary (^ or non-word, non-'+' character) and trailing word boundary \b.
+			// Delimiter character is captured in ${1} to prevent stripping preceding whitespace.
+			forwardMappings = append(forwardMappings, rawMapping{
+				source:        cleanPhone,
+				replacement:   PlaceholderPhone,
+				customPattern: fmt.Sprintf(`(?i)(^|[^\w+])%s\b`, regexp.QuoteMeta(cleanPhone)),
+				customReplace: fmt.Sprintf(`${1}%s`, PlaceholderPhone),
+			})
 			reverseMappings = append(reverseMappings, rawMapping{
 				source:      PlaceholderPhone,
 				replacement: cleanPhone,
@@ -173,16 +163,8 @@ func NewSession(profile *core.Profile) *Session {
 			realWebsite = strings.TrimSpace(w)
 		}
 	}
-	if realWebsite != "" {
-		if isValidURL(realWebsite) {
-			addPair(realWebsite, PlaceholderWebsite, false)
-		} else {
-			reverseMappings = append(reverseMappings, rawMapping{
-				source:      PlaceholderWebsite,
-				replacement: realWebsite,
-				wordBound:   false,
-			})
-		}
+	if realWebsite != "" && isValidURL(realWebsite) {
+		addPair(realWebsite, PlaceholderWebsite, false)
 	}
 
 	// 5. Social Links (Profiles)
@@ -192,31 +174,15 @@ func NewSession(profile *core.Profile) *Session {
 		placeholderUser := PlaceholderSocialUserPrefix + idx
 
 		cleanURL := strings.TrimSpace(p.URL)
-		if cleanURL != "" && cleanURL != realWebsite {
-			if isValidURL(cleanURL) {
-				addPair(cleanURL, placeholderURL, false)
-			} else {
-				reverseMappings = append(reverseMappings, rawMapping{
-					source:      placeholderURL,
-					replacement: cleanURL,
-					wordBound:   false,
-				})
-			}
+		if cleanURL != "" && cleanURL != realWebsite && isValidURL(cleanURL) {
+			addPair(cleanURL, placeholderURL, false)
 		}
 
+		// Usernames shorter than 3 characters (e.g. "go", "ai", "c") are excluded to prevent
+		// corrupting technical terms and common words.
 		cleanUser := strings.TrimSpace(p.Username)
-		if cleanUser != "" {
-			if len(cleanUser) >= 3 {
-				addPair(cleanUser, placeholderUser, isWordBounded(cleanUser))
-			} else {
-				// Usernames shorter than 3 characters (e.g. "go", "ai", "x") are excluded from forward
-				// free-text replacement to prevent corrupting technical terms and common words.
-				reverseMappings = append(reverseMappings, rawMapping{
-					source:      placeholderUser,
-					replacement: cleanUser,
-					wordBound:   false,
-				})
-			}
+		if len(cleanUser) >= 3 {
+			addPair(cleanUser, placeholderUser, isWordBounded(cleanUser))
 		}
 	}
 
@@ -341,10 +307,6 @@ func cloneSnapshot(snap *core.MainProfileSnapshot) *core.MainProfileSnapshot {
 			}
 		}
 	}
-	if snap.Certifications != nil {
-		res.Certifications = make([]core.Certification, len(snap.Certifications))
-		copy(res.Certifications, snap.Certifications)
-	}
 	if snap.Facts != nil {
 		res.Facts = make([]core.Fact, len(snap.Facts))
 		copy(res.Facts, snap.Facts)
@@ -352,7 +314,10 @@ func cloneSnapshot(snap *core.MainProfileSnapshot) *core.MainProfileSnapshot {
 	return &res
 }
 
-// ObfuscateSnapshot returns an isolated clone of the snapshot with PII scrubbed from LLM-projected fields.
+// ObfuscateSnapshot returns a copy-on-write clone of snap with candidate PII scrubbed from
+// free-text and URL fields passed to LLMs. Unscrubbed slices and maps (such as Skills,
+// Certifications, Profile.Profiles, and Profile.Metadata) share backing storage with snap
+// and must not be mutated in place by callers.
 func (s *Session) ObfuscateSnapshot(snap *core.MainProfileSnapshot) *core.MainProfileSnapshot {
 	if snap == nil {
 		return nil
@@ -366,7 +331,6 @@ func (s *Session) ObfuscateSnapshot(snap *core.MainProfileSnapshot) *core.MainPr
 	res.Profile.Summary = s.ObfuscateString(res.Profile.Summary)
 
 	for i := range res.Experiences {
-		res.Experiences[i].Company = s.ObfuscateString(res.Experiences[i].Company)
 		res.Experiences[i].RoleTitle = s.ObfuscateString(res.Experiences[i].RoleTitle)
 		res.Experiences[i].DutiesSummary = s.ObfuscateString(res.Experiences[i].DutiesSummary)
 		for j := range res.Experiences[i].Facts {
@@ -387,20 +351,10 @@ func (s *Session) ObfuscateSnapshot(snap *core.MainProfileSnapshot) *core.MainPr
 	}
 
 	for i := range res.Education {
-		res.Education[i].Institution = s.ObfuscateString(res.Education[i].Institution)
-		res.Education[i].Degree = s.ObfuscateString(res.Education[i].Degree)
-		res.Education[i].Field = s.ObfuscateString(res.Education[i].Field)
 		for j := range res.Education[i].Facts {
 			res.Education[i].Facts[j].Statement = s.ObfuscateString(res.Education[i].Facts[j].Statement)
 			res.Education[i].Facts[j].Impact = s.ObfuscateString(res.Education[i].Facts[j].Impact)
 		}
-	}
-
-	for i := range res.Certifications {
-		res.Certifications[i].Name = s.ObfuscateString(res.Certifications[i].Name)
-		res.Certifications[i].Issuer = s.ObfuscateString(res.Certifications[i].Issuer)
-		res.Certifications[i].Summary = s.ObfuscateString(res.Certifications[i].Summary)
-		res.Certifications[i].URL = s.ObfuscateString(res.Certifications[i].URL)
 	}
 
 	for i := range res.Facts {
@@ -446,14 +400,12 @@ func cloneTailoredContent(tc *core.TailoredContent) *core.TailoredContent {
 			}
 		}
 	}
-	if tc.Certifications != nil {
-		res.Certifications = make([]core.TailoredCert, len(tc.Certifications))
-		copy(res.Certifications, tc.Certifications)
-	}
 	return &res
 }
 
-// ObfuscatePriorVersion returns an isolated clone of prior tailored content with PII scrubbed from LLM-projected fields.
+// ObfuscatePriorVersion returns a copy-on-write clone of prior tailored content with candidate
+// PII scrubbed from narrative, bullet, and project fields passed to LLMs. Unscrubbed slices
+// (such as SkillGroups and Certifications) share backing storage with prior.
 func (s *Session) ObfuscatePriorVersion(prior *core.TailoredContent) *core.TailoredContent {
 	if prior == nil {
 		return nil
@@ -466,7 +418,6 @@ func (s *Session) ObfuscatePriorVersion(prior *core.TailoredContent) *core.Tailo
 	res.Summary = s.ObfuscateString(res.Summary)
 
 	for i := range res.Experiences {
-		res.Experiences[i].Company = s.ObfuscateString(res.Experiences[i].Company)
 		res.Experiences[i].RoleTitle = s.ObfuscateString(res.Experiences[i].RoleTitle)
 		res.Experiences[i].DutiesSummary = s.ObfuscateString(res.Experiences[i].DutiesSummary)
 		for j := range res.Experiences[i].Bullets {
@@ -485,24 +436,17 @@ func (s *Session) ObfuscatePriorVersion(prior *core.TailoredContent) *core.Tailo
 	}
 
 	for i := range res.Education {
-		res.Education[i].Institution = s.ObfuscateString(res.Education[i].Institution)
-		res.Education[i].Degree = s.ObfuscateString(res.Education[i].Degree)
-		res.Education[i].Field = s.ObfuscateString(res.Education[i].Field)
 		for j := range res.Education[i].Bullets {
 			res.Education[i].Bullets[j].Text = s.ObfuscateString(res.Education[i].Bullets[j].Text)
 		}
 	}
 
-	for i := range res.Certifications {
-		res.Certifications[i].Name = s.ObfuscateString(res.Certifications[i].Name)
-		res.Certifications[i].Issuer = s.ObfuscateString(res.Certifications[i].Issuer)
-		res.Certifications[i].URL = s.ObfuscateString(res.Certifications[i].URL)
-	}
-
 	return res
 }
 
-// ObfuscateRequest returns an isolated copy of req with PII scrubbed from all LLM-projected fields.
+// ObfuscateRequest returns a shallow copy of req with copy-on-write clones of MainProfile and
+// PriorVersion and PII scrubbed from free-text prompt fields. Unscrubbed slices and pointers on
+// req (such as Preset and BranchContext.PinnedEntityIDs) share backing storage with req.
 func (s *Session) ObfuscateRequest(req core.GenerationRequest) core.GenerationRequest {
 	res := req
 	res.MainProfile = s.ObfuscateSnapshot(req.MainProfile)
@@ -510,16 +454,16 @@ func (s *Session) ObfuscateRequest(req core.GenerationRequest) core.GenerationRe
 	res.GlobalRules = s.ObfuscateString(req.GlobalRules)
 	res.PresetInstructions = s.ObfuscateString(req.PresetInstructions)
 
-	res.BranchContext = req.BranchContext
 	res.BranchContext.TargetRole = s.ObfuscateString(res.BranchContext.TargetRole)
-	res.BranchContext.TargetCompany = s.ObfuscateString(res.BranchContext.TargetCompany)
 	res.BranchContext.TargetRequirements = s.ObfuscateString(res.BranchContext.TargetRequirements)
 	res.BranchContext.BranchInstructions = s.ObfuscateString(res.BranchContext.BranchInstructions)
 
 	return res
 }
 
-// DeobfuscateTailoredContent restores original contact details into LLM-returned TailoredContent fields.
+// DeobfuscateTailoredContent restores original contact details into LLM-authored narrative and
+// bullet fields of TailoredContent. Structured entity headers (company, role title, project
+// identity, education, certifications) are canonically populated by validator.Validate.
 func (s *Session) DeobfuscateTailoredContent(content *core.TailoredContent) {
 	if s == nil || content == nil || len(s.deobfRules) == 0 {
 		return
@@ -527,8 +471,6 @@ func (s *Session) DeobfuscateTailoredContent(content *core.TailoredContent) {
 	content.Summary = s.DeobfuscateString(content.Summary)
 
 	for i := range content.Experiences {
-		content.Experiences[i].Company = s.DeobfuscateString(content.Experiences[i].Company)
-		content.Experiences[i].RoleTitle = s.DeobfuscateString(content.Experiences[i].RoleTitle)
 		content.Experiences[i].DutiesSummary = s.DeobfuscateString(content.Experiences[i].DutiesSummary)
 		for j := range content.Experiences[i].Bullets {
 			content.Experiences[i].Bullets[j].Text = s.DeobfuscateString(content.Experiences[i].Bullets[j].Text)
@@ -536,25 +478,10 @@ func (s *Session) DeobfuscateTailoredContent(content *core.TailoredContent) {
 	}
 
 	for i := range content.Projects {
-		content.Projects[i].Name = s.DeobfuscateString(content.Projects[i].Name)
-		content.Projects[i].Role = s.DeobfuscateString(content.Projects[i].Role)
-		content.Projects[i].URL = s.DeobfuscateString(content.Projects[i].URL)
 		content.Projects[i].Summary = s.DeobfuscateString(content.Projects[i].Summary)
 		for j := range content.Projects[i].Bullets {
 			content.Projects[i].Bullets[j].Text = s.DeobfuscateString(content.Projects[i].Bullets[j].Text)
 		}
-	}
-
-	for i := range content.Education {
-		content.Education[i].Institution = s.DeobfuscateString(content.Education[i].Institution)
-		content.Education[i].Degree = s.DeobfuscateString(content.Education[i].Degree)
-		content.Education[i].Field = s.DeobfuscateString(content.Education[i].Field)
-	}
-
-	for i := range content.Certifications {
-		content.Certifications[i].Name = s.DeobfuscateString(content.Certifications[i].Name)
-		content.Certifications[i].Issuer = s.DeobfuscateString(content.Certifications[i].Issuer)
-		content.Certifications[i].URL = s.DeobfuscateString(content.Certifications[i].URL)
 	}
 }
 
@@ -579,7 +506,10 @@ func (s *Session) DeobfuscateGapReport(report *core.GapReport) {
 	}
 
 	s.deobfuscateGapItems(report.MissingRequirements)
-	if len(report.IdentifiedGaps) > 0 && (len(report.MissingRequirements) == 0 || &report.IdentifiedGaps[0] != &report.MissingRequirements[0]) {
+	if len(report.IdentifiedGaps) > 0 &&
+		(len(report.MissingRequirements) == 0 ||
+			len(report.IdentifiedGaps) != len(report.MissingRequirements) ||
+			&report.IdentifiedGaps[0] != &report.MissingRequirements[0]) {
 		s.deobfuscateGapItems(report.IdentifiedGaps)
 	}
 }
@@ -593,7 +523,8 @@ func (s *Session) DeobfuscateGenerationResponse(resp *core.GenerationResponse) {
 	s.DeobfuscateGapReport(&resp.GapReport)
 }
 
-// DeobfuscateATSScore restores original contact details across an ATSScore and its ExtractedCandidate.
+// DeobfuscateATSScore restores original contact details across free-text narrative and highlight
+// fields of an ATSScore and its ExtractedCandidate.
 func (s *Session) DeobfuscateATSScore(score *core.ATSScore) {
 	if s == nil || score == nil || len(s.deobfRules) == 0 {
 		return
@@ -603,25 +534,11 @@ func (s *Session) DeobfuscateATSScore(score *core.ATSScore) {
 	if score.ExtractedCandidate != nil {
 		c := score.ExtractedCandidate
 		c.Summary = s.DeobfuscateString(c.Summary)
-		for i := range c.Skills {
-			c.Skills[i] = s.DeobfuscateString(c.Skills[i])
-		}
 		for i := range c.Experiences {
-			c.Experiences[i].Company = s.DeobfuscateString(c.Experiences[i].Company)
 			c.Experiences[i].Title = s.DeobfuscateString(c.Experiences[i].Title)
-			c.Experiences[i].DateRange = s.DeobfuscateString(c.Experiences[i].DateRange)
 			for j := range c.Experiences[i].Highlights {
 				c.Experiences[i].Highlights[j] = s.DeobfuscateString(c.Experiences[i].Highlights[j])
 			}
-		}
-		for i := range c.Educations {
-			c.Educations[i].Institution = s.DeobfuscateString(c.Educations[i].Institution)
-			c.Educations[i].Degree = s.DeobfuscateString(c.Educations[i].Degree)
-			c.Educations[i].Field = s.DeobfuscateString(c.Educations[i].Field)
-			c.Educations[i].DateRange = s.DeobfuscateString(c.Educations[i].DateRange)
-		}
-		for i := range c.Certifications {
-			c.Certifications[i] = s.DeobfuscateString(c.Certifications[i])
 		}
 	}
 }

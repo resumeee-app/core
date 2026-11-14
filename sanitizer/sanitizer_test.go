@@ -163,6 +163,11 @@ func TestSession_ObfuscateSnapshot_NonLLMFieldsUntouched(t *testing.T) {
 			want: "https://alicewalker.dev",
 		},
 		{
+			name: "Experience.Company structured employer untouched",
+			got:  obf.Experiences[0].Company,
+			want: "Alice Walker Consulting",
+		},
+		{
 			name: "Experience.SupervisorName stripped by LeanExperience",
 			got:  obf.Experiences[0].SupervisorName,
 			want: "Alice Walker Supervisor",
@@ -177,14 +182,53 @@ func TestSession_ObfuscateSnapshot_NonLLMFieldsUntouched(t *testing.T) {
 			got:  obf.Experiences[0].CompanyContact.Value,
 			want: "alice.walker@example.org",
 		},
+		{
+			name: "Education.Institution structured details untouched",
+			got:  obf.Education[0].Institution,
+			want: "MIT (Alice Walker Lab)",
+		},
+		{
+			name: "Education.Degree structured details untouched",
+			got:  obf.Education[0].Degree,
+			want: "M.S. (Alice Walker Fellow)",
+		},
+		{
+			name: "Education.Field structured details untouched",
+			got:  obf.Education[0].Field,
+			want: "CS - Alice Walker Track",
+		},
+		{
+			name: "Certification.Name structured details untouched",
+			got:  obf.Certifications[0].Name,
+			want: "CKA (Alice Walker)",
+		},
+		{
+			name: "Certification.Issuer structured details untouched",
+			got:  obf.Certifications[0].Issuer,
+			want: "CNCF / alicewalker",
+		},
+		{
+			name: "Certification.URL structured details untouched",
+			got:  obf.Certifications[0].URL,
+			want: "https://alicewalker.dev/cka",
+		},
+		{
+			name: "Certification.Summary structured details untouched",
+			got:  obf.Certifications[0].Summary,
+			want: "Issued to Alice Walker.",
+		},
 	}
 
 	for _, tc := range nonLLMChecks {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.got != tc.want {
-				t.Errorf("expected non-LLM field %s to remain untouched %q, got %q", tc.name, tc.want, tc.got)
+				t.Errorf("expected non-obfuscated field %s to remain untouched %q, got %q", tc.name, tc.want, tc.got)
 			}
 		})
+	}
+
+	if obf.Skills[0].Name != "Go" {
+		t.Errorf("expected Skill.Name untouched, got %q", obf.Skills[0].Name)
 	}
 
 	// Verify caller's original snapshot LLM-bound fields were NOT mutated in-place
@@ -199,9 +243,6 @@ func TestSession_ObfuscateSnapshot_NonLLMFieldsUntouched(t *testing.T) {
 	}
 	if !strings.Contains(snap.Education[0].Facts[0].Statement, "Alice Walker") {
 		t.Errorf("original snapshot Education.Fact.Statement was mutated: %q", snap.Education[0].Facts[0].Statement)
-	}
-	if !strings.Contains(snap.Certifications[0].Summary, "Alice Walker") {
-		t.Errorf("original snapshot Certification.Summary was mutated: %q", snap.Certifications[0].Summary)
 	}
 	if !strings.Contains(snap.Facts[0].Statement, "Alice Walker") {
 		t.Errorf("original snapshot root Fact.Statement was mutated: %q", snap.Facts[0].Statement)
@@ -232,7 +273,6 @@ func TestSession_ObfuscateSnapshot_LLMBoundFieldsScrubbed(t *testing.T) {
 	}{
 		{"Profile.Headline", obf.Profile.Headline, sanitizer.PlaceholderFullName},
 		{"Profile.Summary", obf.Profile.Summary, sanitizer.PlaceholderEmail},
-		{"Experience.Company", obf.Experiences[0].Company, sanitizer.PlaceholderFullName},
 		{"Experience.RoleTitle", obf.Experiences[0].RoleTitle, sanitizer.PlaceholderFullName},
 		{"Experience.DutiesSummary", obf.Experiences[0].DutiesSummary, sanitizer.PlaceholderFullName},
 		{"Experience.Fact.Statement", obf.Experiences[0].Facts[0].Statement, sanitizer.PlaceholderFullName},
@@ -243,15 +283,8 @@ func TestSession_ObfuscateSnapshot_LLMBoundFieldsScrubbed(t *testing.T) {
 		{"Project.Summary", obf.Projects[0].Summary, sanitizer.PlaceholderSocialUserPrefix + "2"},
 		{"Project.Fact.Statement", obf.Projects[0].Facts[0].Statement, sanitizer.PlaceholderWebsite},
 		{"Project.Fact.Impact", obf.Projects[0].Facts[0].Impact, sanitizer.PlaceholderSocialUserPrefix + "2"},
-		{"Education.Institution", obf.Education[0].Institution, sanitizer.PlaceholderFullName},
-		{"Education.Degree", obf.Education[0].Degree, sanitizer.PlaceholderFullName},
-		{"Education.Field", obf.Education[0].Field, sanitizer.PlaceholderFullName},
 		{"Education.Fact.Statement", obf.Education[0].Facts[0].Statement, sanitizer.PlaceholderFullName},
 		{"Education.Fact.Impact", obf.Education[0].Facts[0].Impact, sanitizer.PlaceholderWebsite},
-		{"Certification.Name", obf.Certifications[0].Name, sanitizer.PlaceholderFullName},
-		{"Certification.Issuer", obf.Certifications[0].Issuer, sanitizer.PlaceholderSocialUserPrefix + "1"},
-		{"Certification.URL", obf.Certifications[0].URL, sanitizer.PlaceholderWebsite + "/cka"},
-		{"Certification.Summary", obf.Certifications[0].Summary, sanitizer.PlaceholderFullName},
 		{"Root.Fact.Statement", obf.Facts[0].Statement, sanitizer.PlaceholderFullName},
 		{"Root.Fact.Impact", obf.Facts[0].Impact, sanitizer.PlaceholderEmail},
 	}
@@ -317,8 +350,8 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 				{
 					SourceEntityID: "edu-1",
 					Institution:    "MIT (Alice Walker)",
-					Degree:         "M.S.",
-					Field:          "Systems",
+					Degree:         "M.S. (Alice Walker)",
+					Field:          "Systems (Alice Walker)",
 					Bullets: []core.TailoredBullet{
 						{Text: "Alice Walker graduate research."},
 					},
@@ -345,11 +378,9 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 		{"GlobalRules", obfReq.GlobalRules},
 		{"PresetInstructions", obfReq.PresetInstructions},
 		{"BranchContext.TargetRole", obfReq.BranchContext.TargetRole},
-		{"BranchContext.TargetCompany", obfReq.BranchContext.TargetCompany},
 		{"BranchContext.TargetRequirements", obfReq.BranchContext.TargetRequirements},
 		{"BranchContext.BranchInstructions", obfReq.BranchContext.BranchInstructions},
 		{"PriorVersion.Summary", obfReq.PriorVersion.Summary},
-		{"PriorVersion.Experience.Company", obfReq.PriorVersion.Experiences[0].Company},
 		{"PriorVersion.Experience.RoleTitle", obfReq.PriorVersion.Experiences[0].RoleTitle},
 		{"PriorVersion.Experience.DutiesSummary", obfReq.PriorVersion.Experiences[0].DutiesSummary},
 		{"PriorVersion.Experience.Bullet", obfReq.PriorVersion.Experiences[0].Bullets[0].Text},
@@ -358,11 +389,7 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 		{"PriorVersion.Project.URL", obfReq.PriorVersion.Projects[0].URL},
 		{"PriorVersion.Project.Summary", obfReq.PriorVersion.Projects[0].Summary},
 		{"PriorVersion.Project.Bullet", obfReq.PriorVersion.Projects[0].Bullets[0].Text},
-		{"PriorVersion.Education.Institution", obfReq.PriorVersion.Education[0].Institution},
 		{"PriorVersion.Education.Bullet", obfReq.PriorVersion.Education[0].Bullets[0].Text},
-		{"PriorVersion.Certification.Name", obfReq.PriorVersion.Certifications[0].Name},
-		{"PriorVersion.Certification.Issuer", obfReq.PriorVersion.Certifications[0].Issuer},
-		{"PriorVersion.Certification.URL", obfReq.PriorVersion.Certifications[0].URL},
 	}
 	for _, tc := range scrubbedChecks {
 		t.Run(tc.name, func(t *testing.T) {
@@ -375,12 +402,29 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 		})
 	}
 
-	// Non-LLM fields on request / prior version must remain untouched
-	if obfReq.BranchContext.CustomDirectives != "Unused alias mentioning Alice Walker." {
-		t.Errorf("expected BranchContext.CustomDirectives untouched, got %q", obfReq.BranchContext.CustomDirectives)
+	// Non-obfuscated structured / non-LLM fields on request and prior version must remain untouched
+	untouchedChecks := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"BranchContext.TargetCompany", obfReq.BranchContext.TargetCompany, "Alice Walker Ventures"},
+		{"BranchContext.CustomDirectives", obfReq.BranchContext.CustomDirectives, "Unused alias mentioning Alice Walker."},
+		{"PriorVersion.Experience.Company", obfReq.PriorVersion.Experiences[0].Company, "Alice Walker Consulting"},
+		{"PriorVersion.Education.Institution", obfReq.PriorVersion.Education[0].Institution, "MIT (Alice Walker)"},
+		{"PriorVersion.Education.Degree", obfReq.PriorVersion.Education[0].Degree, "M.S. (Alice Walker)"},
+		{"PriorVersion.Education.Field", obfReq.PriorVersion.Education[0].Field, "Systems (Alice Walker)"},
+		{"PriorVersion.Certification.Name", obfReq.PriorVersion.Certifications[0].Name, "CKA - Alice Walker"},
+		{"PriorVersion.Certification.Issuer", obfReq.PriorVersion.Certifications[0].Issuer, "CNCF (alicewalker)"},
+		{"PriorVersion.Certification.URL", obfReq.PriorVersion.Certifications[0].URL, "https://alicewalker.dev/cka"},
+		{"PriorVersion.Certification.Summary", obfReq.PriorVersion.Certifications[0].Summary, "Non-projected cert summary for Alice Walker."},
 	}
-	if obfReq.PriorVersion.Certifications[0].Summary != "Non-projected cert summary for Alice Walker." {
-		t.Errorf("expected PriorVersion.Certifications[0].Summary untouched, got %q", obfReq.PriorVersion.Certifications[0].Summary)
+	for _, tc := range untouchedChecks {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Errorf("expected %s untouched %q, got %q", tc.name, tc.want, tc.got)
+			}
+		})
 	}
 
 	// Verify caller's original request and prior version were NOT mutated
@@ -393,8 +437,8 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 	if !strings.Contains(req.PriorVersion.Experiences[0].Bullets[0].Text, "Alice Walker") {
 		t.Errorf("original req.PriorVersion bullet was mutated")
 	}
-	if !strings.Contains(req.PriorVersion.Certifications[0].Name, "Alice Walker") {
-		t.Errorf("original req.PriorVersion certification was mutated")
+	if !strings.Contains(req.PriorVersion.Education[0].Bullets[0].Text, "Alice Walker") {
+		t.Errorf("original req.PriorVersion education bullet was mutated")
 	}
 }
 
@@ -475,7 +519,7 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 		IdentifiedGaps: []core.GapItem{
 			{
 				Requirement:       "Distinct gap item for " + sanitizer.PlaceholderFullName,
-				MissingArea:       "Infra",
+				MissingArea:       "Infra (" + sanitizer.PlaceholderFullName + ")",
 				ClarifyingPrompt:  "Ask " + sanitizer.PlaceholderFullName,
 				RecommendedAction: "Follow up at " + sanitizer.PlaceholderEmail,
 			},
@@ -489,7 +533,7 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 
 	session.DeobfuscateGenerationResponse(&genResp)
 
-	// 1. Verify schema-returned TailoredContent fields are deobfuscated
+	// 1. Verify LLM-generated free-text TailoredContent fields are deobfuscated
 	if strings.Contains(genResp.TailoredContent.Summary, sanitizer.PlaceholderFullName) ||
 		strings.Contains(genResp.TailoredContent.Summary, "John Doe") ||
 		!strings.Contains(genResp.TailoredContent.Summary, "Alice Walker (also Alice Walker)") {
@@ -503,9 +547,6 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 	}
 
 	exp := genResp.TailoredContent.Experiences[0]
-	if exp.Company != "Alice Walker Consulting" || exp.RoleTitle != "Staff Architect (Alice Walker)" {
-		t.Errorf("Experience Company/RoleTitle failed deobfuscation: %+v", exp)
-	}
 	if !strings.Contains(exp.DutiesSummary, "alice.walker@example.org") {
 		t.Errorf("Experience DutiesSummary failed deobfuscation: %s", exp.DutiesSummary)
 	}
@@ -516,46 +557,68 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 		t.Errorf("bullet 1 failed to deobfuscate: %s", exp.Bullets[1].Text)
 	}
 
-	// Non-schema TailoredContent fields must NOT be deobfuscated
-	if exp.SupervisorName != sanitizer.PlaceholderFullName {
-		t.Errorf("expected non-schema Experience.SupervisorName untouched, got %q", exp.SupervisorName)
-	}
-	if exp.SupervisorContact != sanitizer.PlaceholderEmail {
-		t.Errorf("expected non-schema Experience.SupervisorContact untouched, got %q", exp.SupervisorContact)
-	}
-	if exp.CompanyContact.Value != sanitizer.PlaceholderEmail {
-		t.Errorf("expected non-schema Experience.CompanyContact.Value untouched, got %q", exp.CompanyContact.Value)
-	}
-	if genResp.TailoredContent.Education[0].Bullets[0].Text != "Non-schema bullet "+sanitizer.PlaceholderFullName {
-		t.Errorf("expected non-schema Education.Bullets untouched, got %q", genResp.TailoredContent.Education[0].Bullets[0].Text)
-	}
-
-	// Project, Education, Certification schema fields
 	proj := genResp.TailoredContent.Projects[0]
-	if proj.URL != "https://github.com/alicewalker-dev" || !strings.Contains(proj.Summary, "Alice Walker (alicewalker-dev)") {
-		t.Errorf("project failed deobfuscation: %+v", proj)
+	if !strings.Contains(proj.Summary, "Alice Walker (alicewalker-dev)") {
+		t.Errorf("project Summary failed deobfuscation: %+v", proj)
 	}
-	edu := genResp.TailoredContent.Education[0]
-	if edu.Institution != "MIT (Alice Walker)" || edu.Degree != "M.S. (Alice Walker)" || edu.Field != "CS (Alice Walker)" {
-		t.Errorf("education failed deobfuscation: %+v", edu)
-	}
-	cert := genResp.TailoredContent.Certifications[0]
-	if cert.Name != "CKA (Alice Walker)" || cert.Issuer != "CNCF / alicewalker" || cert.URL != "https://alicewalker.dev/cka" {
-		t.Errorf("certification failed deobfuscation: %+v", cert)
+	if proj.Bullets[0].Text != "Published by Alice Walker." {
+		t.Errorf("project Bullets[0].Text failed deobfuscation: got %q", proj.Bullets[0].Text)
 	}
 
-	// 2. Verify GapReport deobfuscation (both MissingRequirements and distinct IdentifiedGaps)
-	if !strings.Contains(genResp.GapReport.OverallMatchSummary, "Alice Walker strongly matches") {
-		t.Errorf("GapReport OverallMatchSummary failed: %s", genResp.GapReport.OverallMatchSummary)
+	// Non-schema and validator-overwritten structured identity fields must NOT be deobfuscated
+	untouchedTailored := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"Experience.Company", exp.Company, sanitizer.PlaceholderFullName + " Consulting"},
+		{"Experience.RoleTitle", exp.RoleTitle, "Staff Architect (" + sanitizer.PlaceholderFullName + ")"},
+		{"Experience.SupervisorName", exp.SupervisorName, sanitizer.PlaceholderFullName},
+		{"Experience.SupervisorContact", exp.SupervisorContact, sanitizer.PlaceholderEmail},
+		{"Experience.CompanyContact.Value", exp.CompanyContact.Value, sanitizer.PlaceholderEmail},
+		{"Project.Name", proj.Name, "Raft-Go (" + sanitizer.PlaceholderFullName + ")"},
+		{"Project.Role", proj.Role, "Creator (" + sanitizer.PlaceholderFullName + ")"},
+		{"Project.URL", proj.URL, "https://social.example.com/profile-2"},
+		{"Education.Institution", genResp.TailoredContent.Education[0].Institution, "MIT (" + sanitizer.PlaceholderFullName + ")"},
+		{"Education.Degree", genResp.TailoredContent.Education[0].Degree, "M.S. (" + sanitizer.PlaceholderFullName + ")"},
+		{"Education.Field", genResp.TailoredContent.Education[0].Field, "CS (" + sanitizer.PlaceholderFullName + ")"},
+		{"Education.Bullets[0].Text", genResp.TailoredContent.Education[0].Bullets[0].Text, "Non-schema bullet " + sanitizer.PlaceholderFullName},
+		{"Certification.Name", genResp.TailoredContent.Certifications[0].Name, "CKA (" + sanitizer.PlaceholderFullName + ")"},
+		{"Certification.Issuer", genResp.TailoredContent.Certifications[0].Issuer, "CNCF / candidate-social-1"},
+		{"Certification.URL", genResp.TailoredContent.Certifications[0].URL, sanitizer.PlaceholderWebsite + "/cka"},
 	}
-	if !strings.Contains(genResp.GapReport.MissingRequirements[0].ClarifyingPrompt, "Does Alice Walker have") {
-		t.Errorf("GapReport MissingRequirements failed: %+v", genResp.GapReport.MissingRequirements[0])
-	}
-	if !strings.Contains(genResp.GapReport.IdentifiedGaps[0].RecommendedAction, "alice.walker@example.org") {
-		t.Errorf("GapReport distinct IdentifiedGaps failed: %+v", genResp.GapReport.IdentifiedGaps[0])
+	for _, tc := range untouchedTailored {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Errorf("expected %s untouched %q, got %q", tc.name, tc.want, tc.got)
+			}
+		})
 	}
 
-	// Also verify normalized (aliased backing slice) GapReport deobfuscates cleanly once
+	// 2. Verify GapReport deobfuscation across all fields
+	if genResp.GapReport.OverallMatchSummary != "Alice Walker strongly matches 90% of requirements." {
+		t.Errorf("GapReport OverallMatchSummary failed: %q", genResp.GapReport.OverallMatchSummary)
+	}
+	if genResp.GapReport.StrategicRecommendations[0] != "Alice Walker should highlight enterprise scaling." ||
+		genResp.GapReport.StrategicRecommendations[1] != "Add portfolio link https://alicewalker.dev" {
+		t.Errorf("GapReport StrategicRecommendations failed: %+v", genResp.GapReport.StrategicRecommendations)
+	}
+	mr := genResp.GapReport.MissingRequirements[0]
+	if mr.Requirement != "Experience with AWS for Alice Walker" ||
+		mr.MissingArea != "Cloud Provider (Alice Walker)" ||
+		mr.ClarifyingPrompt != "Does Alice Walker have AWS production experience?" ||
+		mr.RecommendedAction != "Clarify with Alice Walker" {
+		t.Errorf("GapReport MissingRequirements[0] failed: %+v", mr)
+	}
+	ig := genResp.GapReport.IdentifiedGaps[0]
+	if ig.Requirement != "Distinct gap item for Alice Walker" ||
+		ig.MissingArea != "Infra (Alice Walker)" ||
+		ig.ClarifyingPrompt != "Ask Alice Walker" ||
+		ig.RecommendedAction != "Follow up at alice.walker@example.org" {
+		t.Errorf("GapReport distinct IdentifiedGaps[0] failed: %+v", ig)
+	}
+
+	// 3. Verify normalized (equal-length aliased backing slice) GapReport deobfuscates cleanly
 	normalizedReport := core.GapReport{
 		MissingRequirements: []core.GapItem{
 			{Requirement: "Req for " + sanitizer.PlaceholderFullName, ClarifyingPrompt: "Prompt " + sanitizer.PlaceholderFullName},
@@ -566,6 +629,21 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 	if normalizedReport.MissingRequirements[0].Requirement != "Req for Alice Walker" ||
 		normalizedReport.IdentifiedGaps[0].Requirement != "Req for Alice Walker" {
 		t.Errorf("normalized GapReport failed deobfuscation: %+v", normalizedReport)
+	}
+
+	// 4. Verify unequal-length prefix-aliased GapReport still deobfuscates trailing elements
+	backing := []core.GapItem{
+		{Requirement: "Shared item for " + sanitizer.PlaceholderFullName},
+		{Requirement: "Trailing item for " + sanitizer.PlaceholderFullName},
+	}
+	prefixAliased := core.GapReport{
+		MissingRequirements: backing[:1],
+		IdentifiedGaps:      backing,
+	}
+	session.DeobfuscateGapReport(&prefixAliased)
+	if prefixAliased.IdentifiedGaps[0].Requirement != "Shared item for Alice Walker" ||
+		prefixAliased.IdentifiedGaps[1].Requirement != "Trailing item for Alice Walker" {
+		t.Errorf("prefix-aliased GapReport failed trailing deobfuscation: %+v", prefixAliased.IdentifiedGaps)
 	}
 }
 
@@ -583,15 +661,15 @@ func TestSession_DeobfuscateATSScore(t *testing.T) {
 				{
 					Company:    sanitizer.PlaceholderFullName + " LLC",
 					Title:      "Engineer (" + sanitizer.PlaceholderFullName + ")",
-					DateRange:  "2021 - Present",
+					DateRange:  "2021 - " + sanitizer.PlaceholderFullName,
 					Highlights: []string{"Contact " + sanitizer.PlaceholderPhone},
 				},
 			},
 			Educations: []core.ATSExtractedEducation{
 				{
 					Institution: "MIT (" + sanitizer.PlaceholderFullName + ")",
-					Degree:      "M.S.",
-					Field:       "CS",
+					Degree:      "M.S. (" + sanitizer.PlaceholderFullName + ")",
+					Field:       "CS (" + sanitizer.PlaceholderFullName + ")",
 					DateRange:   "2019 - 2021",
 				},
 			},
@@ -608,12 +686,30 @@ func TestSession_DeobfuscateATSScore(t *testing.T) {
 	if !strings.Contains(c.Summary, "Alice Walker") || !strings.Contains(c.Summary, "alice.walker@example.org") {
 		t.Errorf("ATSExtractedCandidate.Summary failed: %s", c.Summary)
 	}
-	if c.Skills[0] != "Go (Alice Walker)" ||
-		c.Experiences[0].Company != "Alice Walker LLC" ||
-		c.Experiences[0].Highlights[0] != "Contact +1 (555) 234-5678" ||
-		c.Educations[0].Institution != "MIT (Alice Walker)" ||
-		c.Certifications[0] != "CKA - Alice Walker" {
-		t.Errorf("ATSExtractedCandidate nested fields failed: %+v", c)
+	if c.Experiences[0].Title != "Engineer (Alice Walker)" {
+		t.Errorf("ATSExtractedCandidate.Experiences[0].Title failed: %q", c.Experiences[0].Title)
+	}
+	if c.Experiences[0].Highlights[0] != "Contact +1 (555) 234-5678" {
+		t.Errorf("ATSExtractedCandidate.Experiences[0].Highlights[0] failed: %q", c.Experiences[0].Highlights[0])
+	}
+
+	// Structured skills, company, date range, education, and certification details must NOT be deobfuscated
+	if c.Skills[0] != "Go ("+sanitizer.PlaceholderFullName+")" {
+		t.Errorf("expected Skills[0] untouched, got %q", c.Skills[0])
+	}
+	if c.Experiences[0].Company != sanitizer.PlaceholderFullName+" LLC" {
+		t.Errorf("expected Experiences[0].Company untouched, got %q", c.Experiences[0].Company)
+	}
+	if c.Experiences[0].DateRange != "2021 - "+sanitizer.PlaceholderFullName {
+		t.Errorf("expected Experiences[0].DateRange untouched, got %q", c.Experiences[0].DateRange)
+	}
+	if c.Educations[0].Institution != "MIT ("+sanitizer.PlaceholderFullName+")" ||
+		c.Educations[0].Degree != "M.S. ("+sanitizer.PlaceholderFullName+")" ||
+		c.Educations[0].Field != "CS ("+sanitizer.PlaceholderFullName+")" {
+		t.Errorf("expected Educations[0] untouched, got %+v", c.Educations[0])
+	}
+	if c.Certifications[0] != "CKA - "+sanitizer.PlaceholderFullName {
+		t.Errorf("expected Certifications[0] untouched, got %q", c.Certifications[0])
 	}
 }
 
@@ -632,7 +728,10 @@ func TestSession_IdempotenceAndNilSafety(t *testing.T) {
 	if nilSession.ObfuscatePriorVersion(nil) != nil {
 		t.Errorf("expected nil from ObfuscatePriorVersion(nil)")
 	}
-	_ = nilSession.ObfuscateRequest(core.GenerationRequest{GlobalRules: "Rule"})
+	obfNilReq := nilSession.ObfuscateRequest(core.GenerationRequest{GlobalRules: "Rule"})
+	if obfNilReq.GlobalRules != "Rule" {
+		t.Errorf("nil session mutated ObfuscateRequest.GlobalRules: got %q", obfNilReq.GlobalRules)
+	}
 	nilSession.DeobfuscateTailoredContent(&core.TailoredContent{Summary: "x"})
 	nilSession.DeobfuscateGapReport(&core.GapReport{OverallMatchSummary: "x"})
 	nilSession.DeobfuscateGenerationResponse(&core.GenerationResponse{})
@@ -640,14 +739,23 @@ func TestSession_IdempotenceAndNilSafety(t *testing.T) {
 
 	// 2. Empty / nil constructors & nil pointers
 	emptySession := sanitizer.NewSession(nil)
-	_ = sanitizer.NewSessionFromSnapshot(nil)
-	_ = sanitizer.NewSessionFromRequest(core.GenerationRequest{})
-	raw := "Hello world"
-	if emptySession.ObfuscateString(raw) != raw {
-		t.Errorf("empty session corrupted raw string")
+	snapNilSession := sanitizer.NewSessionFromSnapshot(nil)
+	reqNilSession := sanitizer.NewSessionFromRequest(core.GenerationRequest{})
+	if snapNilSession == nil || reqNilSession == nil {
+		t.Fatalf("expected non-nil empty sessions from nil snapshot/request constructors")
 	}
-	if emptySession.DeobfuscateString(raw) != raw {
-		t.Errorf("empty session corrupted raw string in deobfuscate")
+	raw := "Hello [John Doe]"
+	for name, sess := range map[string]*sanitizer.Session{
+		"NewSession(nil)":             emptySession,
+		"NewSessionFromSnapshot(nil)": snapNilSession,
+		"NewSessionFromRequest({})":   reqNilSession,
+	} {
+		if sess.ObfuscateString(raw) != raw {
+			t.Errorf("%s corrupted raw string in ObfuscateString", name)
+		}
+		if sess.DeobfuscateString(raw) != raw {
+			t.Errorf("%s corrupted raw string in DeobfuscateString", name)
+		}
 	}
 
 	emptySession.DeobfuscateGenerationResponse(nil)
@@ -698,12 +806,11 @@ func TestSession_ShortUsernames_DoNotCorruptTechnicalTerms(t *testing.T) {
 		t.Errorf("short username corrupted technical terms: got %q, want %q", obfText, text)
 	}
 
-	// 3. Deobfuscation restores synthetic placeholder if echoed
-	echoed := "The candidate candidate-social-1 expert designed candidate-social-2 agents."
-	deobf := session.DeobfuscateString(echoed)
-	expected := "The candidate go expert designed ai agents."
-	if deobf != expected {
-		t.Errorf("deobfuscation of short username placeholder failed: got %q, want %q", deobf, expected)
+	// 3. Skipped short usernames (< 3 chars) register neither forward nor one-way reverse mappings
+	literalPlaceholderText := "The candidate candidate-social-1 expert designed candidate-social-2 agents."
+	deobf := session.DeobfuscateString(literalPlaceholderText)
+	if deobf != literalPlaceholderText {
+		t.Errorf("expected skipped short username to register no reverse mapping: got %q, want %q", deobf, literalPlaceholderText)
 	}
 }
 
@@ -721,6 +828,13 @@ func TestSession_PhoneBoundary_AndMetricsProtection(t *testing.T) {
 			input:     "Managed +15 engineers and increased revenue by +100% with +1.5M ARR.",
 			wantObf:   "Managed +15 engineers and increased revenue by +100% with +1.5M ARR.",
 			wantDeobf: "Managed +15 engineers and increased revenue by +100% with +1.5M ARR.",
+		},
+		{
+			name:      "short phone under 7 digits registers no one-way reverse rule",
+			phone:     "+1",
+			input:     "Literal placeholder " + sanitizer.PlaceholderPhone + " stays intact.",
+			wantObf:   "Literal placeholder " + sanitizer.PlaceholderPhone + " stays intact.",
+			wantDeobf: "Literal placeholder " + sanitizer.PlaceholderPhone + " stays intact.",
 		},
 		{
 			name:      "international phone with leading plus preserves whitespace and metrics",
@@ -779,6 +893,10 @@ func TestSession_URLValidation_ValidAndInvalidBoundaries(t *testing.T) {
 	text := "Collaborated with co-workers on /dev/null and visited https://example.com/path."
 	if obf := invalidSession.ObfuscateString(text); obf != text {
 		t.Errorf("invalid URLs corrupted text: got %q, want %q", obf, text)
+	}
+	placeholderText := "Visit " + sanitizer.PlaceholderWebsite + " or https://social.example.com/profile-1."
+	if deobf := invalidSession.DeobfuscateString(placeholderText); deobf != placeholderText {
+		t.Errorf("invalid URLs registered unexpected reverse mapping: got %q, want %q", deobf, placeholderText)
 	}
 
 	bareDomainProf := &core.Profile{

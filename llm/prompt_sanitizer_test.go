@@ -176,3 +176,85 @@ func TestBuildGapAnalysisPrompt_ContactSanitizerMasking(t *testing.T) {
 		t.Errorf("BuildGapAnalysisPrompt missing PlaceholderFullName %q", sanitizer.PlaceholderFullName)
 	}
 }
+
+func TestBuildPrompts_EmployerEducationAndCertificationsNotObfuscated(t *testing.T) {
+	realName := "Jordan Vance"
+	snap := &core.MainProfileSnapshot{
+		Profile: core.Profile{
+			FullName: realName,
+			Summary:  realName + " builds distributed storage engines.",
+		},
+		Experiences: []core.WorkExperience{
+			{
+				ID:            "exp-1",
+				ShortID:       "exp-1",
+				Company:       realName + " Systems",
+				RoleTitle:     "Principal Engineer",
+				DutiesSummary: realName + " led consensus development.",
+			},
+		},
+		Education: []core.Education{
+			{
+				ID:          "edu-1",
+				ShortID:     "edu-1",
+				Institution: realName + " Institute of Technology",
+				Degree:      "M.S.",
+				Field:       "Computer Science (" + realName + " Track)",
+			},
+		},
+		Certifications: []core.Certification{
+			{
+				ID:      "cert-1",
+				ShortID: "cert-1",
+				Name:    "CKA (" + realName + ")",
+				Issuer:  "CNCF",
+			},
+		},
+		ExportedAt: time.Now(),
+	}
+
+	req := core.GenerationRequest{
+		MainProfile: snap,
+		BranchContext: core.Branch{
+			TargetRole:         "Staff Engineer",
+			TargetCompany:      realName + " Corp",
+			TargetRequirements: "Seeking engineer like " + realName + ".",
+		},
+	}
+
+	tailorPayload, err := llm.BuildPrompt(req)
+	if err != nil {
+		t.Fatalf("BuildPrompt failed: %v", err)
+	}
+	for _, want := range []string{
+		realName + " Corp",
+		realName + " Systems",
+		realName + " Institute of Technology",
+		"Computer Science (" + realName + " Track)",
+		"CKA (" + realName + ")",
+	} {
+		if !strings.Contains(tailorPayload.UserPrompt, want) {
+			t.Errorf("BuildPrompt unexpectedly obfuscated non-PII structured field %q", want)
+		}
+	}
+
+	gapPayload, err := llm.BuildGapAnalysisPrompt(req)
+	if err != nil {
+		t.Fatalf("BuildGapAnalysisPrompt failed: %v", err)
+	}
+	if !strings.Contains(gapPayload.UserPrompt, realName+" Corp") {
+		t.Errorf("BuildGapAnalysisPrompt unexpectedly obfuscated TargetCompany")
+	}
+
+	session := sanitizer.NewSessionFromSnapshot(snap)
+	atsMatchPayload, err := llm.BuildATSMatchingPrompt(req.BranchContext, &core.ATSExtractedCandidate{}, session)
+	if err != nil {
+		t.Fatalf("BuildATSMatchingPrompt failed: %v", err)
+	}
+	if !strings.Contains(atsMatchPayload.UserPrompt, realName+" Corp") {
+		t.Errorf("BuildATSMatchingPrompt unexpectedly obfuscated TargetCompany")
+	}
+	if strings.Contains(atsMatchPayload.UserPrompt, "Seeking engineer like "+realName) {
+		t.Errorf("BuildATSMatchingPrompt failed to obfuscate TargetRequirements")
+	}
+}

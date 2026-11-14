@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/resumeee-app/resumeee-core"
@@ -238,8 +239,11 @@ func TestSeedDefaultDataRepos_DecoupledUserRepository(t *testing.T) {
 	backing := memory.New()
 	profileRepo := profileOnlyRepo{ProfileRepository: backing}
 
-	if err := seed.SeedDefaultData(ctx, nil); err == nil {
-		t.Fatal("expected error for nil store")
+	if err := seed.SeedDefaultData(ctx, nil); !errors.Is(err, core.ErrValidation) {
+		t.Fatalf("expected ErrValidation for nil store, got %v", err)
+	}
+	if err := seed.SeedDefaultDataRepos(ctx, nil, backing, backing, backing, backing); !errors.Is(err, core.ErrValidation) {
+		t.Fatalf("expected ErrValidation for nil profile repository, got %v", err)
 	}
 
 	bundle := &core.StoreBundle{

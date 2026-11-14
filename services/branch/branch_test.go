@@ -1008,6 +1008,38 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 	})
 
+	t.Run("returns error and releases quota when LLMService returns a nil report without error", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+		spyQuota := &spyQuotaRepo{}
+
+		svcWithLLM := branch.NewService(branch.Config{
+			BranchRepo:  env.branchRepo,
+			ProfileRepo: env.profileRepo,
+			QuotaRepo:   spyQuota,
+			JobEnqueuer: env.enqueuer,
+			Validator:   validator.New(),
+			Renderer:    renderer.NewTemplateRenderer(),
+			LLMService:  &stubLLMService{}, // GenerateGapAnalysis returns (nil, nil)
+		})
+
+		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
+		if err == nil {
+			t.Fatalf("expected error for nil gap report, got report %+v", report)
+		}
+		if report != nil {
+			t.Errorf("expected nil report on error, got %+v", report)
+		}
+
+		spyQuota.mu.Lock()
+		defer spyQuota.mu.Unlock()
+		if len(spyQuota.releases) != 1 {
+			t.Errorf("expected quota reservation to be released once, got %d releases", len(spyQuota.releases))
+		}
+		if len(spyQuota.commits) != 0 {
+			t.Errorf("expected no committed usage for a failed analysis, got %d commits", len(spyQuota.commits))
+		}
+	})
+
 	t.Run("normalizes identified_gaps before calculating deterministic match score", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 

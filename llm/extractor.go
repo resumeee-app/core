@@ -39,16 +39,20 @@ func (f CompleterFunc) Complete(ctx context.Context, _, systemPrompt, userPrompt
 }
 
 // ExtractResumeWithTokenUsage extracts a structured resume using the extractor and returns the parsed resume,
-// token usage (defaulting to defaultTokens if reported as 0), and any error encountered.
+// token usage (defaulting to defaultTokens if a successful call reports 0), and any error encountered.
+// A nil extractor fails closed with core.ErrValidation so callers never commit quota for a nil resume.
 func ExtractResumeWithTokenUsage(ctx context.Context, extractor core.ResumeExtractor, text, provider, model string, defaultTokens int) (*core.JSONResume, core.TokenUsage, error) {
 	if extractor == nil {
-		return nil, core.TokenUsage{}, nil
+		return nil, core.TokenUsage{}, fmt.Errorf("%w: no resume extractor configured", core.ErrValidation)
 	}
 	extracted, usage, err := extractor.ExtractResumeWithUsage(ctx, text, provider, model)
+	if err != nil {
+		return nil, usage, err
+	}
 	if usage.TotalTokens == 0 && defaultTokens > 0 {
 		usage.TotalTokens = defaultTokens
 	}
-	return extracted, usage, err
+	return extracted, usage, nil
 }
 
 // ResumeExtractor implements core.ResumeExtractor and core.ModelEnumerator using an injected Completer.

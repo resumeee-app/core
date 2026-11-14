@@ -100,3 +100,18 @@
 - [x] **Step 1:** Run `GOWORK=off make verify` in `.worktrees/consolidate-interfaces` and verify 0 failures and 0 lint issues.
 - [x] **Step 2:** Verify root checkout (`main`) has clean `git status --short`.
 - [x] **Step 3:** Mark tasks complete in this plan, commit cleanly, push `refactor/consolidate-interfaces`, and create the PR via `gh pr create`.
+
+---
+
+### Task 8: Peer Review Cycle 1 Follow-ups
+
+Addresses `spec-reviewer`, `standards-reviewer`, and `security-reviewer` findings on PR #10.
+
+- [x] **[MAJOR] AST guard bypass (`interface_assertion_test.go`):** Type-switch case clauses are now checked against an explicit allowlist (`allowedProductionAssertionTypes` + `allowedProductionTypeSwitchCases`, with `fmt.Stringer` documented as the single template-formatting exception), so named and qualified interface cases (`case core.UserRepository:`) are rejected. `collectAssertionViolations` now accepts source input and returns parse errors, and `TestCollectAssertionViolations` exercises forbidden and allowed synthetic sources (mutation-checked: disabling the type-switch check fails 4 subtests).
+- [x] **[MAJOR] `(nil, nil)` gap report (`services/branch/branch.go`):** `AnalyzeGaps` rejects a nil report from `GenerateGapAnalysis` and sets `retErr` so the quota reservation is released instead of committed; covered by a `spyQuotaRepo` subtest in `TestService_AnalyzeGaps`.
+- [x] **[MAJOR] `(nil, nil)` fallback response (`llm/service_adapter.go`):** `ServiceAdapter.GenerateGapAnalysis` returns `ErrInvalidResponse` when the `GenerateTailoredResume` fallback returns a nil response.
+- [x] **[MINOR] Fail-open nil extractor (`llm/extractor.go`):** `ExtractResumeWithTokenUsage` returns `core.ErrValidation` for a nil extractor and applies `defaultTokens` only on success.
+- [x] **[MINOR] Orphaned raw helpers (`llm/client_adapter.go`):** Removed `ClientProvider.CompleteText` and `CompleteTextWithUsage` (no production or sibling-repo callers); tests call `CompleteStructured` directly.
+- [x] **[MINOR] Unhappy-path coverage (`llm/service_adapter_test.go`, `llm/nil_guard_test.go`):** Added non-JSON and unrecognized-JSON fallback, transport-error non-fallback, fallback error and `(nil, nil)` cases, and nil-receiver / nil-dependency guard tests for `ClientProvider`, `RegistryCompleter`, `ResumeExtractor`, and `CompleterFunc`.
+- [x] **[NIT] Sentinel consistency (`seed/seed.go`):** `SeedDefaultData` wraps `core.ErrValidation` for a nil store, asserted with `errors.Is` in `memory/seed_test.go`.
+- [ ] **[NIT] Double provider resolution in `ResumeExtractor.ExtractResumeWithUsage`:** Deferred; both lookups are local `Registry` map reads, and collapsing them would mean widening `llm.Completer` beyond this PR's scope.

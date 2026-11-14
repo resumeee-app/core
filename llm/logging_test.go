@@ -151,7 +151,7 @@ func TestLLMLogging_ClientProvider_TelemetryAndPrivacy(t *testing.T) {
 			},
 		},
 		{
-			name:           "CompleteTextWithUsage success logs metadata without leaking prompts or response",
+			name:           "CompleteStructured unstructured success logs metadata without leaking prompts or response",
 			providerName:   ProviderAnthropic,
 			model:          "claude-3-7-sonnet-20250219",
 			wantOperation:  "CompleteText",
@@ -166,12 +166,11 @@ func TestLLMLogging_ClientProvider_TelemetryAndPrivacy(t *testing.T) {
 			},
 			invoke: func(t *testing.T, prov *ClientProvider) error {
 				t.Helper()
-				text, usage, callErr := prov.CompleteTextWithUsage(
-					context.Background(),
-					secretSystemPrompt,
-					secretUserPrompt,
-					"claude-3-7-sonnet-20250219",
-				)
+				text, usage, callErr := prov.CompleteStructured(context.Background(), "CompleteText", core.LLMCompletionRequest{
+					Model:        "claude-3-7-sonnet-20250219",
+					SystemPrompt: secretSystemPrompt,
+					UserPrompt:   secretUserPrompt,
+				})
 				if callErr == nil {
 					if !strings.Contains(text, "extracted output") {
 						t.Errorf("unexpected completion text %q", text)
@@ -184,7 +183,7 @@ func TestLLMLogging_ClientProvider_TelemetryAndPrivacy(t *testing.T) {
 			},
 		},
 		{
-			name:           "CompleteTextWithUsage upstream failure logs error without leaking prompts or response",
+			name:           "CompleteStructured unstructured upstream failure logs error without leaking prompts or response",
 			providerName:   ProviderCompat,
 			model:          "llama3.3",
 			wantOperation:  "CompleteText",
@@ -198,12 +197,11 @@ func TestLLMLogging_ClientProvider_TelemetryAndPrivacy(t *testing.T) {
 			},
 			invoke: func(t *testing.T, prov *ClientProvider) error {
 				t.Helper()
-				_, _, callErr := prov.CompleteTextWithUsage(
-					context.Background(),
-					secretSystemPrompt,
-					secretUserPrompt,
-					"llama3.3",
-				)
+				_, _, callErr := prov.CompleteStructured(context.Background(), "CompleteText", core.LLMCompletionRequest{
+					Model:        "llama3.3",
+					SystemPrompt: secretSystemPrompt,
+					UserPrompt:   secretUserPrompt,
+				})
 				return callErr
 			},
 		},

@@ -310,7 +310,7 @@ func SeedDefaultData(
 	defaultUserID ...string,
 ) error {
 	if store == nil {
-		return errors.New("store cannot be nil")
+		return fmt.Errorf("%w: store cannot be nil", core.ErrValidation)
 	}
 	return SeedDefaultDataRepos(
 		ctx,

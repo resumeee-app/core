@@ -189,21 +189,6 @@ func (p *ClientProvider) CompleteStructured(ctx context.Context, operation strin
 	return strings.TrimSpace(compResp.Text), compResp.Usage, nil
 }
 
-// CompleteText dispatches an unstructured/raw text completion request by delegating to CompleteTextWithUsage.
-func (p *ClientProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
-	text, _, err := p.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
-	return text, err
-}
-
-// CompleteTextWithUsage dispatches an unstructured/raw text completion request to the underlying LLMClient.
-func (p *ClientProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt, userPrompt, model string) (string, core.TokenUsage, error) {
-	return p.CompleteStructured(ctx, "CompleteText", core.LLMCompletionRequest{
-		Model:        model,
-		SystemPrompt: systemPrompt,
-		UserPrompt:   userPrompt,
-	})
-}
-
 // structuredCall encapsulates parameters for capability-aware completion dispatch across
 // ServiceAdapter and ResumeExtractor workflows without duplicating fallback ladders.
 type structuredCall struct {

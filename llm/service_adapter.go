@@ -124,6 +124,9 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 	if err != nil {
 		return nil, err
 	}
+	if resp == nil {
+		return nil, fmt.Errorf("%w: empty generation response during gap analysis fallback from provider %s", ErrInvalidResponse, provider.Name())
+	}
 	session := sanitizer.NewSessionFromRequest(req)
 	session.DeobfuscateGenerationResponse(resp)
 	resp.GapReport.Normalize()

@@ -816,6 +816,12 @@ func (s *service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*co
 			retErr = fmt.Errorf("gap analysis generation failed: %w", err)
 			return nil, retErr
 		}
+		// Reject (nil, nil) explicitly: setting retErr releases the quota reservation
+		// instead of committing usage, and prevents dereferencing a nil report below.
+		if r == nil {
+			retErr = errors.New("gap analysis generation failed: llm service returned no gap report")
+			return nil, retErr
+		}
 		report = r
 	} else {
 		// Fallback to active version gap report if present

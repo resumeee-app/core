@@ -356,9 +356,13 @@ func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing
 			t.Errorf("unexpected regComp.Complete result %q, err=%v", txt, err)
 		}
 		cp := llm.NewClientProvider(stub)
-		cpTxt, err := cp.CompleteText(context.Background(), "sys", "usr", "gpt-4o")
+		cpTxt, _, err := cp.CompleteStructured(context.Background(), "CompleteText", core.LLMCompletionRequest{
+			Model:        "gpt-4o",
+			SystemPrompt: "sys",
+			UserPrompt:   "usr",
+		})
 		if err != nil || cpTxt != resumeJSON {
-			t.Errorf("unexpected ClientProvider.CompleteText result %q, err=%v", cpTxt, err)
+			t.Errorf("unexpected ClientProvider.CompleteStructured result %q, err=%v", cpTxt, err)
 		}
 	})
 

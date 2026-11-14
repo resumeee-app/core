@@ -5,12 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -53,7 +53,6 @@ func TestLLMLogging_ClientProvider(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	debugDir := t.TempDir()
 
 	client := &fakeTransportClient{
 		name:         ProviderGemini,
@@ -68,10 +67,7 @@ func TestLLMLogging_ClientProvider(t *testing.T) {
 		},
 	}
 
-	provider := NewClientProvider(client,
-		WithLogger(logger),
-		WithDebugPrompts(true, debugDir),
-	)
+	provider := NewClientProvider(client, WithLogger(logger))
 
 	res, err := provider.GenerateTailoredResume(context.Background(), sampleRequest())
 	if err != nil {
@@ -91,20 +87,143 @@ func TestLLMLogging_ClientProvider(t *testing.T) {
 	if records[1].StatusCode == nil || *records[1].StatusCode != http.StatusOK {
 		t.Errorf("expected status_code 200 in response log, got %+v", records[1])
 	}
+	if records[1].DurationMS == nil || *records[1].DurationMS < 0 {
+		t.Errorf("expected non-negative duration_ms in response log, got %+v", records[1])
+	}
 
-	tenantDir := filepath.Join(debugDir, "default")
-	entries, err := os.ReadDir(tenantDir)
+	// Verify that prompt content and response bodies are not leaked into structured log attributes
+	rawLog := logBuf.String()
+	if strings.Contains(rawLog, "system_prompt") || strings.Contains(rawLog, "user_prompt") {
+		t.Errorf("structured logs must not log prompt content, got: %s", rawLog)
+	}
+	if strings.Contains(rawLog, "Jane Doe") || strings.Contains(rawLog, "Acme Corp") {
+		t.Errorf("structured logs must not contain sensitive candidate prompt data, got: %s", rawLog)
+	}
+}
+
+func TestLLMLogging_CompleteTextWithUsage(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	client := &fakeTransportClient{
+		name:         ProviderOpenAI,
+		defaultModel: defaultOpenAIModel,
+		completeFn: func(_ context.Context, _ core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+			return &core.LLMCompletionResponse{
+				Text:       "Secret completion content",
+				RawBody:    "Secret completion content",
+				StatusCode: http.StatusOK,
+				Usage:      core.TokenUsage{PromptTokens: 5, CompletionTokens: 15, TotalTokens: 20},
+			}, nil
+		},
+	}
+
+	provider := NewClientProvider(client, WithLogger(logger))
+	text, usage, err := provider.CompleteTextWithUsage(context.Background(), "System prompt with secrets", "User prompt with candidate info", "")
 	if err != nil {
-		t.Fatalf("failed to read tenant debugDir: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(entries) == 0 {
-		t.Fatal("expected debug markdown files to be written to tenantDir")
+	if text != "Secret completion content" {
+		t.Errorf("expected completion text %q, got %q", "Secret completion content", text)
 	}
-	content, err := os.ReadFile(filepath.Join(tenantDir, entries[0].Name()))
-	if err != nil {
-		t.Fatalf("failed to read debug file: %v", err)
+	if usage.TotalTokens != 20 {
+		t.Errorf("expected 20 tokens, got %d", usage.TotalTokens)
 	}
-	if !strings.Contains(string(content), "tailor") {
-		t.Errorf("expected debug file to contain sanitized operation name 'tailor'")
+
+	records := parseLogs(t, logBuf.String())
+	if len(records) != 2 {
+		t.Fatalf("expected 2 log records, got %d", len(records))
 	}
+	if records[0].Operation != "CompleteText" || records[0].Provider != ProviderOpenAI {
+		t.Errorf("unexpected dispatch record: %+v", records[0])
+	}
+	if records[1].StatusCode == nil || *records[1].StatusCode != http.StatusOK {
+		t.Errorf("unexpected receive record: %+v", records[1])
+	}
+
+	rawLog := logBuf.String()
+	if strings.Contains(rawLog, "System prompt with secrets") || strings.Contains(rawLog, "User prompt with candidate info") {
+		t.Errorf("prompts must not be logged in structured logs, got: %s", rawLog)
+	}
+	if strings.Contains(rawLog, "Secret completion content") {
+		t.Errorf("response body must not be logged in structured logs, got: %s", rawLog)
+	}
+}
+
+func TestLLMLogging_UnitTable(t *testing.T) {
+	tests := []struct {
+		name          string
+		provider      string
+		model         string
+		operation     string
+		statusCode    int
+		respErr       error
+		expectedLevel string
+		expectErrAttr bool
+	}{
+		{
+			name:          "successful request",
+			provider:      "gemini",
+			model:         "gemini-2.5-flash",
+			operation:     "test-op",
+			statusCode:    200,
+			respErr:       nil,
+			expectedLevel: "INFO",
+			expectErrAttr: false,
+		},
+		{
+			name:          "failed request with error",
+			provider:      "openai",
+			model:         "gpt-4o",
+			operation:     "failing-op",
+			statusCode:    500,
+			respErr:       errors.New("upstream failure"),
+			expectedLevel: "INFO",
+			expectErrAttr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+			trace := logLLMRequest(context.Background(), logger, tc.provider, tc.model, tc.operation)
+			if trace == nil {
+				t.Fatal("expected non-nil trace")
+			}
+			time.Sleep(2 * time.Millisecond)
+			logLLMResponse(context.Background(), logger, trace, tc.statusCode, tc.respErr)
+
+			records := parseLogs(t, buf.String())
+			if len(records) != 2 {
+				t.Fatalf("expected 2 log records, got %d", len(records))
+			}
+
+			// Verify dispatch record
+			if records[0].Provider != tc.provider || records[0].Model != tc.model || records[0].Operation != tc.operation {
+				t.Errorf("unexpected dispatch record: %+v", records[0])
+			}
+			// Verify response record
+			if records[1].StatusCode == nil || *records[1].StatusCode != tc.statusCode {
+				t.Errorf("unexpected response status code: %+v", records[1])
+			}
+			if tc.expectErrAttr && records[1].Error == "" {
+				t.Errorf("expected error attribute in response record, got none: %+v", records[1])
+			}
+			if !tc.expectErrAttr && records[1].Error != "" {
+				t.Errorf("unexpected error attribute: %s", records[1].Error)
+			}
+		})
+	}
+}
+
+func TestLLMLogging_NilSafety(t *testing.T) {
+	// Must not panic with nil logger or nil trace
+	trace := logLLMRequest(context.Background(), nil, "provider", "model", "op")
+	if trace == nil {
+		t.Fatal("expected non-nil trace even with nil logger")
+	}
+	logLLMResponse(context.Background(), nil, trace, http.StatusOK, nil)
+	logLLMResponse(context.Background(), nil, nil, http.StatusInternalServerError, errors.New("err"))
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -79,8 +80,8 @@ func TestGeminiProvider_Complete_InteractionsSDK(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("failed to decode request body: %v", err)
 			}
-			if body["model"] != "gemini-4-hydrogen" {
-				t.Errorf("expected model gemini-4-hydrogen, got %v", body["model"])
+			if body["model"] != "gemini-3.8-flash" {
+				t.Errorf("expected default model gemini-3.8-flash, got %v", body["model"])
 			}
 			if body["system_instruction"] != "sys" {
 				t.Errorf("expected system_instruction 'sys', got %v", body["system_instruction"])
@@ -145,12 +146,14 @@ func TestGeminiProvider_Complete_InteractionsSDK(t *testing.T) {
 		if !prov.SupportsStructuredOutput("") {
 			t.Errorf("expected GeminiProvider.SupportsStructuredOutput to return true")
 		}
-		if len(prov.Models()) != 1 || prov.Models()[0].Model != defaultGeminiModel {
-			t.Errorf("expected single default model %q, got %+v", defaultGeminiModel, prov.Models())
+		if prov.DefaultModel() != "gemini-3.8-flash" {
+			t.Errorf("expected DefaultModel gemini-3.8-flash, got %q", prov.DefaultModel())
+		}
+		if len(prov.Models()) != 1 || prov.Models()[0].Model != "gemini-3.8-flash" {
+			t.Errorf("expected single default model gemini-3.8-flash, got %+v", prov.Models())
 		}
 
 		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
-			Model:          "gemini-4-hydrogen",
 			SystemPrompt:   "sys",
 			UserPrompt:     "user",
 			ReasoningLevel: "high",
@@ -243,6 +246,8 @@ func TestGeminiProvider_Complete_InteractionsSDK(t *testing.T) {
 			{"200 malformed json", http.StatusOK, "application/json", `{not-json`, ErrInvalidResponse},
 			{"200 empty steps", http.StatusOK, "application/json", `{"id":"i1","status":"completed","steps":[]}`, ErrInvalidResponse},
 			{"200 failed status", http.StatusOK, "application/json", `{"id":"i2","status":"failed","errors":[{"code":"safety","message":"blocked"}]}`, ErrInvalidResponse},
+			{"200 budget_exceeded with partial output", http.StatusOK, "application/json", `{"id":"i3","status":"budget_exceeded","steps":[{"type":"model_output","content":[{"type":"text","text":"{\"partial\":"}]}]}`, ErrInvalidResponse},
+			{"200 requires_continuation with partial output", http.StatusOK, "application/json", `{"id":"i4","status":"requires_continuation","steps":[{"type":"model_output","content":[{"type":"text","text":"partial text"}]}]}`, ErrInvalidResponse},
 		}
 
 		for _, tc := range cases {
@@ -456,6 +461,54 @@ func TestOpenAIProvider_Complete_ResponsesAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("legacy OpenAI model falls back to prompt schema without text.format or double schema", func(t *testing.T) {
+		var capturedBodies []map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			capturedBodies = append(capturedBodies, body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"status": "completed",
+				"output": [{"type":"message","role":"assistant","content":[{"type":"output_text","text":"{\"summary\":\"legacy ok\"}"}]}],
+				"usage": {"input_tokens": 12, "output_tokens": 6, "total_tokens": 18}
+			}`))
+		}))
+		defer srv.Close()
+
+		prov := NewOpenAIProvider("key", WithBaseURL(srv.URL))
+		_, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
+			Model:          "gpt-4-turbo",
+			SystemPrompt:   "Follow instructions.",
+			UserPrompt:     "user",
+			ResponseSchema: sampleTestSchema,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		_, err = prov.Complete(context.Background(), core.LLMCompletionRequest{
+			Model:          "gpt-4-turbo",
+			SystemPrompt:   "Follow instructions.\n\n<response_schema>\n{\"type\":\"object\"}\n</response_schema>",
+			UserPrompt:     "user",
+			ResponseSchema: sampleTestSchema,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error on pre-appended call: %v", err)
+		}
+		if len(capturedBodies) != 2 {
+			t.Fatalf("expected 2 requests, got %d", len(capturedBodies))
+		}
+		for i, b := range capturedBodies {
+			if _, hasText := b["text"]; hasText {
+				t.Errorf("call %d: did not expect text.format for legacy gpt-4-turbo, got %v", i, b["text"])
+			}
+			inst, _ := b["instructions"].(string)
+			if strings.Count(inst, "<response_schema>") != 1 {
+				t.Errorf("call %d: expected exactly 1 <response_schema> in instructions, got %d (%q)", i, strings.Count(inst, "<response_schema>"), inst)
+			}
+		}
+	})
+
 	t.Run("refusals, incomplete responses, and HTTP/JSON errors", func(t *testing.T) {
 		cases := []struct {
 			name       string
@@ -547,6 +600,7 @@ func TestAnthropicProvider_Complete_OutputConfigAndModelGating(t *testing.T) {
 			{"claude-sonnet-4-20250514", false},
 			{"claude-opus-4-20250514", false},
 			{"claude-2.1", false},
+			{"claude-sonnet-4-18446744073709551621", false},
 		}
 		for _, tc := range cases {
 			if got := prov.SupportsStructuredOutput(tc.model); got != tc.want {
@@ -867,7 +921,7 @@ func TestOllamaProvider_Complete_StructuredAndPlainText(t *testing.T) {
 			{"429 rate limited", http.StatusTooManyRequests, `too many requests`, ErrRateLimited},
 			{"500 internal error", http.StatusInternalServerError, `model runner crashed`, ErrUpstream},
 			{"200 malformed json", http.StatusOK, `{not-json`, ErrInvalidResponse},
-			{"200 empty message content", http.StatusOK, `{"message":{"role":"assistant","content":"   "}}`, ErrInvalidResponse},
+			{"200 empty message content", http.StatusOK, `{"message":{"role":"assistant","content":"   "},"prompt_eval_count":11,"eval_count":4}`, ErrInvalidResponse},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -884,6 +938,9 @@ func TestOllamaProvider_Complete_StructuredAndPlainText(t *testing.T) {
 				}
 				if resp == nil || resp.StatusCode != tc.statusCode {
 					t.Errorf("expected status %d in response, got %+v", tc.statusCode, resp)
+				}
+				if tc.name == "200 empty message content" && resp != nil && resp.Usage.TotalTokens != 15 {
+					t.Errorf("expected empty-content error response to preserve usage TotalTokens=15, got %+v", resp.Usage)
 				}
 			})
 		}
@@ -1014,20 +1071,26 @@ func TestTransportUtilities_BoundsAndStatusError(t *testing.T) {
 		t.Error("expected error for status 418")
 	}
 
+	oversizedBody := strings.Repeat("A", 64)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("bounded-ok"))
+		_, _ = w.Write([]byte(oversizedBody))
 	}))
 	defer srv.Close()
 
-	wrappedClient := wrapBoundedHTTPClient(srv.Client())
+	wrappedClient := wrapBoundedHTTPClientWithLimit(srv.Client(), 16)
 	resp, err := wrappedClient.Get(srv.URL)
 	if err != nil {
 		t.Fatalf("unexpected wrapped client error: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	got, err := readBoundedBody(resp.Body)
-	if err != nil || string(got) != "bounded-ok" {
-		t.Fatalf("unexpected wrapped body %q, err=%v", string(got), err)
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("unexpected io.ReadAll error: %v", err)
+	}
+	if len(got) != 16 || string(got) != strings.Repeat("A", 16) {
+		t.Fatalf("expected bounded transport to truncate at 16 bytes, got len=%d (%q)", len(got), string(got))
+	}
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("unexpected Close error: %v", closeErr)
 	}
 }
 

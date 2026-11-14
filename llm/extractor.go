@@ -20,6 +20,19 @@ type UsageCompleter interface {
 	CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, core.TokenUsage, error)
 }
 
+// ModelCatalogCompleter is an optional capability interface implemented by Completers
+// that expose a catalog of configured models.
+type ModelCatalogCompleter interface {
+	AvailableModels() []core.ModelOption
+}
+
+// SchemaCompleter is an optional capability interface implemented by Completers
+// that negotiate and execute schema-enforced structured completions per target provider and model.
+type SchemaCompleter interface {
+	SupportsStructuredCompletion(provider, model string) bool
+	CompleteSchemaWithUsage(ctx context.Context, operation, systemPrompt, userPrompt, provider, model, schemaName string, schema map[string]any) (string, core.TokenUsage, error)
+}
+
 // CompleterFunc allows using an ordinary function as a Completer.
 type CompleterFunc func(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, error)
 
@@ -76,13 +89,13 @@ func NewDefaultResumeExtractor(registry *Registry) core.ResumeExtractor {
 	}
 }
 
-// AvailableModels returns available configured models if the completer is backed by a Registry.
+// AvailableModels returns available configured models if the completer implements ModelCatalogCompleter.
 func (e *resumeExtractor) AvailableModels() []core.ModelOption {
-	if e == nil {
+	if e == nil || e.completer == nil {
 		return nil
 	}
-	if rc, ok := e.completer.(*registryCompleter); ok && rc.registry != nil {
-		return rc.registry.AvailableModels()
+	if mcc, ok := e.completer.(ModelCatalogCompleter); ok {
+		return mcc.AvailableModels()
 	}
 	return nil
 }
@@ -96,36 +109,47 @@ func NewRegistryCompleter(registry *Registry) Completer {
 	return &registryCompleter{registry: registry}
 }
 
+func (rc *registryCompleter) AvailableModels() []core.ModelOption {
+	if rc == nil || rc.registry == nil {
+		return nil
+	}
+	return rc.registry.AvailableModels()
+}
+
 func (rc *registryCompleter) resolveProviderAndModel(provider, model string) (core.LLMProvider, string, error) {
 	if rc == nil || rc.registry == nil {
 		return nil, "", ErrNoProviders
 	}
+	return rc.registry.Resolve(core.GenerationRequest{
+		Model:         model,
+		BranchContext: core.Branch{ProviderOverride: provider},
+	}, nil, nil)
+}
 
-	targetProvider := strings.TrimSpace(provider)
-	if targetProvider == "" {
-		targetProvider = rc.registry.DefaultProvider()
-	}
-	if targetProvider == "" {
-		return nil, "", ErrNoProviders
-	}
-
-	p, err := rc.registry.Get(targetProvider)
+func (rc *registryCompleter) SupportsStructuredCompletion(provider, model string) bool {
+	p, resolvedModel, err := rc.resolveProviderAndModel(provider, model)
 	if err != nil {
-		return nil, "", err
+		return false
 	}
+	return supportsNativeStructuredCall(p, resolvedModel)
+}
 
-	targetModel := strings.TrimSpace(model)
-	if targetModel == "" {
-		if strings.EqualFold(targetProvider, rc.registry.DefaultProvider()) && rc.registry.DefaultModel() != "" {
-			targetModel = rc.registry.DefaultModel()
-		} else if mcp, ok := p.(ModelCatalogProvider); ok && strings.TrimSpace(mcp.DefaultModel()) != "" {
-			targetModel = mcp.DefaultModel()
-		} else {
-			targetModel = defaultModelForProvider(p.Name())
-		}
+func (rc *registryCompleter) CompleteSchemaWithUsage(ctx context.Context, operation, systemPrompt, userPrompt, provider, model, schemaName string, schema map[string]any) (string, core.TokenUsage, error) {
+	p, targetModel, err := rc.resolveProviderAndModel(provider, model)
+	if err != nil {
+		return "", core.TokenUsage{}, err
 	}
-
-	return p, targetModel, nil
+	return (structuredCall{
+		Provider:   p,
+		Operation:  operation,
+		Model:      targetModel,
+		Schema:     schema,
+		SchemaName: schemaName,
+		Prompts: &PromptPayload{
+			SystemPrompt: systemPrompt,
+			UserPrompt:   userPrompt,
+		},
+	}).execute(ctx)
 }
 
 // Complete delegates raw text completion to the resolved LLM provider from the registry.
@@ -136,19 +160,7 @@ func (rc *registryCompleter) Complete(ctx context.Context, systemPrompt, userPro
 
 // CompleteWithUsage delegates raw text completion and captures token usage from the resolved LLM provider.
 func (rc *registryCompleter) CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, core.TokenUsage, error) {
-	p, targetModel, err := rc.resolveProviderAndModel(provider, model)
-	if err != nil {
-		return "", core.TokenUsage{}, err
-	}
-	return (structuredCall{
-		Provider:  p,
-		Operation: "CompleteText",
-		Model:     targetModel,
-		Prompts: &PromptPayload{
-			SystemPrompt: systemPrompt,
-			UserPrompt:   userPrompt,
-		},
-	}).execute(ctx)
+	return rc.CompleteSchemaWithUsage(ctx, "CompleteText", systemPrompt, userPrompt, provider, model, "", nil)
 }
 
 // ExtractResume parses unstructured resume text into a structured JSONResume document.
@@ -178,27 +190,21 @@ func (e *resumeExtractor) ExtractResumeWithUsage(ctx context.Context, text strin
 		err         error
 	)
 
-	if rc, isReg := e.completer.(*registryCompleter); isReg {
-		resolvedProv, resolvedModel, rErr := rc.resolveProviderAndModel(provider, model)
-		if rErr != nil {
-			return nil, core.TokenUsage{}, rErr
-		}
-		supportsStructured := core.SupportsStructuredOutput(resolvedProv, resolvedModel)
+	if sc, isSchemaCompleter := e.completer.(SchemaCompleter); isSchemaCompleter {
+		supportsStructured := sc.SupportsStructuredCompletion(provider, model)
 		prompts, pErr := BuildResumeExtractPromptWithOptions(trimmedText, PromptOptions{NativeStructuredOutput: supportsStructured})
 		if pErr != nil {
 			return nil, core.TokenUsage{}, fmt.Errorf("failed to build resume extraction prompt: %w", pErr)
 		}
-		rawResponse, usage, err = (structuredCall{
-			Provider:   resolvedProv,
-			Operation:  "ExtractResume",
-			Model:      resolvedModel,
-			Prompts:    prompts,
-			Schema:     ResumeExtractResponseSchema(),
-			SchemaName: "resume_extract_response",
-		}).execute(ctx)
+		var schema map[string]any
+		var schemaName string
+		if supportsStructured {
+			schema = ResumeExtractResponseSchema()
+			schemaName = "resume_extract_response"
+		}
+		rawResponse, usage, err = sc.CompleteSchemaWithUsage(ctx, "ExtractResume", prompts.SystemPrompt, prompts.UserPrompt, provider, model, schemaName, schema)
 	} else {
-		supportsStructured := core.SupportsStructuredOutput(e.completer, model)
-		prompts, pErr := BuildResumeExtractPromptWithOptions(trimmedText, PromptOptions{NativeStructuredOutput: supportsStructured})
+		prompts, pErr := BuildResumeExtractPromptWithOptions(trimmedText, PromptOptions{NativeStructuredOutput: false})
 		if pErr != nil {
 			return nil, core.TokenUsage{}, fmt.Errorf("failed to build resume extraction prompt: %w", pErr)
 		}

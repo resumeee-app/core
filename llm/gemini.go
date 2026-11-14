@@ -23,8 +23,6 @@ const defaultGeminiBaseURL = "https://generativelanguage.googleapis.com"
 // Google GenAI Interactions SDK (google.golang.org/genai).
 type GeminiProvider struct {
 	apiKey       string
-	baseURL      string
-	httpClient   *http.Client
 	defaultModel string
 	client       *genai.Client
 	initErr      error
@@ -35,8 +33,6 @@ func NewGeminiProvider(apiKey string, opts ...Option) *GeminiProvider {
 	cfg := applyOptions(opts, defaultGeminiBaseURL, defaultGeminiModel)
 	prov := &GeminiProvider{
 		apiKey:       apiKey,
-		baseURL:      cfg.baseURL,
-		httpClient:   cfg.httpClient,
 		defaultModel: cfg.defaultModel,
 	}
 
@@ -177,7 +173,11 @@ func (p *GeminiProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 	}
 
 	switch inter.Status {
-	case interactions.InteractionStatusFailed, interactions.InteractionStatusCancelled, interactions.InteractionStatusIncomplete:
+	case interactions.InteractionStatusFailed,
+		interactions.InteractionStatusCancelled,
+		interactions.InteractionStatusIncomplete,
+		interactions.InteractionStatusBudgetExceeded,
+		interactions.InteractionStatusRequiresContinuation:
 		errDetail := string(inter.Status)
 		if len(inter.Errors) > 0 && inter.Errors[0].Message != nil && strings.TrimSpace(*inter.Errors[0].Message) != "" {
 			errDetail = fmt.Sprintf("%s: %s", inter.Status, strings.TrimSpace(*inter.Errors[0].Message))

@@ -17,7 +17,7 @@ const (
 	ProviderOllama        = "ollama"
 	ProviderCompat        = "compat"
 	ProviderCompatAlt     = "openai-compat"
-	defaultGeminiModel    = "gemini-4-hydrogen"
+	defaultGeminiModel    = "gemini-3.8-flash"
 	defaultOpenAIModel    = "gpt-4o"
 	defaultAnthropicModel = "claude-sonnet-4-5"
 	defaultOllamaModel    = "llama3.1"
@@ -243,6 +243,16 @@ func canExecuteProviderCompletion(provider core.LLMProvider) bool {
 	return false
 }
 
+func supportsNativeStructuredCall(provider core.LLMProvider, model string) bool {
+	if provider == nil {
+		return false
+	}
+	if _, ok := provider.(StructuredCompleter); !ok {
+		return false
+	}
+	return core.SupportsStructuredOutput(provider, model)
+}
+
 func (c structuredCall) execute(ctx context.Context) (string, core.TokenUsage, error) {
 	if c.Provider == nil {
 		return "", core.TokenUsage{}, ErrNoProviders
@@ -260,7 +270,7 @@ func (c structuredCall) execute(ctx context.Context) (string, core.TokenUsage, e
 			UserPrompt:     usrPrompt,
 			ReasoningLevel: c.ReasoningLevel,
 		}
-		if c.Schema != nil && core.SupportsStructuredOutput(c.Provider, c.Model) {
+		if c.Schema != nil && supportsNativeStructuredCall(c.Provider, c.Model) {
 			compReq.ResponseSchema = c.Schema
 			compReq.SchemaName = c.SchemaName
 		}

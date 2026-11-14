@@ -466,4 +466,64 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("custom RawUsageCompleter implementing StructuredOutputCapable without StructuredCompleter keeps <response_schema>", func(t *testing.T) {
+		rawProv := &capableRawOnlyProvider{
+			name: "custom-raw",
+			responses: []string{
+				gapJSON,
+				`{"extraction_confidence_score":0.9,"extraction_summary":"clean","extracted_candidate":{"full_name":"Jane"}}`,
+				`{"job_matching_score":0.85,"matching_summary":"strong fit"}`,
+			},
+		}
+		reg := NewRegistry()
+		reg.Register(rawProv)
+		adapter := NewServiceAdapter(reg)
+
+		req := sampleRequest()
+		if _, err := adapter.GenerateGapAnalysis(context.Background(), req); err != nil {
+			t.Fatalf("GenerateGapAnalysis failed: %v", err)
+		}
+		if _, err := adapter.SimulateATS(context.Background(), core.ATSSimulationRequest{
+			ResumeText:    "# Jane Doe\nGo Engineer",
+			FormatUsed:    "markdown",
+			MainProfile:   req.MainProfile,
+			BranchContext: req.BranchContext,
+		}); err != nil {
+			t.Fatalf("SimulateATS failed: %v", err)
+		}
+		if len(rawProv.sysPrompts) != 3 {
+			t.Fatalf("expected 3 raw text calls (gap + ats extract + ats match), got %d", len(rawProv.sysPrompts))
+		}
+		for i, sys := range rawProv.sysPrompts {
+			if strings.Count(sys, "<response_schema>") != 1 {
+				t.Errorf("raw call %d: expected <response_schema> preserved for non-StructuredCompleter provider, got count=%d", i, strings.Count(sys, "<response_schema>"))
+			}
+		}
+	})
+}
+
+type capableRawOnlyProvider struct {
+	name       string
+	responses  []string
+	sysPrompts []string
+}
+
+func (p *capableRawOnlyProvider) Name() string { return p.name }
+
+func (p *capableRawOnlyProvider) SupportsStructuredOutput(_ string) bool { return true }
+
+func (p *capableRawOnlyProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
+	return nil, errors.New("unused")
+}
+
+func (p *capableRawOnlyProvider) CompleteText(ctx context.Context, sys, usr, model string) (string, error) {
+	txt, _, err := p.CompleteTextWithUsage(ctx, sys, usr, model)
+	return txt, err
+}
+
+func (p *capableRawOnlyProvider) CompleteTextWithUsage(_ context.Context, sys, _, _ string) (string, core.TokenUsage, error) {
+	idx := len(p.sysPrompts)
+	p.sysPrompts = append(p.sysPrompts, sys)
+	return p.responses[idx], core.TokenUsage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10}, nil
 }

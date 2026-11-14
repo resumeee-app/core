@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -788,8 +789,9 @@ func ResumeExtractResponseSchema() map[string]any {
 }
 
 // SanitizeGeminiSchema creates a deep clone of the provided schema map and recursively strips
-// unsupported keywords (such as "additionalProperties", "$schema", "$defs", "definitions", "title")
-// while preserving OpenAPI 3.0 fields supported by the Google Generative Language API.
+// keywords unsupported by the legacy OpenAPI 3.0 responseSchema subset (such as "additionalProperties",
+// "$schema", "$defs", "definitions", "title"). For the Gemini Interactions API JSON Schema grammar,
+// use SanitizeGeminiJSONSchema.
 func SanitizeGeminiSchema(schema map[string]any) map[string]any {
 	if schema == nil {
 		return nil
@@ -830,8 +832,9 @@ func sanitizeNode(val any) any {
 	}
 }
 
-// GeminiResponseSchema returns a Google Gemini-compatible JSON schema for core.GenerationResponse
-// by stripping additionalProperties and OpenAPI extensions unsupported by Gemini.
+// GeminiResponseSchema returns an OpenAPI 3.0-compatible JSON schema for core.GenerationResponse
+// targeting legacy Gemini responseSchema callers; GeminiProvider uses SanitizeGeminiJSONSchema
+// for the Interactions API JSON Schema format.
 func GeminiResponseSchema() map[string]any {
 	return SanitizeGeminiSchema(GenerationResponseSchema())
 }
@@ -1178,10 +1181,11 @@ func ATSMatchingResponseSchemaJSON() (string, error) {
 	return string(b), nil
 }
 
-// SanitizeGeminiJSONSchema returns a deep clone of schema stripped of JSON Schema
-// meta-keywords unsupported by Gemini's structured output grammar ($schema, $id, $defs, definitions)
-// while preserving additionalProperties, properties, required, description, enum, items, and anyOf.
-func SanitizeGeminiJSONSchema(schema map[string]any) map[string]any {
+// SanitizeStandardJSONSchema returns a deep clone of schema stripped of JSON Schema draft
+// meta-keywords ($schema, $id, $defs, definitions) while preserving additionalProperties,
+// properties, required, description, enum, items, and anyOf for standard JSON Schema transports
+// such as Ollama (/api/chat format) and the Gemini Interactions API.
+func SanitizeStandardJSONSchema(schema map[string]any) map[string]any {
 	if schema == nil {
 		return nil
 	}
@@ -1192,10 +1196,14 @@ func SanitizeGeminiJSONSchema(schema map[string]any) map[string]any {
 	return res
 }
 
-// SanitizeOpenAISchema returns a deep clone of schema normalized for OpenAI Structured Outputs
-// strict mode (strict: true): every object sets additionalProperties: false, every property key
-// is included in sorted required slices, and previously optional properties accept null.
-func SanitizeOpenAISchema(schema map[string]any) map[string]any {
+// SanitizeGeminiJSONSchema returns a deep clone of schema stripped of JSON Schema
+// meta-keywords unsupported by Gemini's structured output grammar ($schema, $id, $defs, definitions)
+// while preserving additionalProperties, properties, required, description, enum, items, and anyOf.
+func SanitizeGeminiJSONSchema(schema map[string]any) map[string]any {
+	return SanitizeStandardJSONSchema(schema)
+}
+
+func sanitizeStrictObjectSchema(schema map[string]any) map[string]any {
 	if schema == nil {
 		return nil
 	}
@@ -1206,18 +1214,18 @@ func SanitizeOpenAISchema(schema map[string]any) map[string]any {
 	return res
 }
 
+// SanitizeOpenAISchema returns a deep clone of schema normalized for OpenAI Structured Outputs
+// strict mode (strict: true): every object sets additionalProperties: false, every property key
+// is included in sorted required slices, and previously optional properties accept null.
+func SanitizeOpenAISchema(schema map[string]any) map[string]any {
+	return sanitizeStrictObjectSchema(schema)
+}
+
 // SanitizeAnthropicSchema returns a deep clone of schema normalized for Anthropic output_config.format:
 // every object sets additionalProperties: false and normalizes optional properties into required
 // nullable properties so large schemas stay well within Anthropic's optional-parameter grammar limit.
 func SanitizeAnthropicSchema(schema map[string]any) map[string]any {
-	if schema == nil {
-		return nil
-	}
-	res, ok := normalizeStrictSchemaNode(schema).(map[string]any)
-	if !ok {
-		return nil
-	}
-	return res
+	return sanitizeStrictObjectSchema(schema)
 }
 
 func cloneJSONSchemaValue(val any, stripMetaKeywords bool) any {
@@ -1289,7 +1297,7 @@ func normalizeStrictSchemaNode(val any) any {
 					}
 					normProps[propKey] = normProp
 				}
-				sortStringSlice(allKeys)
+				slices.Sort(allKeys)
 				cleaned["properties"] = normProps
 				cleaned["required"] = allKeys
 			} else {
@@ -1439,12 +1447,4 @@ func schemaNodeAcceptsNull(m map[string]any) bool {
 		}
 	}
 	return false
-}
-
-func sortStringSlice(items []string) {
-	for i := 1; i < len(items); i++ {
-		for j := i; j > 0 && items[j] < items[j-1]; j-- {
-			items[j], items[j-1] = items[j-1], items[j]
-		}
-	}
 }

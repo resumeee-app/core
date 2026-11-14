@@ -331,4 +331,80 @@ func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing
 			t.Errorf("expected ResponseSchema == nil for fallback provider")
 		}
 	})
+
+	t.Run("registry with cleared DefaultProvider still resolves registered provider via Registry.Resolve", func(t *testing.T) {
+		stub := &transportStubClient{
+			name:       llm.ProviderOpenAI,
+			structured: true,
+			responses:  []string{resumeJSON},
+		}
+		reg := llm.NewRegistry()
+		reg.RegisterClient(stub)
+		reg.SetDefault("", "")
+
+		ext := llm.NewDefaultResumeExtractor(reg)
+		res, _, err := llm.ExtractResumeWithTokenUsage(context.Background(), ext, "Ada Lovelace resume", "", "", 0)
+		if err != nil {
+			t.Fatalf("expected Registry.Resolve fallback to registered provider when DefaultProvider is cleared, got error: %v", err)
+		}
+		if res.Basics.Name != "Ada Lovelace" {
+			t.Errorf("unexpected extracted name %q", res.Basics.Name)
+		}
+
+		if catModels := ext.(llm.ModelCatalogCompleter).AvailableModels(); len(catModels) != 1 {
+			t.Errorf("expected 1 catalog model from registryCompleter, got %+v", catModels)
+		}
+		regComp := llm.NewRegistryCompleter(reg)
+		txt, err := regComp.Complete(context.Background(), "sys", "usr", llm.ProviderOpenAI, "gpt-4o")
+		if err != nil || txt != resumeJSON {
+			t.Errorf("unexpected regComp.Complete result %q, err=%v", txt, err)
+		}
+		cp := llm.NewClientProvider(stub)
+		cpTxt, err := cp.CompleteText(context.Background(), "sys", "usr", "gpt-4o")
+		if err != nil || cpTxt != resumeJSON {
+			t.Errorf("unexpected ClientProvider.CompleteText result %q, err=%v", cpTxt, err)
+		}
+	})
+
+	t.Run("custom text-only Completer implementing StructuredOutputCapable still receives <response_schema>", func(t *testing.T) {
+		custom := &capableTextOnlyCompleter{response: resumeJSON}
+		ext := llm.NewResumeExtractor(custom)
+		if models := ext.(llm.ModelCatalogCompleter).AvailableModels(); len(models) != 1 || models[0].Model != "custom-m1" {
+			t.Errorf("expected ModelCatalogCompleter models exposed via AvailableModels, got %+v", models)
+		}
+
+		res, usage, err := llm.ExtractResumeWithTokenUsage(context.Background(), ext, "Ada Lovelace resume", "custom", "custom-m1", 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Basics.Name != "Ada Lovelace" || usage.TotalTokens != 19 {
+			t.Errorf("unexpected extracted result or usage: %+v / %+v", res, usage)
+		}
+		if strings.Count(custom.lastSysPrompt, "<response_schema>") != 1 {
+			t.Errorf("expected text-only Completer to receive <response_schema> even if StructuredOutputCapable=true, got count=%d", strings.Count(custom.lastSysPrompt, "<response_schema>"))
+		}
+	})
+}
+
+type capableTextOnlyCompleter struct {
+	response      string
+	lastSysPrompt string
+}
+
+func (c *capableTextOnlyCompleter) SupportsStructuredOutput(_ string) bool {
+	return true
+}
+
+func (c *capableTextOnlyCompleter) AvailableModels() []core.ModelOption {
+	return []core.ModelOption{{Provider: "custom", Model: "custom-m1", DisplayName: "Custom M1", IsDefault: true}}
+}
+
+func (c *capableTextOnlyCompleter) Complete(ctx context.Context, sys, user, prov, model string) (string, error) {
+	text, _, err := c.CompleteWithUsage(ctx, sys, user, prov, model)
+	return text, err
+}
+
+func (c *capableTextOnlyCompleter) CompleteWithUsage(_ context.Context, sys, _, _, _ string) (string, core.TokenUsage, error) {
+	c.lastSysPrompt = sys
+	return c.response, core.TokenUsage{PromptTokens: 12, CompletionTokens: 7, TotalTokens: 19}, nil
 }

@@ -11,8 +11,9 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// CompatProvider implements core.LLMClient for generic OpenAI-compatible HTTP endpoints
-// such as Ollama, vLLM, llama.cpp, LocalAI, and LM Studio.
+// CompatProvider implements core.LLMClient for generic OpenAI-compatible /v1/chat/completions
+// HTTP endpoints such as vLLM, llama.cpp, LocalAI, and LM Studio (whereas native Ollama /api/chat
+// servers use OllamaProvider).
 type CompatProvider struct {
 	baseURL      string
 	apiKey       string

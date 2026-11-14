@@ -141,11 +141,18 @@ func hasClaudeVersionAtLeast(normModel, prefix string, minMajor, minMinor int) b
 	return minor >= minMinor
 }
 
+const maxClaudeVersionSegment = 100_000_000
+
 func parseLeadingPositiveInt(s string) (int, string, bool) {
 	i := 0
 	val := 0
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-		val = val*10 + int(s[i]-'0')
+		if val < maxClaudeVersionSegment {
+			val = val*10 + int(s[i]-'0')
+			if val > maxClaudeVersionSegment {
+				val = maxClaudeVersionSegment
+			}
+		}
 		i++
 	}
 	if i == 0 {
@@ -198,12 +205,12 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req core.LLMCompletion
 					Schema: SanitizeAnthropicSchema(req.ResponseSchema),
 				},
 			}
-		} else if !containsResponseSchemaDirective(systemPrompt) {
-			schemaBytes, err := json.MarshalIndent(req.ResponseSchema, "", "  ")
+		} else {
+			var err error
+			systemPrompt, err = appendFallbackSchemaIfNeeded(systemPrompt, req.ResponseSchema)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal fallback anthropic schema: %w", err)
 			}
-			systemPrompt = appendRawSchemaBlock(systemPrompt, string(schemaBytes))
 		}
 	}
 

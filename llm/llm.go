@@ -2,7 +2,7 @@
 // and provider registry resolution for generative AI model providers.
 //
 // Supported model provider backends include:
-//   - Google Gemini (gemini-4-hydrogen, gemini-4-argon, gemini-4-carbon)
+//   - Google Gemini (gemini-3.8-flash, gemini-4-argon, gemini-2.5-pro, gemini-2.5-flash)
 //   - OpenAI (gpt-4o, gpt-4o-mini, o3-mini, gpt-5)
 //   - Anthropic (claude-sonnet-4-5, claude-haiku-4-5, claude-opus-4-1)
 //   - Ollama native /api/chat (llama3.1, qwen2.5, etc.)

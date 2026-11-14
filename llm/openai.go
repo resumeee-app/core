@@ -165,12 +165,12 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 					Schema: SanitizeOpenAISchema(req.ResponseSchema),
 				},
 			}
-		} else if !containsResponseSchemaDirective(instructions) {
-			schemaBytes, err := json.MarshalIndent(req.ResponseSchema, "", "  ")
+		} else {
+			var err error
+			instructions, err = appendFallbackSchemaIfNeeded(instructions, req.ResponseSchema)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal fallback openai schema: %w", err)
 			}
-			instructions = appendRawSchemaBlock(instructions, string(schemaBytes))
 		}
 	}
 	payload.Instructions = instructions
@@ -349,21 +349,4 @@ func sanitizeOpenAISchemaName(name string) string {
 		out = out[:64]
 	}
 	return out
-}
-
-func containsResponseSchemaDirective(prompt string) bool {
-	lower := strings.ToLower(prompt)
-	return strings.Contains(lower, "<response_schema>") || strings.Contains(lower, "<json_output_schema>")
-}
-
-func appendRawSchemaBlock(systemPrompt, schemaJSON string) string {
-	trimmed := strings.TrimRight(systemPrompt, "\n")
-	block := fmt.Sprintf(
-		"<response_schema>\nThe expected response must be a valid JSON object conforming strictly to the following JSON Schema:\n```json\n%s\n```\n</response_schema>",
-		schemaJSON,
-	)
-	if trimmed == "" {
-		return block
-	}
-	return trimmed + "\n\n" + block
 }

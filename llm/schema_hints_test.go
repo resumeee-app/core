@@ -425,3 +425,63 @@ func TestResumeExtractPrompt_Composition(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizers_CombinatorsStandardSchemaAndIdempotency(t *testing.T) {
+	combinatorSchema := map[string]any{
+		"$schema": "https://json-schema.org/draft/2020-12/schema",
+		"type":    "object",
+		"properties": map[string]any{
+			"choice": map[string]any{
+				"anyOf": []any{
+					map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"a": map[string]any{"type": "string"},
+							"b": map[string]any{"type": "integer"},
+						},
+						"required": []string{"a"},
+					},
+					map[string]any{"type": "string"},
+				},
+			},
+			"alt": map[string]any{
+				"oneOf": []any{
+					map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"flag": map[string]any{"type": "boolean"},
+						},
+					},
+				},
+			},
+		},
+		"required": []string{"choice"},
+	}
+
+	std := llm.SanitizeStandardJSONSchema(combinatorSchema)
+	if _, hasMeta := std["$schema"]; hasMeta {
+		t.Errorf("expected SanitizeStandardJSONSchema to strip $schema")
+	}
+
+	once := llm.SanitizeOpenAISchema(combinatorSchema)
+	twice := llm.SanitizeOpenAISchema(once)
+
+	onceBytes, err := json.Marshal(once)
+	if err != nil {
+		t.Fatalf("failed to marshal once: %v", err)
+	}
+	twiceBytes, err := json.Marshal(twice)
+	if err != nil {
+		t.Fatalf("failed to marshal twice: %v", err)
+	}
+	if string(onceBytes) != string(twiceBytes) {
+		t.Errorf("expected SanitizeOpenAISchema to be idempotent:\nonce:  %s\ntwice: %s", string(onceBytes), string(twiceBytes))
+	}
+
+	props := once["properties"].(map[string]any)
+	choiceBranches := props["choice"].(map[string]any)["anyOf"].([]any)
+	firstBranch := choiceBranches[0].(map[string]any)
+	if firstBranch["additionalProperties"] != false {
+		t.Errorf("expected nested anyOf object branch to set additionalProperties=false, got %v", firstBranch["additionalProperties"])
+	}
+}

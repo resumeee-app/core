@@ -103,7 +103,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 		Stream:   false,
 	}
 	if req.ResponseSchema != nil {
-		payload.Format = SanitizeGeminiJSONSchema(req.ResponseSchema)
+		payload.Format = SanitizeStandardJSONSchema(req.ResponseSchema)
 	}
 
 	reqBodyBytes, err := json.Marshal(payload)
@@ -158,18 +158,19 @@ func (p *OllamaProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 		}, fmt.Errorf("%w: malformed ollama response: %v", ErrInvalidResponse, err)
 	}
 
+	usage := core.TokenUsage{
+		PromptTokens:     ollamaResp.PromptEvalCount,
+		CompletionTokens: ollamaResp.EvalCount,
+		TotalTokens:      ollamaResp.PromptEvalCount + ollamaResp.EvalCount,
+	}
+
 	content := strings.TrimSpace(ollamaResp.Message.Content)
 	if content == "" {
 		return &core.LLMCompletionResponse{
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
+			Usage:      usage,
 		}, fmt.Errorf("%w: empty message content returned by ollama", ErrInvalidResponse)
-	}
-
-	usage := core.TokenUsage{
-		PromptTokens:     ollamaResp.PromptEvalCount,
-		CompletionTokens: ollamaResp.EvalCount,
-		TotalTokens:      ollamaResp.PromptEvalCount + ollamaResp.EvalCount,
 	}
 
 	return &core.LLMCompletionResponse{

@@ -120,11 +120,35 @@ func appendResponseSchemaIfNeeded(baseSystemPrompt string, opts PromptOptions, s
 	if err != nil {
 		return "", fmt.Errorf("failed to serialize fallback response schema: %w", err)
 	}
-	return fmt.Sprintf(
-		"%s\n\n<response_schema>\nThe expected response must be a valid JSON object conforming strictly to the following JSON Schema:\n```json\n%s\n```\n</response_schema>",
-		trimmed,
+	return appendRawSchemaBlock(trimmed, schemaJSON), nil
+}
+
+func containsResponseSchemaDirective(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	return strings.Contains(lower, "<response_schema>") || strings.Contains(lower, "<json_output_schema>")
+}
+
+func appendRawSchemaBlock(systemPrompt, schemaJSON string) string {
+	trimmed := strings.TrimRight(systemPrompt, "\n")
+	block := fmt.Sprintf(
+		"<response_schema>\nThe expected response must be a valid JSON object conforming strictly to the following JSON Schema:\n```json\n%s\n```\n</response_schema>",
 		schemaJSON,
-	), nil
+	)
+	if trimmed == "" {
+		return block
+	}
+	return trimmed + "\n\n" + block
+}
+
+func appendFallbackSchemaIfNeeded(systemPrompt string, schema map[string]any) (string, error) {
+	if schema == nil || containsResponseSchemaDirective(systemPrompt) {
+		return systemPrompt, nil
+	}
+	schemaBytes, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal fallback response schema: %w", err)
+	}
+	return appendRawSchemaBlock(systemPrompt, string(schemaBytes)), nil
 }
 
 type tailorPromptContext struct {

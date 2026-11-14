@@ -608,3 +608,35 @@ func TestBuildPrompt_NilPriorVersion_NoCodeFence(t *testing.T) {
 		t.Errorf("expected nil prior version fallback text 'None (Initial generation)', got:\n%s", priorBlock)
 	}
 }
+
+func TestPromptCompiler_WithNativeStructuredOutputAndEmptyRegistryFallback(t *testing.T) {
+	req := core.GenerationRequest{}
+
+	cTrue := llm.NewPromptCompiler(llm.WithNativeStructuredOutput(true))
+	prevTrue, err := cTrue.CompilePrompt(req)
+	if err != nil {
+		t.Fatalf("CompilePrompt(WithNativeStructuredOutput(true)) failed: %v", err)
+	}
+	if strings.Contains(prevTrue.SystemPrompt, "<response_schema>") {
+		t.Errorf("expected WithNativeStructuredOutput(true) to omit <response_schema>")
+	}
+
+	cFalse := llm.NewPromptCompiler(llm.WithNativeStructuredOutput(false))
+	prevFalse, err := cFalse.CompilePrompt(req)
+	if err != nil {
+		t.Fatalf("CompilePrompt(WithNativeStructuredOutput(false)) failed: %v", err)
+	}
+	if strings.Count(prevFalse.SystemPrompt, "<response_schema>") != 1 {
+		t.Errorf("expected WithNativeStructuredOutput(false) to include single <response_schema>")
+	}
+
+	emptyReg := llm.NewRegistry()
+	cEmptyReg := llm.NewPromptCompiler(llm.WithNativeStructuredOutput(true), llm.WithPromptRegistry(emptyReg))
+	prevFallback, err := cEmptyReg.CompilePrompt(req)
+	if err != nil {
+		t.Fatalf("CompilePrompt with empty registry failed: %v", err)
+	}
+	if strings.Count(prevFallback.SystemPrompt, "<response_schema>") != 1 {
+		t.Errorf("expected empty-registry resolution failure to fall back to <response_schema>")
+	}
+}

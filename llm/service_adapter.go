@@ -83,7 +83,7 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 	req.Model = model
 
 	if canExecuteProviderCompletion(provider) {
-		supportsStructured := core.SupportsStructuredOutput(provider, model)
+		supportsStructured := supportsNativeStructuredCall(provider, model)
 		prompts, pErr := BuildGapAnalysisPromptWithOptions(req, PromptOptions{NativeStructuredOutput: supportsStructured})
 		if pErr != nil {
 			return nil, pErr
@@ -174,7 +174,7 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulation
 		return nil, err
 	}
 
-	supportsStructured := core.SupportsStructuredOutput(provider, model)
+	supportsStructured := supportsNativeStructuredCall(provider, model)
 	promptOpts := PromptOptions{NativeStructuredOutput: supportsStructured}
 
 	// Stage 1: ATS Content Extraction & Extraction Confidence Score

@@ -41,7 +41,8 @@ func (b *boundedReadCloser) Close() error {
 }
 
 type boundedResponseTransport struct {
-	base http.RoundTripper
+	base       http.RoundTripper
+	limitBytes int64
 }
 
 func (t *boundedResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -53,8 +54,12 @@ func (t *boundedResponseTransport) RoundTrip(req *http.Request) (*http.Response,
 	if err != nil || resp == nil || resp.Body == nil {
 		return resp, err
 	}
+	limit := t.limitBytes
+	if limit <= 0 {
+		limit = maxLLMResponseBodyBytes
+	}
 	resp.Body = &boundedReadCloser{
-		reader: io.LimitReader(resp.Body, maxLLMResponseBodyBytes),
+		reader: io.LimitReader(resp.Body, limit),
 		closer: resp.Body,
 	}
 	return resp, nil
@@ -63,9 +68,19 @@ func (t *boundedResponseTransport) RoundTrip(req *http.Request) (*http.Response,
 // wrapBoundedHTTPClient returns a shallow clone of client whose Transport enforces
 // maxLLMResponseBodyBytes on upstream response bodies (used for SDK-managed HTTP transports).
 func wrapBoundedHTTPClient(client *http.Client) *http.Client {
+	return wrapBoundedHTTPClientWithLimit(client, maxLLMResponseBodyBytes)
+}
+
+func wrapBoundedHTTPClientWithLimit(client *http.Client, limitBytes int64) *http.Client {
+	if limitBytes <= 0 {
+		limitBytes = maxLLMResponseBodyBytes
+	}
 	resolved := resolveHTTPClient(client)
 	cloned := *resolved
-	cloned.Transport = &boundedResponseTransport{base: resolved.Transport}
+	cloned.Transport = &boundedResponseTransport{
+		base:       resolved.Transport,
+		limitBytes: limitBytes,
+	}
 	return &cloned
 }
 

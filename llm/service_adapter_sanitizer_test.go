@@ -7,31 +7,31 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/sanitizer"
 )
 
-type mockPrivacyProvider struct {
+type mockSanitizerProvider struct {
 	name         string
 	defaultModel string
 	tailoredResp *core.GenerationResponse
 	completeText string
 }
 
-func (m *mockPrivacyProvider) Name() string {
+func (m *mockSanitizerProvider) Name() string {
 	if m.name != "" {
 		return m.name
 	}
-	return "mock-privacy"
+	return "mock-sanitizer"
 }
 
-func (m *mockPrivacyProvider) DefaultModel() string {
+func (m *mockSanitizerProvider) DefaultModel() string {
 	if m.defaultModel != "" {
 		return m.defaultModel
 	}
 	return "mock-model"
 }
 
-func (m *mockPrivacyProvider) GenerateTailoredResume(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
+func (m *mockSanitizerProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
 	if m.tailoredResp != nil {
 		copyResp := *m.tailoredResp
 		return &copyResp, nil
@@ -39,7 +39,7 @@ func (m *mockPrivacyProvider) GenerateTailoredResume(ctx context.Context, req co
 	return &core.GenerationResponse{}, nil
 }
 
-func (m *mockPrivacyProvider) CompleteText(ctx context.Context, systemPrompt, userPrompt, model string) (string, error) {
+func (m *mockSanitizerProvider) CompleteText(_ context.Context, _, _, _ string) (string, error) {
 	if m.completeText != "" {
 		return m.completeText, nil
 	}
@@ -47,24 +47,24 @@ func (m *mockPrivacyProvider) CompleteText(ctx context.Context, systemPrompt, us
 }
 
 func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
-	mockProv := &mockPrivacyProvider{
+	mockProv := &mockSanitizerProvider{
 		name:         "openai",
 		defaultModel: "gpt-4o",
 		tailoredResp: &core.GenerationResponse{
 			TailoredContent: core.TailoredContent{
-				Summary: "Results-driven engineer " + privacy.PlaceholderFullName + " reachable at " + privacy.PlaceholderEmail + " or " + privacy.PlaceholderPhone + ". Portfolio: " + privacy.PlaceholderWebsite + ". Handle: candidate-social-1.",
+				Summary: "Results-driven engineer " + sanitizer.PlaceholderFullName + " reachable at " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". Portfolio: " + sanitizer.PlaceholderWebsite + ". Handle: candidate-social-1.",
 				Experiences: []core.TailoredExperience{
 					{
 						Company:       "Acme",
-						DutiesSummary: privacy.PlaceholderFullName + " led distributed infrastructure.",
+						DutiesSummary: sanitizer.PlaceholderFullName + " led distributed infrastructure.",
 						Bullets: []core.TailoredBullet{
-							{Text: privacy.PlaceholderFullName + " scaled throughput by 300%."},
+							{Text: sanitizer.PlaceholderFullName + " scaled throughput by 300%."},
 						},
 					},
 				},
 			},
 			GapReport: core.GapReport{
-				OverallMatchSummary: privacy.PlaceholderFullName + " satisfies all requirements.",
+				OverallMatchSummary: sanitizer.PlaceholderFullName + " satisfies all requirements.",
 			},
 		},
 	}
@@ -99,7 +99,7 @@ func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 	}
 
 	// Verify placeholders were restored to authentic candidate details
-	if strings.Contains(resp.TailoredContent.Summary, privacy.PlaceholderFullName) {
+	if strings.Contains(resp.TailoredContent.Summary, sanitizer.PlaceholderFullName) {
 		t.Errorf("summary contains PlaceholderFullName: %s", resp.TailoredContent.Summary)
 	}
 	if !strings.Contains(resp.TailoredContent.Summary, "Alice Walker") {
@@ -130,10 +130,10 @@ func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 }
 
 func TestServiceAdapter_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
-	mockProv := &mockPrivacyProvider{
+	mockProv := &mockSanitizerProvider{
 		name:         "openai",
 		defaultModel: "gpt-4o",
-		completeText: `{"gap_report":{"overall_match_summary":"` + privacy.PlaceholderFullName + ` demonstrates strong capability.","missing_requirements":[{"requirement":"Kubernetes","missing_area":"Cloud","clarifying_prompt":"Does ` + privacy.PlaceholderFullName + ` have experience?","recommended_action":"Review ` + privacy.PlaceholderFullName + `'s GitHub candidate-social-1"}]}}`,
+		completeText: `{"gap_report":{"overall_match_summary":"` + sanitizer.PlaceholderFullName + ` demonstrates strong capability.","missing_requirements":[{"requirement":"Kubernetes","missing_area":"Cloud","clarifying_prompt":"Does ` + sanitizer.PlaceholderFullName + ` have experience?","recommended_action":"Review ` + sanitizer.PlaceholderFullName + `'s GitHub candidate-social-1"}]}}`,
 	}
 
 	reg := llm.NewRegistry(nil)
@@ -163,7 +163,7 @@ func TestServiceAdapter_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if strings.Contains(report.OverallMatchSummary, privacy.PlaceholderFullName) {
+	if strings.Contains(report.OverallMatchSummary, sanitizer.PlaceholderFullName) {
 		t.Errorf("gap report overall summary contains placeholder: %s", report.OverallMatchSummary)
 	}
 	if !strings.Contains(report.OverallMatchSummary, "Alice Walker demonstrates") {

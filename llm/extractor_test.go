@@ -280,7 +280,7 @@ func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing
 		stub := &transportStubClient{
 			name:       llm.ProviderOpenAI,
 			structured: true,
-			responses:  []string{resumeJSON},
+			responses:  []string{resumeJSON, resumeJSON, resumeJSON},
 		}
 		reg := llm.NewRegistry()
 		reg.RegisterClient(stub)
@@ -336,7 +336,7 @@ func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing
 		stub := &transportStubClient{
 			name:       llm.ProviderOpenAI,
 			structured: true,
-			responses:  []string{resumeJSON},
+			responses:  []string{resumeJSON, resumeJSON, resumeJSON},
 		}
 		reg := llm.NewRegistry()
 		reg.RegisterClient(stub)

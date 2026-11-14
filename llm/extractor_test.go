@@ -3,6 +3,7 @@ package llm_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/resumeee-app/resumeee-core"
@@ -268,6 +269,66 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 		}
 		if usage.TotalTokens != 1000 {
 			t.Errorf("expected default 1000 total tokens, got %+v", usage)
+		}
+	})
+}
+
+func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing.T) {
+	resumeJSON := `{"basics":{"name":"Ada Lovelace","email":"ada@analytical.org"}}`
+
+	t.Run("structured provider attaches ResumeExtractResponseSchema and omits <response_schema>", func(t *testing.T) {
+		stub := &transportStubClient{
+			name:       llm.ProviderOpenAI,
+			structured: true,
+			responses:  []string{resumeJSON},
+		}
+		reg := llm.NewRegistry()
+		reg.RegisterClient(stub)
+		ext := llm.NewDefaultResumeExtractor(reg)
+
+		res, usage, err := llm.ExtractResumeWithTokenUsage(context.Background(), ext, "Ada Lovelace resume", llm.ProviderOpenAI, "gpt-4o", 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Basics.Name != "Ada Lovelace" || usage.TotalTokens != 30 {
+			t.Errorf("unexpected extracted result or usage: %+v / %+v", res, usage)
+		}
+		if len(stub.reqs) != 1 {
+			t.Fatalf("expected 1 transport call, got %d", len(stub.reqs))
+		}
+		if strings.Contains(stub.reqs[0].SystemPrompt, "<response_schema>") {
+			t.Errorf("expected <response_schema> omitted for structured provider")
+		}
+		if stub.reqs[0].ResponseSchema == nil {
+			t.Errorf("expected ResponseSchema attached for structured provider")
+		}
+	})
+
+	t.Run("fallback provider appends <response_schema> and leaves ResponseSchema nil", func(t *testing.T) {
+		stub := &transportStubClient{
+			name:       llm.ProviderCompat,
+			structured: false,
+			responses:  []string{resumeJSON},
+		}
+		reg := llm.NewRegistry()
+		reg.RegisterClient(stub)
+		ext := llm.NewDefaultResumeExtractor(reg)
+
+		res, _, err := llm.ExtractResumeWithTokenUsage(context.Background(), ext, "Ada Lovelace resume", llm.ProviderCompat, "local", 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Basics.Name != "Ada Lovelace" {
+			t.Errorf("unexpected extracted result: %+v", res)
+		}
+		if len(stub.reqs) != 1 {
+			t.Fatalf("expected 1 transport call, got %d", len(stub.reqs))
+		}
+		if strings.Count(stub.reqs[0].SystemPrompt, "<response_schema>") != 1 {
+			t.Errorf("expected single <response_schema> in fallback system prompt")
+		}
+		if stub.reqs[0].ResponseSchema != nil {
+			t.Errorf("expected ResponseSchema == nil for fallback provider")
 		}
 	})
 }

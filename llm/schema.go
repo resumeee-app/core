@@ -1177,3 +1177,274 @@ func ATSMatchingResponseSchemaJSON() (string, error) {
 	}
 	return string(b), nil
 }
+
+// SanitizeGeminiJSONSchema returns a deep clone of schema stripped of JSON Schema
+// meta-keywords unsupported by Gemini's structured output grammar ($schema, $id, $defs, definitions)
+// while preserving additionalProperties, properties, required, description, enum, items, and anyOf.
+func SanitizeGeminiJSONSchema(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	res, ok := cloneJSONSchemaValue(schema, true).(map[string]any)
+	if !ok {
+		return nil
+	}
+	return res
+}
+
+// SanitizeOpenAISchema returns a deep clone of schema normalized for OpenAI Structured Outputs
+// strict mode (strict: true): every object sets additionalProperties: false, every property key
+// is included in sorted required slices, and previously optional properties accept null.
+func SanitizeOpenAISchema(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	res, ok := normalizeStrictSchemaNode(schema).(map[string]any)
+	if !ok {
+		return nil
+	}
+	return res
+}
+
+// SanitizeAnthropicSchema returns a deep clone of schema normalized for Anthropic output_config.format:
+// every object sets additionalProperties: false and normalizes optional properties into required
+// nullable properties so large schemas stay well within Anthropic's optional-parameter grammar limit.
+func SanitizeAnthropicSchema(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	res, ok := normalizeStrictSchemaNode(schema).(map[string]any)
+	if !ok {
+		return nil
+	}
+	return res
+}
+
+func cloneJSONSchemaValue(val any, stripMetaKeywords bool) any {
+	switch v := val.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, child := range v {
+			if stripMetaKeywords {
+				switch k {
+				case "$schema", "$id", "$defs", "definitions":
+					continue
+				}
+			}
+			out[k] = cloneJSONSchemaValue(child, stripMetaKeywords)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = cloneJSONSchemaValue(item, stripMetaKeywords)
+		}
+		return out
+	case []string:
+		out := make([]string, len(v))
+		copy(out, v)
+		return out
+	default:
+		return v
+	}
+}
+
+func normalizeStrictSchemaNode(val any) any {
+	switch v := val.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any, len(v)+2)
+		for k, child := range v {
+			switch k {
+			case "$schema", "$id", "$defs", "definitions":
+				continue
+			case "properties", "required":
+				// Handled explicitly below for object nodes.
+				continue
+			case "items", "additionalProperties":
+				if b, isBool := child.(bool); isBool {
+					cleaned[k] = b
+				} else {
+					cleaned[k] = normalizeStrictSchemaNode(child)
+				}
+			case "anyOf", "oneOf", "allOf", "prefixItems":
+				cleaned[k] = normalizeStrictSchemaSlice(child)
+			default:
+				cleaned[k] = cloneJSONSchemaValue(child, true)
+			}
+		}
+
+		rawProps, hasProps := v["properties"].(map[string]any)
+		isObj := v["type"] == "object" || hasProps
+		if isObj {
+			cleaned["additionalProperties"] = false
+			reqSet := extractRequiredKeySet(v["required"])
+			if hasProps {
+				normProps := make(map[string]any, len(rawProps))
+				allKeys := make([]string, 0, len(rawProps))
+				for propKey, propVal := range rawProps {
+					allKeys = append(allKeys, propKey)
+					normProp := normalizeStrictSchemaNode(propVal)
+					if !reqSet[propKey] {
+						normProp = makePropertyNullable(normProp)
+					}
+					normProps[propKey] = normProp
+				}
+				sortStringSlice(allKeys)
+				cleaned["properties"] = normProps
+				cleaned["required"] = allKeys
+			} else {
+				cleaned["required"] = []string{}
+			}
+		}
+		return cleaned
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = normalizeStrictSchemaNode(item)
+		}
+		return out
+	case []string:
+		out := make([]string, len(v))
+		copy(out, v)
+		return out
+	default:
+		return v
+	}
+}
+
+func normalizeStrictSchemaSlice(val any) any {
+	list, ok := val.([]any)
+	if !ok {
+		return cloneJSONSchemaValue(val, true)
+	}
+	out := make([]any, len(list))
+	for i, item := range list {
+		out[i] = normalizeStrictSchemaNode(item)
+	}
+	return out
+}
+
+func extractRequiredKeySet(raw any) map[string]bool {
+	set := make(map[string]bool)
+	switch r := raw.(type) {
+	case []string:
+		for _, k := range r {
+			set[k] = true
+		}
+	case []any:
+		for _, item := range r {
+			if k, ok := item.(string); ok {
+				set[k] = true
+			}
+		}
+	}
+	return set
+}
+
+func makePropertyNullable(prop any) any {
+	m, ok := prop.(map[string]any)
+	if !ok {
+		return prop
+	}
+	if schemaNodeAcceptsNull(m) {
+		return m
+	}
+
+	if anyOfRaw, hasAnyOf := m["anyOf"].([]any); hasAnyOf {
+		nextAnyOf := make([]any, 0, len(anyOfRaw)+1)
+		nextAnyOf = append(nextAnyOf, anyOfRaw...)
+		nextAnyOf = append(nextAnyOf, map[string]any{"type": "null"})
+		m["anyOf"] = nextAnyOf
+		return m
+	}
+
+	_, hasEnum := m["enum"]
+	_, hasProps := m["properties"]
+	if hasEnum || hasProps || m["type"] == "object" {
+		branch := make(map[string]any, len(m))
+		var outerDesc string
+		for k, val := range m {
+			if k == "description" {
+				if s, isStr := val.(string); isStr {
+					outerDesc = s
+				}
+				continue
+			}
+			branch[k] = val
+		}
+		wrapped := map[string]any{
+			"anyOf": []any{
+				branch,
+				map[string]any{"type": "null"},
+			},
+		}
+		if outerDesc != "" {
+			wrapped["description"] = outerDesc
+		}
+		return wrapped
+	}
+
+	switch tv := m["type"].(type) {
+	case string:
+		if tv != "" {
+			m["type"] = []string{tv, "null"}
+			return m
+		}
+	case []string:
+		next := make([]string, 0, len(tv)+1)
+		next = append(next, tv...)
+		next = append(next, "null")
+		m["type"] = next
+		return m
+	case []any:
+		next := make([]any, 0, len(tv)+1)
+		next = append(next, tv...)
+		next = append(next, "null")
+		m["type"] = next
+		return m
+	}
+
+	return map[string]any{
+		"anyOf": []any{
+			m,
+			map[string]any{"type": "null"},
+		},
+	}
+}
+
+func schemaNodeAcceptsNull(m map[string]any) bool {
+	switch tv := m["type"].(type) {
+	case string:
+		if tv == "null" {
+			return true
+		}
+	case []string:
+		for _, s := range tv {
+			if s == "null" {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range tv {
+			if s, ok := item.(string); ok && s == "null" {
+				return true
+			}
+		}
+	}
+	if anyOfRaw, ok := m["anyOf"].([]any); ok {
+		for _, item := range anyOfRaw {
+			if sub, ok := item.(map[string]any); ok && sub["type"] == "null" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sortStringSlice(items []string) {
+	for i := 1; i < len(items); i++ {
+		for j := i; j > 0 && items[j] < items[j-1]; j-- {
+			items[j], items[j-1] = items[j-1], items[j]
+		}
+	}
+}

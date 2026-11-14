@@ -2,10 +2,11 @@
 // and provider registry resolution for generative AI model providers.
 //
 // Supported model provider backends include:
-//   - Google Gemini (gemini-2.5-pro, gemini-2.5-flash, gemini-1.5-pro, gemini-1.5-flash)
-//   - OpenAI (gpt-4o, gpt-4o-mini, gpt-4-turbo)
-//   - Anthropic (claude-3-5-sonnet, claude-3-opus, claude-3-5-haiku)
-//   - OpenAI-compatible endpoints (LocalAI, Ollama, vLLM, DeepSeek)
+//   - Google Gemini (gemini-4-hydrogen, gemini-4-argon, gemini-4-carbon)
+//   - OpenAI (gpt-4o, gpt-4o-mini, o3-mini, gpt-5)
+//   - Anthropic (claude-sonnet-4-5, claude-haiku-4-5, claude-opus-4-1)
+//   - Ollama native /api/chat (llama3.1, qwen2.5, etc.)
+//   - OpenAI-compatible endpoints (LocalAI, vLLM, DeepSeek)
 //
 // The package enforces structured JSON outputs conforming to core.TailoredContent
 // schemas and emits structured operational observability telemetry.
@@ -30,6 +31,9 @@ type ProviderConfig struct {
 	OpenAIModel     string
 	AnthropicAPIKey string
 	AnthropicModel  string
+	OllamaBaseURL   string
+	OllamaAPIKey    string
+	OllamaModel     string
 	CompatBaseURL   string
 	CompatAPIKey    string
 	CompatModel     string
@@ -63,6 +67,14 @@ func RegisterClients(reg *Registry, cfg ProviderConfig, clientOpts ...Option) {
 			opts = append(opts, WithDefaultModel(m))
 		}
 		reg.RegisterClient(NewAnthropicProvider(key, opts...))
+	}
+
+	if ollamaURL := strings.TrimSpace(cfg.OllamaBaseURL); ollamaURL != "" || strings.TrimSpace(cfg.OllamaModel) != "" {
+		opts := append([]Option{}, clientOpts...)
+		if m := strings.TrimSpace(cfg.OllamaModel); m != "" {
+			opts = append(opts, WithDefaultModel(m))
+		}
+		reg.RegisterClient(NewOllamaProvider(ollamaURL, strings.TrimSpace(cfg.OllamaAPIKey), opts...))
 	}
 
 	if baseURL := strings.TrimSpace(cfg.CompatBaseURL); baseURL != "" {
@@ -125,7 +137,7 @@ func (r *Registry) Register(provider core.LLMProvider) {
 }
 
 func (r *Registry) recomputeDefaultLocked() {
-	priority := []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderCompat, ProviderCompatAlt}
+	priority := []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderOllama, ProviderCompat, ProviderCompatAlt}
 	for _, pName := range priority {
 		if prov, ok := r.providers[pName]; ok {
 			r.defaultProvider = pName
@@ -273,6 +285,8 @@ func defaultModelForProvider(name string) string {
 		return defaultOpenAIModel
 	case ProviderAnthropic:
 		return defaultAnthropicModel
+	case ProviderOllama:
+		return defaultOllamaModel
 	case ProviderCompat, ProviderCompatAlt:
 		return defaultCompatModel
 	default:
@@ -288,6 +302,8 @@ func providerDisplayPrefix(name string) string {
 		return "OpenAI"
 	case ProviderAnthropic:
 		return "Anthropic"
+	case ProviderOllama:
+		return "Ollama"
 	case ProviderCompat, ProviderCompatAlt:
 		return "OpenAI Compatible"
 	default:
@@ -357,5 +373,6 @@ var (
 	_ core.LLMClient = (*GeminiProvider)(nil)
 	_ core.LLMClient = (*OpenAIProvider)(nil)
 	_ core.LLMClient = (*AnthropicProvider)(nil)
+	_ core.LLMClient = (*OllamaProvider)(nil)
 	_ core.LLMClient = (*CompatProvider)(nil)
 )

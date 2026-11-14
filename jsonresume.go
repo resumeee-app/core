@@ -84,7 +84,7 @@ type JSONResumeVolunteer struct {
 	Highlights   []string `json:"highlights,omitempty"`
 }
 
-// JSONResumeEducation captures degrees, academic institutions, and coursework.
+// JSONResumeEducation captures degrees, academic institutions, coursework, and highlights.
 type JSONResumeEducation struct {
 	Institution string   `json:"institution,omitempty"`
 	URL         string   `json:"url,omitempty"`
@@ -94,6 +94,7 @@ type JSONResumeEducation struct {
 	EndDate     string   `json:"endDate,omitempty"`
 	Score       string   `json:"score,omitempty"`
 	Courses     []string `json:"courses,omitempty"`
+	Highlights  []string `json:"highlights,omitempty"`
 }
 
 // JSONResumeAward captures awards, honors, and notable distinctions.

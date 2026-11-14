@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -432,4 +433,150 @@ func TestSchemaStrict_CombinatorsEmptyObjectAndIdempotency(t *testing.T) {
 	if !strings.Contains(string(explicitBytes), `"required":[]`) {
 		t.Errorf("expected cloned empty Required slice to marshal \"required\":[], got %s", string(explicitBytes))
 	}
+}
+
+// assertAllObjectsDisallowAdditionalProps verifies every object schema node sets additionalProperties=false.
+func assertAllObjectsDisallowAdditionalProps(t *testing.T, path string, node *llm.Schema) {
+	t.Helper()
+	if node == nil {
+		return
+	}
+	if len(node.Properties) > 0 || node.Type.Contains(llm.TypeObject) {
+		if node.AdditionalProperties == nil || *node.AdditionalProperties {
+			t.Errorf("%s: expected canonical additionalProperties=false, got %v", path, node.AdditionalProperties)
+		}
+	}
+	for propName, prop := range node.Properties {
+		assertAllObjectsDisallowAdditionalProps(t, path+"."+propName, prop)
+	}
+	if node.Items != nil {
+		assertAllObjectsDisallowAdditionalProps(t, path+"[]", node.Items)
+	}
+	for _, item := range node.AnyOf {
+		assertAllObjectsDisallowAdditionalProps(t, path+".anyOf[]", item)
+	}
+	for _, item := range node.OneOf {
+		assertAllObjectsDisallowAdditionalProps(t, path+".oneOf[]", item)
+	}
+	for _, item := range node.AllOf {
+		assertAllObjectsDisallowAdditionalProps(t, path+".allOf[]", item)
+	}
+}
+
+// assertRequiredContainsAll verifies that node is non-nil and requires every key in want.
+func assertRequiredContainsAll(t *testing.T, path string, node *llm.Schema, want []string) {
+	t.Helper()
+	if node == nil {
+		t.Fatalf("%s: expected non-nil schema node", path)
+	}
+	for _, key := range want {
+		if !slices.Contains(node.Required, key) {
+			t.Errorf("%s: missing required key %q (have %v)", path, key, node.Required)
+		}
+	}
+}
+
+// assertNonNullableArrayProperty verifies prop is a non-nil, non-nullable array schema node.
+func assertNonNullableArrayProperty(t *testing.T, path string, prop *llm.Schema) {
+	t.Helper()
+	if prop == nil {
+		t.Fatalf("%s: expected non-nil array property", path)
+	}
+	if !prop.Type.Contains(llm.TypeArray) {
+		t.Errorf("%s: expected array type, got %v", path, prop.Type)
+	}
+	if isPropertyNullable(prop) {
+		t.Errorf("%s: expected non-nullable array in Strict() schema, got %+v", path, prop)
+	}
+}
+
+// assertDescriptionContainsAll verifies prop has a description containing every expected term (case-insensitive).
+func assertDescriptionContainsAll(t *testing.T, path string, prop *llm.Schema, terms ...string) {
+	t.Helper()
+	if prop == nil {
+		t.Fatalf("%s: expected non-nil schema property", path)
+	}
+	desc := strings.ToLower(strings.TrimSpace(prop.Description))
+	if desc == "" {
+		t.Fatalf("%s: expected non-empty description", path)
+	}
+	for _, term := range terms {
+		if !strings.Contains(desc, strings.ToLower(term)) {
+			t.Errorf("%s: description %q missing expected term %q", path, prop.Description, term)
+		}
+	}
+}
+
+// TestResumeExtractResponseSchema_HighlightContracts verifies strict object contracts,
+// required non-nullable section/highlight arrays, Clone preservation, and clear summary vs highlights descriptions.
+func TestResumeExtractResponseSchema_HighlightContracts(t *testing.T) {
+	schema := llm.ResumeExtractResponseSchema()
+	if schema == nil {
+		t.Fatal("ResumeExtractResponseSchema returned nil")
+	}
+
+	topLevelKeys := []string{
+		"basics",
+		"work",
+		"volunteer",
+		"education",
+		"awards",
+		"certificates",
+		"publications",
+		"skills",
+		"languages",
+		"interests",
+		"references",
+		"projects",
+	}
+
+	assertAllObjectsDisallowAdditionalProps(t, "ResumeExtractResponseSchema", schema)
+	assertRequiredContainsAll(t, "ResumeExtractResponseSchema", schema, topLevelKeys)
+
+	cloned := schema.Clone()
+	assertAllObjectsDisallowAdditionalProps(t, "ResumeExtractResponseSchema.Clone", cloned)
+	assertRequiredContainsAll(t, "ResumeExtractResponseSchema.Clone", cloned, topLevelKeys)
+	assertRequiredContainsAll(t, "Clone.basics", cloned.Properties["basics"], []string{"name", "summary", "profiles"})
+	assertRequiredContainsAll(t, "Clone.work[]", cloned.Properties["work"].Items, []string{"name", "position", "summary", "highlights"})
+	assertRequiredContainsAll(t, "Clone.volunteer[]", cloned.Properties["volunteer"].Items, []string{"organization", "position", "summary", "highlights"})
+	assertRequiredContainsAll(t, "Clone.education[]", cloned.Properties["education"].Items, []string{"institution", "courses", "highlights"})
+	assertRequiredContainsAll(t, "Clone.projects[]", cloned.Properties["projects"].Items, []string{"name", "description", "highlights", "keywords"})
+
+	strict := schema.Strict()
+	if isPropertyNullable(strict.Properties["basics"]) {
+		t.Errorf("Strict basics should not be nullable")
+	}
+	for _, sectionKey := range topLevelKeys[1:] {
+		assertNonNullableArrayProperty(t, "Strict."+sectionKey, strict.Properties[sectionKey])
+	}
+
+	nonNullableArrays := []struct {
+		path string
+		prop *llm.Schema
+	}{
+		{"Strict.basics.profiles", strict.Properties["basics"].Properties["profiles"]},
+		{"Strict.work[].highlights", strict.Properties["work"].Items.Properties["highlights"]},
+		{"Strict.volunteer[].highlights", strict.Properties["volunteer"].Items.Properties["highlights"]},
+		{"Strict.education[].highlights", strict.Properties["education"].Items.Properties["highlights"]},
+		{"Strict.education[].courses", strict.Properties["education"].Items.Properties["courses"]},
+		{"Strict.projects[].highlights", strict.Properties["projects"].Items.Properties["highlights"]},
+		{"Strict.projects[].keywords", strict.Properties["projects"].Items.Properties["keywords"]},
+		{"Strict.skills[].keywords", strict.Properties["skills"].Items.Properties["keywords"]},
+		{"Strict.interests[].keywords", strict.Properties["interests"].Items.Properties["keywords"]},
+	}
+	for _, tc := range nonNullableArrays {
+		assertNonNullableArrayProperty(t, tc.path, tc.prop)
+	}
+
+	assertDescriptionContainsAll(t, "work[].summary", schema.Properties["work"].Items.Properties["summary"], "concise", "highlights")
+	assertDescriptionContainsAll(t, "projects[].description", schema.Properties["projects"].Items.Properties["description"], "concise", "highlights")
+
+	eduHighlights := schema.Properties["education"].Items.Properties["highlights"]
+	if eduHighlights == nil {
+		t.Fatalf("education[].highlights property missing from ResumeExtractResponseSchema")
+	}
+	if !eduHighlights.Type.Contains(llm.TypeArray) || eduHighlights.Items == nil || !eduHighlights.Items.Type.Contains(llm.TypeString) {
+		t.Errorf("education[].highlights must be an array of strings, got %+v", eduHighlights)
+	}
+	assertDescriptionContainsAll(t, "education[].highlights", eduHighlights, "honors", "distinctions", "thesis", "research", "[]")
 }

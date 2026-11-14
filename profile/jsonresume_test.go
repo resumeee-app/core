@@ -1056,3 +1056,314 @@ func TestJSONResume_EndDatePresentHandling(t *testing.T) {
 		t.Errorf("expected empty EndDate in tailored exported work, got %q", exportedTailored.Work[0].EndDate)
 	}
 }
+
+func assertExportedEducationHighlights(t *testing.T, exported *core.JSONResume, wantHighlights []string, wantKeyPresent bool) {
+	t.Helper()
+
+	if len(exported.Education) != 1 {
+		t.Fatalf("expected 1 exported education entry, got %d", len(exported.Education))
+	}
+	direct := exported.Education[0].Highlights
+	if len(direct) != len(wantHighlights) {
+		t.Fatalf("exported.Education[0].Highlights len = %d, want %d (got=%v)", len(direct), len(wantHighlights), direct)
+	}
+	for i, want := range wantHighlights {
+		if direct[i] != want {
+			t.Errorf("exported.Education[0].Highlights[%d] = %q, want %q", i, direct[i], want)
+		}
+	}
+
+	data, err := json.Marshal(exported)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	var rawDoc struct {
+		Education []map[string]json.RawMessage `json:"education"`
+	}
+	if err := json.Unmarshal(data, &rawDoc); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+	if len(rawDoc.Education) != 1 {
+		t.Fatalf("expected 1 serialized education entry, got %d", len(rawDoc.Education))
+	}
+
+	rawHighlights, keyPresent := rawDoc.Education[0]["highlights"]
+	if keyPresent != wantKeyPresent {
+		t.Fatalf("highlights key presence = %v, want %v (payload=%s)", keyPresent, wantKeyPresent, string(data))
+	}
+	if !wantKeyPresent {
+		return
+	}
+
+	var got []string
+	if err := json.Unmarshal(rawHighlights, &got); err != nil {
+		t.Fatalf("failed to unmarshal highlights: %v", err)
+	}
+	if len(got) != len(wantHighlights) {
+		t.Fatalf("serialized highlights len = %d, want %d (got=%v)", len(got), len(wantHighlights), got)
+	}
+	for i, want := range wantHighlights {
+		if got[i] != want {
+			t.Errorf("serialized highlight[%d] = %q, want %q", i, got[i], want)
+		}
+	}
+}
+
+func TestEducationHighlights_RoundTripAndFactsMapping(t *testing.T) {
+	t.Run("Case A ToSnapshot and JSON round-trip", func(t *testing.T) {
+		raw := `{
+			"basics": {"name": "Ada Lovelace"},
+			"skills": [{"name": "go"}],
+			"education": [
+				{
+					"institution": "University of Oxford",
+					"url": "https://www.ox.ac.uk/",
+					"area": "Mathematics & Computing",
+					"studyType": "M.Sc.",
+					"startDate": "2018-09-01",
+					"endDate": "2020-06-01",
+					"score": "4.0",
+					"courses": ["CS500 - Distributed Consensus"],
+					"highlights": [
+						"Summa Cum Laude",
+						"Published thesis on Distributed Raft in Go"
+					]
+				}
+			]
+		}`
+
+		var resume core.JSONResume
+		if err := json.Unmarshal([]byte(raw), &resume); err != nil {
+			t.Fatalf("failed to unmarshal JSON Resume: %v", err)
+		}
+
+		wantHighlights := []string{
+			"Summa Cum Laude",
+			"Published thesis on Distributed Raft in Go",
+		}
+		if len(resume.Education) != 1 || len(resume.Education[0].Highlights) != len(wantHighlights) {
+			t.Fatalf("expected unmarshaled education[0].highlights %v, got %+v", wantHighlights, resume.Education)
+		}
+
+		// Verify JSON round-trip retains education[0].highlights.
+		roundTrippedBytes, err := json.Marshal(resume)
+		if err != nil {
+			t.Fatalf("failed to marshal JSON Resume: %v", err)
+		}
+		var roundTripped core.JSONResume
+		if err := json.Unmarshal(roundTrippedBytes, &roundTripped); err != nil {
+			t.Fatalf("failed to unmarshal round-tripped JSON Resume: %v", err)
+		}
+		assertExportedEducationHighlights(t, &roundTripped, wantHighlights, true)
+
+		globalSkills := []core.Skill{
+			{ID: "global-go", Name: "Go", Slug: "go", IsGlobal: true},
+		}
+		snap, err := profile.ToSnapshotWithGlobalSkills(&resume, "user-edu", nil, 1, globalSkills)
+		if err != nil {
+			t.Fatalf("ToSnapshotWithGlobalSkills failed: %v", err)
+		}
+
+		if len(snap.Education) != 1 {
+			t.Fatalf("expected 1 education, got %d", len(snap.Education))
+		}
+		edu := snap.Education[0]
+		if edu.Score != "4.0" || edu.StartDate == nil || edu.StartDate.String() != "2018-09-01" || edu.EndDate == nil || edu.EndDate.String() != "2020-06-01" {
+			t.Errorf("unexpected education scalar/date fields: %+v", edu)
+		}
+		if edu.Metadata["url"] != "https://www.ox.ac.uk/" {
+			t.Errorf("expected education url metadata preserved, got %v", edu.Metadata["url"])
+		}
+		if courses, ok := edu.Metadata["courses"].([]string); !ok || len(courses) != 1 || courses[0] != "CS500 - Distributed Consensus" {
+			t.Errorf("expected education courses metadata preserved, got %#v", edu.Metadata["courses"])
+		}
+		if len(edu.Facts) != 2 {
+			t.Fatalf("expected 2 education facts, got %d", len(edu.Facts))
+		}
+		if edu.Facts[0].Statement != wantHighlights[0] || edu.Facts[1].Statement != wantHighlights[1] {
+			t.Errorf("unexpected education fact statements: %+v", edu.Facts)
+		}
+
+		// Verify snap.Facts includes the OwnerTypeEducation facts linked to edu.ID.
+		var eduSnapshotFacts []core.Fact
+		for _, f := range snap.Facts {
+			if f.OwnerType == core.OwnerTypeEducation && f.OwnerID == edu.ID {
+				eduSnapshotFacts = append(eduSnapshotFacts, f)
+			}
+		}
+		if len(eduSnapshotFacts) != 2 {
+			t.Fatalf("expected 2 OwnerTypeEducation facts in snap.Facts with OwnerID %q, got %d", edu.ID, len(eduSnapshotFacts))
+		}
+
+		// Verify skill "Go" is matched on the thesis fact and not on the Latin honors fact.
+		if len(edu.Facts[0].Skills) != 0 {
+			t.Errorf("expected 0 skills on honors fact, got %+v", edu.Facts[0].Skills)
+		}
+		if len(edu.Facts[1].Skills) != 1 || edu.Facts[1].Skills[0].Name != "Go" {
+			t.Errorf("expected skill 'Go' matched on thesis fact, got %+v", edu.Facts[1].Skills)
+		}
+
+		// Verify SnapshotToTailoredContent propagates Education facts to TailoredEducation.Bullets.
+		tailored := core.SnapshotToTailoredContent(snap)
+		if len(tailored.Education) != 1 {
+			t.Fatalf("expected 1 tailored education, got %d", len(tailored.Education))
+		}
+		bullets := tailored.Education[0].Bullets
+		if len(bullets) != 2 {
+			t.Fatalf("expected 2 tailored education bullets, got %d", len(bullets))
+		}
+		for i, want := range wantHighlights {
+			if bullets[i].Text != want {
+				t.Errorf("tailored education bullet[%d] = %q, want %q", i, bullets[i].Text, want)
+			}
+		}
+
+		exported, err := profile.FromSnapshot(snap)
+		if err != nil {
+			t.Fatalf("FromSnapshot failed: %v", err)
+		}
+		assertExportedEducationHighlights(t, exported, wantHighlights, true)
+	})
+
+	t.Run("Case B FromSnapshot education facts and fallback", func(t *testing.T) {
+		tests := []struct {
+			name           string
+			snapshot       *core.MainProfileSnapshot
+			wantHighlights []string
+			wantKeyPresent bool
+		}{
+			{
+				name: "nested Education.Facts populated",
+				snapshot: &core.MainProfileSnapshot{
+					Profile: core.Profile{FullName: "Ada Lovelace"},
+					Education: []core.Education{
+						{
+							ID:          "edu-1",
+							Institution: "University of Oxford",
+							Degree:      "M.Sc.",
+							Field:       "Mathematics & Computing",
+							Facts: []core.Fact{
+								{ID: "f-1", OwnerID: "edu-1", OwnerType: core.OwnerTypeEducation, Statement: "Summa Cum Laude"},
+								{ID: "f-2", OwnerID: "edu-1", OwnerType: core.OwnerTypeEducation, Statement: "Published thesis on Distributed Raft in Go"},
+							},
+						},
+					},
+				},
+				wantHighlights: []string{
+					"Summa Cum Laude",
+					"Published thesis on Distributed Raft in Go",
+				},
+				wantKeyPresent: true,
+			},
+			{
+				name: "fallback to Snapshot.Facts when Education.Facts empty",
+				snapshot: &core.MainProfileSnapshot{
+					Profile: core.Profile{FullName: "Ada Lovelace"},
+					Education: []core.Education{
+						{
+							ID:          "edu-1",
+							Institution: "University of Oxford",
+							Degree:      "M.Sc.",
+							Field:       "Mathematics & Computing",
+						},
+					},
+					Facts: []core.Fact{
+						{ID: "f-work", OwnerID: "edu-1", OwnerType: core.OwnerTypeWorkExperience, Statement: "Should not leak into education"},
+						{ID: "f-1", OwnerID: "edu-1", OwnerType: core.OwnerTypeEducation, Statement: "First Fallback Highlight"},
+						{ID: "f-other", OwnerID: "edu-2", OwnerType: core.OwnerTypeEducation, Statement: "Belongs to another degree"},
+						{ID: "f-2", OwnerID: "edu-1", OwnerType: core.OwnerTypeEducation, Statement: "Second Fallback Highlight"},
+					},
+				},
+				wantHighlights: []string{
+					"First Fallback Highlight",
+					"Second Fallback Highlight",
+				},
+				wantKeyPresent: true,
+			},
+			{
+				name: "empty facts omits highlights cleanly",
+				snapshot: &core.MainProfileSnapshot{
+					Profile: core.Profile{FullName: "Ada Lovelace"},
+					Education: []core.Education{
+						{
+							ID:          "edu-1",
+							Institution: "University of Oxford",
+							Degree:      "M.Sc.",
+							Field:       "Mathematics & Computing",
+						},
+					},
+				},
+				wantHighlights: nil,
+				wantKeyPresent: false,
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				exported, err := profile.FromSnapshot(tc.snapshot)
+				if err != nil {
+					t.Fatalf("FromSnapshot failed: %v", err)
+				}
+				assertExportedEducationHighlights(t, exported, tc.wantHighlights, tc.wantKeyPresent)
+			})
+		}
+	})
+
+	t.Run("Case C FromTailored education bullets", func(t *testing.T) {
+		baseProfile := &core.Profile{FullName: "Ada Lovelace"}
+		tests := []struct {
+			name           string
+			bullets        []core.TailoredBullet
+			wantHighlights []string
+			wantKeyPresent bool
+		}{
+			{
+				name: "populated TailoredEducation.Bullets",
+				bullets: []core.TailoredBullet{
+					{Text: "Summa Cum Laude", SourceFactIDs: []string{"f-1"}},
+					{Text: "Published thesis on Distributed Raft in Go", SourceFactIDs: []string{"f-2"}},
+				},
+				wantHighlights: []string{
+					"Summa Cum Laude",
+					"Published thesis on Distributed Raft in Go",
+				},
+				wantKeyPresent: true,
+			},
+			{
+				name:           "nil Bullets omits highlights",
+				bullets:        nil,
+				wantHighlights: nil,
+				wantKeyPresent: false,
+			},
+			{
+				name:           "empty Bullets omits highlights",
+				bullets:        []core.TailoredBullet{},
+				wantHighlights: nil,
+				wantKeyPresent: false,
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				tailored := &core.TailoredContent{
+					Education: []core.TailoredEducation{
+						{
+							SourceEntityID: "edu-1",
+							Institution:    "University of Oxford",
+							Degree:         "M.Sc.",
+							Field:          "Mathematics & Computing",
+							Bullets:        tc.bullets,
+						},
+					},
+				}
+
+				exported, err := profile.FromTailored(baseProfile, tailored)
+				if err != nil {
+					t.Fatalf("FromTailored failed: %v", err)
+				}
+				assertExportedEducationHighlights(t, exported, tc.wantHighlights, tc.wantKeyPresent)
+			})
+		}
+	})
+}

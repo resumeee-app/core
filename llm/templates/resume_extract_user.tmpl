@@ -2,4 +2,4 @@
 {{.RawText}}
 </raw_resume_text>
 
-Extract the resume text into standard JSON Resume format adhering strictly to the required schema with top-level keys such as "basics", "work", "education", "skills", "projects", and "certificates". Output valid JSON only.
+Extract the resume text into standard JSON Resume format adhering strictly to the required schema with top-level keys including "basics", "work", "volunteer", "education", "awards", "certificates", "skills", and "projects". Preserve all bulleted accomplishments, metrics, responsibilities, and academic honors or distinctions verbatim as discrete "highlights" list items (never collapsing them into narrative summaries, and returning [] when absent). Output valid JSON only.

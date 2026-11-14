@@ -57,12 +57,12 @@ func TestResumeExtractor_Table(t *testing.T) {
 	}`
 
 	t.Run("Complete resume text extracts successfully", func(t *testing.T) {
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return sampleResumeJSON, nil
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		res, err := extractor.ExtractResume(context.Background(), "Alex Mercer resume text...", "mock", "mock-model")
+		res, _, err := extractor.ExtractResume(context.Background(), "Alex Mercer resume text...", "mock", "mock-model")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -75,19 +75,19 @@ func TestResumeExtractor_Table(t *testing.T) {
 		if len(res.Skills) != 2 {
 			t.Errorf("expected 2 skills, got: %d", len(res.Skills))
 		}
-		if len(res.Work) != 1 || res.Work[0].GetCompany() != "CloudScale Inc" {
+		if len(res.Work) != 1 || res.Work[0].CompanyName() != "CloudScale Inc" {
 			t.Errorf("expected 1 work at CloudScale Inc, got: %+v", res.Work)
 		}
 	})
 
 	t.Run("Markdown code fences are stripped cleanly", func(t *testing.T) {
 		fenced := "```json\n" + sampleResumeJSON + "\n```"
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return fenced, nil
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		res, err := extractor.ExtractResume(context.Background(), "Sample raw text", "", "")
+		res, _, err := extractor.ExtractResume(context.Background(), "Sample raw text", "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -97,12 +97,12 @@ func TestResumeExtractor_Table(t *testing.T) {
 	})
 
 	t.Run("Empty resume text returns validation error", func(t *testing.T) {
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return sampleResumeJSON, nil
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		_, err := extractor.ExtractResume(context.Background(), "   \n\t  ", "", "")
+		_, _, err := extractor.ExtractResume(context.Background(), "   \n\t  ", "", "")
 		if err == nil {
 			t.Fatal("expected validation error for empty text, got nil")
 		}
@@ -112,12 +112,12 @@ func TestResumeExtractor_Table(t *testing.T) {
 	})
 
 	t.Run("Malformed JSON from LLM returns validation error", func(t *testing.T) {
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return "{ truncated json...", nil
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		_, err := extractor.ExtractResume(context.Background(), "Valid text", "", "")
+		_, _, err := extractor.ExtractResume(context.Background(), "Valid text", "", "")
 		if err == nil {
 			t.Fatal("expected validation error for malformed JSON, got nil")
 		}
@@ -127,12 +127,12 @@ func TestResumeExtractor_Table(t *testing.T) {
 	})
 
 	t.Run("Empty response from LLM returns validation error", func(t *testing.T) {
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return "   ", nil
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		_, err := extractor.ExtractResume(context.Background(), "Valid text", "", "")
+		_, _, err := extractor.ExtractResume(context.Background(), "Valid text", "", "")
 		if err == nil {
 			t.Fatal("expected error for empty LLM response, got nil")
 		}
@@ -143,12 +143,12 @@ func TestResumeExtractor_Table(t *testing.T) {
 
 	t.Run("Upstream completer error is propagated", func(t *testing.T) {
 		upstreamErr := errors.New("upstream connection reset")
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return "", upstreamErr
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		_, err := extractor.ExtractResume(context.Background(), "Valid text", "", "")
+		_, _, err := extractor.ExtractResume(context.Background(), "Valid text", "", "")
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -161,12 +161,12 @@ func TestResumeExtractor_Table(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return sampleResumeJSON, nil
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		_, err := extractor.ExtractResume(ctx, "Valid text", "", "")
+		_, _, err := extractor.ExtractResume(ctx, "Valid text", "", "")
 		if err == nil {
 			t.Fatal("expected error for cancelled context, got nil")
 		}
@@ -174,12 +174,12 @@ func TestResumeExtractor_Table(t *testing.T) {
 
 	t.Run("Minimal resume returns valid JSONResume", func(t *testing.T) {
 		minimalJSON := `{"basics": {"name": "Only Name", "email": "only@test.com"}}`
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return minimalJSON, nil
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		res, err := extractor.ExtractResume(context.Background(), "Only Name only@test.com", "", "")
+		res, _, err := extractor.ExtractResume(context.Background(), "Only Name only@test.com", "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -202,7 +202,7 @@ func (s *stubUsageCompleter) SupportsStructuredCompletion(_, _ string) bool {
 	return false
 }
 
-func (s *stubUsageCompleter) Complete(_ context.Context, _, _, _, _, _, _ string, _ map[string]any) (string, core.TokenUsage, error) {
+func (s *stubUsageCompleter) Complete(_ context.Context, _, _, _, _, _, _ string, _ *llm.Schema) (string, core.TokenUsage, error) {
 	return s.response, s.usage, nil
 }
 
@@ -218,9 +218,9 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 				TotalTokens:      400,
 			},
 		}
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		res, usage, err := extractor.ExtractResumeWithUsage(context.Background(), "Sample text", "test-prov", "test-mod")
+		res, usage, err := extractor.ExtractResume(context.Background(), "Sample text", "test-prov", "test-mod")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -233,12 +233,12 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 	})
 
 	t.Run("CompleterFunc fallback returns zero usage without error", func(t *testing.T) {
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return minimalJSON, nil
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
-		res, usage, err := extractor.ExtractResumeWithUsage(context.Background(), "Sample text", "test-prov", "test-mod")
+		res, usage, err := extractor.ExtractResume(context.Background(), "Sample text", "test-prov", "test-mod")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -251,10 +251,10 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 	})
 
 	t.Run("ExtractResumeWithTokenUsage applies default tokens when usage is zero", func(t *testing.T) {
-		completer := llm.CompleterFunc(func(ctx context.Context, sys, user, prov, model string) (string, error) {
+		completer := llm.CompleterFunc(func(_ context.Context, _, _, _, _ string) (string, error) {
 			return minimalJSON, nil
 		})
-		extractor := llm.NewResumeExtractor(completer)
+		extractor := llm.NewExtractor(completer)
 
 		res, usage, err := llm.ExtractResumeWithTokenUsage(context.Background(), extractor, "Sample text", "test-prov", "test-mod", 1000)
 		if err != nil {
@@ -269,7 +269,7 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 	})
 }
 
-func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing.T) {
+func TestRegistryExtractor_StructuredVsFallbackRegistryProviders(t *testing.T) {
 	resumeJSON := `{"basics":{"name":"Ada Lovelace","email":"ada@analytical.org"}}`
 
 	t.Run("structured provider attaches ResumeExtractResponseSchema and omits <response_schema>", func(t *testing.T) {
@@ -279,8 +279,8 @@ func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing
 			responses:  []string{resumeJSON, resumeJSON, resumeJSON},
 		}
 		reg := llm.NewRegistry()
-		reg.RegisterClient(stub)
-		ext := llm.NewDefaultResumeExtractor(reg)
+		reg.Register(stub)
+		ext := llm.NewRegistryExtractor(reg)
 
 		res, usage, err := llm.ExtractResumeWithTokenUsage(context.Background(), ext, "Ada Lovelace resume", llm.ProviderOpenAI, "gpt-4o", 0)
 		if err != nil {
@@ -307,8 +307,8 @@ func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing
 			responses:  []string{resumeJSON},
 		}
 		reg := llm.NewRegistry()
-		reg.RegisterClient(stub)
-		ext := llm.NewDefaultResumeExtractor(reg)
+		reg.Register(stub)
+		ext := llm.NewRegistryExtractor(reg)
 
 		res, _, err := llm.ExtractResumeWithTokenUsage(context.Background(), ext, "Ada Lovelace resume", llm.ProviderCompat, "local", 0)
 		if err != nil {
@@ -335,10 +335,10 @@ func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing
 			responses:  []string{resumeJSON, resumeJSON, resumeJSON},
 		}
 		reg := llm.NewRegistry()
-		reg.RegisterClient(stub)
+		reg.Register(stub)
 		reg.SetDefault("", "")
 
-		ext := llm.NewDefaultResumeExtractor(reg)
+		ext := llm.NewRegistryExtractor(reg)
 		res, _, err := llm.ExtractResumeWithTokenUsage(context.Background(), ext, "Ada Lovelace resume", "", "", 0)
 		if err != nil {
 			t.Fatalf("expected Registry.Resolve fallback to registered provider when DefaultProvider is cleared, got error: %v", err)
@@ -355,20 +355,19 @@ func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing
 		if err != nil || txt != resumeJSON {
 			t.Errorf("unexpected regComp.Complete result %q, err=%v", txt, err)
 		}
-		cp := llm.NewClientProvider(stub)
-		cpTxt, _, err := cp.CompleteStructured(context.Background(), "CompleteText", core.LLMCompletionRequest{
+		cpTxt, _, err := reg.CompleteStructured(context.Background(), stub, "CompleteText", llm.Request{
 			Model:        "gpt-4o",
 			SystemPrompt: "sys",
 			UserPrompt:   "usr",
 		})
 		if err != nil || cpTxt != resumeJSON {
-			t.Errorf("unexpected ClientProvider.CompleteStructured result %q, err=%v", cpTxt, err)
+			t.Errorf("unexpected Registry.CompleteStructured result %q, err=%v", cpTxt, err)
 		}
 	})
 
 	t.Run("unstructured Completer with catalog receives <response_schema> and nil transport schema", func(t *testing.T) {
 		custom := &unstructuredCatalogCompleter{response: resumeJSON}
-		ext := llm.NewResumeExtractor(custom)
+		ext := llm.NewExtractor(custom)
 		if models := ext.AvailableModels(); len(models) != 1 || models[0].Model != "custom-m1" {
 			t.Errorf("expected catalog models exposed via AvailableModels, got %+v", models)
 		}
@@ -392,7 +391,7 @@ func TestDefaultResumeExtractor_StructuredVsFallbackRegistryProviders(t *testing
 type unstructuredCatalogCompleter struct {
 	response      string
 	lastSysPrompt string
-	lastSchema    map[string]any
+	lastSchema    *llm.Schema
 }
 
 func (c *unstructuredCatalogCompleter) SupportsStructuredCompletion(_, _ string) bool {
@@ -403,7 +402,7 @@ func (c *unstructuredCatalogCompleter) AvailableModels() []core.ModelOption {
 	return []core.ModelOption{{Provider: "custom", Model: "custom-m1", DisplayName: "Custom M1", IsDefault: true}}
 }
 
-func (c *unstructuredCatalogCompleter) Complete(_ context.Context, _, sys, _, _, _, _ string, schema map[string]any) (string, core.TokenUsage, error) {
+func (c *unstructuredCatalogCompleter) Complete(_ context.Context, _, sys, _, _, _, _ string, schema *llm.Schema) (string, core.TokenUsage, error) {
 	c.lastSysPrompt = sys
 	c.lastSchema = schema
 	return c.response, core.TokenUsage{PromptTokens: 12, CompletionTokens: 7, TotalTokens: 19}, nil

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -122,7 +121,7 @@ type fakeTransportClient struct {
 	defaultModel       string
 	models             []core.ModelOption
 	supportsStructured *bool
-	completeFn         func(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error)
+	completeFn         func(ctx context.Context, req Request) (*Response, error)
 }
 
 func (f *fakeTransportClient) Name() string               { return f.name }
@@ -134,7 +133,7 @@ func (f *fakeTransportClient) SupportsStructuredOutput(_ string) bool {
 	}
 	return f.name != ProviderCompat && f.name != ProviderCompatAlt
 }
-func (f *fakeTransportClient) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+func (f *fakeTransportClient) Complete(ctx context.Context, req Request) (*Response, error) {
 	if f.completeFn != nil {
 		return f.completeFn(ctx, req)
 	}
@@ -147,21 +146,17 @@ func TestGenerationResponseSchema_Integrity(t *testing.T) {
 		t.Fatal("expected non-nil schema")
 	}
 
-	if schema["type"] != "object" {
-		t.Errorf("expected root type object, got %v", schema["type"])
+	if !schema.Type.Contains(TypeObject) {
+		t.Errorf("expected root type object, got %v", schema.Type)
 	}
-	if schema["additionalProperties"] != false {
-		t.Errorf("expected root additionalProperties: false")
+	if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
+		t.Errorf("expected root additionalProperties: false, got %v", schema.AdditionalProperties)
 	}
 
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("expected properties map")
-	}
-	if _, ok := props["tailored_content"]; !ok {
+	if _, ok := schema.Properties["tailored_content"]; !ok {
 		t.Error("missing tailored_content property")
 	}
-	if _, ok := props["gap_report"]; !ok {
+	if _, ok := schema.Properties["gap_report"]; !ok {
 		t.Error("missing gap_report property")
 	}
 }
@@ -202,20 +197,20 @@ func TestPromptBuilder_NilPriorVersionFallback(t *testing.T) {
 	}
 }
 
-func TestClientProvider_GenerateTailoredResume_SuccessAndFences(t *testing.T) {
+func TestService_GenerateTailoredResume_SuccessAndFences(t *testing.T) {
 	rawBytes, _ := json.Marshal(sampleResponse)
 	fencedText := "Here is the output:\n```json\n" + string(rawBytes) + "\n```\n"
 
-	var capturedReq core.LLMCompletionRequest
+	var capturedReq Request
 	client := &fakeTransportClient{
 		name:         ProviderGemini,
 		defaultModel: defaultGeminiModel,
-		completeFn: func(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+		completeFn: func(_ context.Context, req Request) (*Response, error) {
 			capturedReq = req
-			return &core.LLMCompletionResponse{
+			return &Response{
 				Text:       fencedText,
 				RawBody:    fencedText,
-				StatusCode: http.StatusOK,
+				StatusCode: 200,
 				Usage: core.TokenUsage{
 					PromptTokens:     120,
 					CompletionTokens: 80,
@@ -225,8 +220,10 @@ func TestClientProvider_GenerateTailoredResume_SuccessAndFences(t *testing.T) {
 		},
 	}
 
-	prov := NewClientProvider(client)
-	res, err := prov.GenerateTailoredResume(context.Background(), sampleRequest())
+	reg := NewRegistry()
+	reg.Register(client)
+	svc := NewService(reg)
+	res, err := svc.GenerateTailoredResume(context.Background(), sampleRequest())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,15 +234,15 @@ func TestClientProvider_GenerateTailoredResume_SuccessAndFences(t *testing.T) {
 		t.Errorf("expected total tokens 200, got %d", res.Usage.TotalTokens)
 	}
 	if capturedReq.ResponseSchema == nil {
-		t.Error("expected ResponseSchema to be attached by ClientProvider")
+		t.Error("expected ResponseSchema to be attached by Registry.CompleteStructured")
 	}
 }
 
 func TestRegistry_PrecedenceResolution(t *testing.T) {
 	r := NewRegistry()
-	r.Register(&fakeProvider{name: ProviderGemini})
-	r.Register(&fakeProvider{name: ProviderOpenAI})
-	r.Register(&fakeProvider{name: ProviderAnthropic})
+	r.Register(&fakeClient{name: ProviderGemini})
+	r.Register(&fakeClient{name: ProviderOpenAI})
+	r.Register(&fakeClient{name: ProviderAnthropic})
 	r.SetDefault(ProviderGemini, "gemini-default")
 
 	req := core.GenerationRequest{
@@ -292,13 +289,13 @@ func TestRegistry_AliasesAndErrors(t *testing.T) {
 		t.Errorf("expected ErrNoProviders, got %v", err)
 	}
 
-	r.Register(&fakeProvider{name: ProviderCompat})
-	p, err := r.Get(ProviderCompatAlt)
+	r.Register(&fakeClient{name: ProviderCompat})
+	p, err := r.Client(ProviderCompatAlt)
 	if err != nil || p.Name() != ProviderCompat {
 		t.Errorf("expected alias resolution for openai-compat, got %v, err=%v", p, err)
 	}
 
-	_, err = r.Get("nonexistent")
+	_, err = r.Client("nonexistent")
 	if !errors.Is(err, ErrProviderNotFound) {
 		t.Errorf("expected ErrProviderNotFound, got %v", err)
 	}
@@ -343,7 +340,7 @@ func TestRegistry_AvailableModels_FilterMatrix(t *testing.T) {
 		t.Fatalf("expected 0 models on empty registry")
 	}
 
-	r.Register(&fakeProvider{name: ProviderGemini})
+	r.Register(&fakeClient{name: ProviderGemini})
 	models := r.AvailableModels()
 	if len(models) == 0 {
 		t.Fatal("expected gemini models to be returned")
@@ -353,11 +350,29 @@ func TestRegistry_AvailableModels_FilterMatrix(t *testing.T) {
 			t.Errorf("unexpected provider %s in models", m.Provider)
 		}
 	}
+
+	rAll := NewRegistry()
+	for _, name := range []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderOllama, ProviderCompat} {
+		rAll.Register(&fakeClient{name: name})
+	}
+	allModels := rAll.AvailableModels()
+	if len(allModels) != 5 {
+		t.Fatalf("expected 5 fallback models for all registered providers, got %d", len(allModels))
+	}
+	seen := make(map[string]bool, len(allModels))
+	for _, m := range allModels {
+		seen[m.Provider] = true
+	}
+	for _, name := range []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderOllama, ProviderCompat} {
+		if !seen[name] {
+			t.Errorf("expected provider %q in AvailableModels output", name)
+		}
+	}
 }
 
 func TestGapAnalysisResponseSchema(t *testing.T) {
 	schema := GapAnalysisResponseSchema()
-	if schema == nil || schema["type"] != "object" {
+	if schema == nil || !schema.Type.Contains(TypeObject) {
 		t.Fatal("expected valid GapAnalysisResponseSchema object")
 	}
 }
@@ -373,19 +388,23 @@ func TestBuildGapAnalysisPrompt(t *testing.T) {
 	}
 }
 
-type fakeProvider struct {
+type fakeClient struct {
 	name string
 }
 
-func (f *fakeProvider) Name() string                           { return f.name }
-func (f *fakeProvider) DefaultModel() string                   { return "" }
-func (f *fakeProvider) Models() []core.ModelOption             { return nil }
-func (f *fakeProvider) SupportsStructuredOutput(_ string) bool { return false }
-func (f *fakeProvider) CompleteStructured(_ context.Context, _ string, _ core.LLMCompletionRequest) (string, core.TokenUsage, error) {
-	return "", core.TokenUsage{}, nil
-}
-func (f *fakeProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
-	return &sampleResponse, nil
+func (f *fakeClient) Name() string                           { return f.name }
+func (f *fakeClient) DefaultModel() string                   { return "" }
+func (f *fakeClient) Models() []core.ModelOption             { return nil }
+func (f *fakeClient) SupportsStructuredOutput(_ string) bool { return false }
+func (f *fakeClient) Complete(_ context.Context, req Request) (*Response, error) {
+	if req.SchemaName == "tailored_resume_response" || strings.Contains(req.SystemPrompt, "\"tailored_content\"") {
+		raw, err := json.Marshal(sampleResponse)
+		if err != nil {
+			return nil, err
+		}
+		return &Response{Text: string(raw), StatusCode: 200}, nil
+	}
+	return &Response{Text: "", StatusCode: 200}, nil
 }
 
 func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
@@ -419,37 +438,37 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var capturedReqs []core.LLMCompletionRequest
+			var capturedReqs []Request
 			client := &fakeTransportClient{
 				name:               tc.providerName,
 				defaultModel:       "test-model",
 				supportsStructured: tc.supportsStructured,
-				completeFn: func(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+				completeFn: func(_ context.Context, req Request) (*Response, error) {
 					capturedReqs = append(capturedReqs, req)
 					out := string(rawTailorBytes)
 					if len(capturedReqs) == 2 {
 						out = gapJSON
 					}
-					return &core.LLMCompletionResponse{
+					return &Response{
 						Text:       out,
 						RawBody:    out,
-						StatusCode: http.StatusOK,
+						StatusCode: 200,
 						Usage:      core.TokenUsage{PromptTokens: 10, CompletionTokens: 10, TotalTokens: 20},
 					}, nil
 				},
 			}
 
 			reg := NewRegistry()
-			reg.RegisterClient(client)
-			adapter := NewServiceAdapter(reg)
+			reg.Register(client)
+			svc := NewService(reg)
 
 			req := sampleRequest()
 			req.BranchContext.ProviderOverride = tc.providerName
 
-			if _, err := adapter.GenerateTailoredResume(context.Background(), req); err != nil {
+			if _, err := svc.GenerateTailoredResume(context.Background(), req); err != nil {
 				t.Fatalf("GenerateTailoredResume failed: %v", err)
 			}
-			if _, err := adapter.GenerateGapAnalysis(context.Background(), req); err != nil {
+			if _, err := svc.GenerateGapAnalysis(context.Background(), req); err != nil {
 				t.Fatalf("GenerateGapAnalysis failed: %v", err)
 			}
 
@@ -474,7 +493,7 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 	}
 
 	t.Run("custom provider with SupportsStructuredOutput=false keeps <response_schema> and omits ResponseSchema", func(t *testing.T) {
-		customProv := &unstructuredCustomProvider{
+		customClient := &unstructuredCustomClient{
 			name: "custom-raw",
 			responses: []string{
 				gapJSON,
@@ -483,14 +502,14 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 			},
 		}
 		reg := NewRegistry()
-		reg.Register(customProv)
-		adapter := NewServiceAdapter(reg)
+		reg.Register(customClient)
+		svc := NewService(reg)
 
 		req := sampleRequest()
-		if _, err := adapter.GenerateGapAnalysis(context.Background(), req); err != nil {
+		if _, err := svc.GenerateGapAnalysis(context.Background(), req); err != nil {
 			t.Fatalf("GenerateGapAnalysis failed: %v", err)
 		}
-		if _, err := adapter.SimulateATS(context.Background(), core.ATSSimulationRequest{
+		if _, err := svc.SimulateATS(context.Background(), core.ATSSimulationRequest{
 			ResumeText:    "# Jane Doe\nGo Engineer",
 			FormatUsed:    "markdown",
 			MainProfile:   req.MainProfile,
@@ -498,10 +517,10 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("SimulateATS failed: %v", err)
 		}
-		if len(customProv.reqs) != 3 {
-			t.Fatalf("expected 3 structured calls (gap + ats extract + ats match), got %d", len(customProv.reqs))
+		if len(customClient.reqs) != 3 {
+			t.Fatalf("expected 3 structured calls (gap + ats extract + ats match), got %d", len(customClient.reqs))
 		}
-		for i, creq := range customProv.reqs {
+		for i, creq := range customClient.reqs {
 			if strings.Count(creq.SystemPrompt, "<response_schema>") != 1 {
 				t.Errorf("call %d: expected <response_schema> preserved when SupportsStructuredOutput=false, got count=%d", i, strings.Count(creq.SystemPrompt, "<response_schema>"))
 			}
@@ -511,12 +530,12 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 		}
 	})
 
-	t.Run("GenerateGapAnalysis falls back to GenerateTailoredResume when CompleteStructured returns empty output", func(t *testing.T) {
+	t.Run("GenerateGapAnalysis falls back to GenerateTailoredResume when Complete returns empty output", func(t *testing.T) {
 		reg := NewRegistry()
-		reg.Register(&fakeProvider{name: ProviderCompat})
-		adapter := NewServiceAdapter(reg)
+		reg.Register(&fakeClient{name: ProviderCompat})
+		svc := NewService(reg)
 
-		report, err := adapter.GenerateGapAnalysis(context.Background(), sampleRequest())
+		report, err := svc.GenerateGapAnalysis(context.Background(), sampleRequest())
 		if err != nil {
 			t.Fatalf("GenerateGapAnalysis fallback failed: %v", err)
 		}
@@ -526,23 +545,23 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 	})
 }
 
-type unstructuredCustomProvider struct {
+type unstructuredCustomClient struct {
 	name      string
 	responses []string
-	reqs      []core.LLMCompletionRequest
+	reqs      []Request
 }
 
-func (p *unstructuredCustomProvider) Name() string                           { return p.name }
-func (p *unstructuredCustomProvider) DefaultModel() string                   { return "custom-model" }
-func (p *unstructuredCustomProvider) Models() []core.ModelOption             { return nil }
-func (p *unstructuredCustomProvider) SupportsStructuredOutput(_ string) bool { return false }
+func (p *unstructuredCustomClient) Name() string                           { return p.name }
+func (p *unstructuredCustomClient) DefaultModel() string                   { return "custom-model" }
+func (p *unstructuredCustomClient) Models() []core.ModelOption             { return nil }
+func (p *unstructuredCustomClient) SupportsStructuredOutput(_ string) bool { return false }
 
-func (p *unstructuredCustomProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
-	return nil, errors.New("unused")
-}
-
-func (p *unstructuredCustomProvider) CompleteStructured(_ context.Context, _ string, req core.LLMCompletionRequest) (string, core.TokenUsage, error) {
+func (p *unstructuredCustomClient) Complete(_ context.Context, req Request) (*Response, error) {
 	idx := len(p.reqs)
 	p.reqs = append(p.reqs, req)
-	return p.responses[idx], core.TokenUsage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10}, nil
+	return &Response{
+		Text:       p.responses[idx],
+		StatusCode: 200,
+		Usage:      core.TokenUsage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10},
+	}, nil
 }

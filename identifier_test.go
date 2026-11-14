@@ -102,12 +102,17 @@ func TestShortenID(t *testing.T) {
 	}
 }
 
+// shortIdentifiable captures test targets exposing EffectiveShortID without requiring a core interface.
+type shortIdentifiable interface {
+	EffectiveShortID() string
+}
+
 // TestEffectiveShortID verifies that EffectiveShortID returns the explicit ShortID when present,
-// and correctly falls back to ShortenID(ID) for all career entity types implementing ShortIdentifiable.
+// and correctly falls back to ShortenID(ID) across all career entity types.
 func TestEffectiveShortID(t *testing.T) {
 	tests := []struct {
 		name     string
-		entity   core.ShortIdentifiable
+		entity   shortIdentifiable
 		expected string
 	}{
 		{

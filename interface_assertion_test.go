@@ -27,7 +27,7 @@ var allowedProductionAssertionTypes = map[string]bool{
 // allowedProductionTypeSwitchCases enumerates the additional case types permitted in
 // `switch x.(type)` statements across non-test files, on top of allowedProductionAssertionTypes.
 // Entries are concrete value types decoded at untyped boundaries (SQL scanning in date.go and
-// template FuncMap formatting in services/renderer/funcmap.go). fmt.Stringer is the single
+// template FuncMap formatting in renderer/funcmap.go). fmt.Stringer is the single
 // interface exception: the template formatter renders arbitrary values and falls back to
 // String() for display only, never to probe for optional domain capabilities.
 var allowedProductionTypeSwitchCases = map[string]bool{

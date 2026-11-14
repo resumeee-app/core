@@ -7,49 +7,70 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
+// Embedded built-in HTML, CSS, Markdown, and plain-text template sources.
 var (
+	// standardCleanCSS is the embedded CSS stylesheet for the Standard Clean template.
 	//go:embed standard_clean_css.tmpl
 	standardCleanCSS string
+	// standardCleanHTML is the embedded HTML template for the Standard Clean template.
 	//go:embed standard_clean_html.tmpl
 	standardCleanHTML string
+	// standardCleanMarkdown is the embedded Markdown template for the Standard Clean template.
 	//go:embed standard_clean_markdown.tmpl
 	standardCleanMarkdown string
+	// standardCleanText is the embedded plain-text template for the Standard Clean template.
 	//go:embed standard_clean_text.tmpl
 	standardCleanText string
 
+	// detailedImmigrationCVCSS is the embedded CSS stylesheet for the Detailed Immigration CV template.
 	//go:embed detailed_immigration_cv_css.tmpl
 	detailedImmigrationCVCSS string
+	// detailedImmigrationCVHTML is the embedded HTML template for the Detailed Immigration CV template.
 	//go:embed detailed_immigration_cv_html.tmpl
 	detailedImmigrationCVHTML string
+	// detailedImmigrationCVMarkdown is the embedded Markdown template for the Detailed Immigration CV template.
 	//go:embed detailed_immigration_cv_markdown.tmpl
 	detailedImmigrationCVMarkdown string
+	// detailedImmigrationCVText is the embedded plain-text template for the Detailed Immigration CV template.
 	//go:embed detailed_immigration_cv_text.tmpl
 	detailedImmigrationCVText string
 
+	// atsMinimalCSS is the embedded CSS stylesheet for the ATS Minimal template.
 	//go:embed ats_minimal_css.tmpl
 	atsMinimalCSS string
+	// atsMinimalHTML is the embedded HTML template for the ATS Minimal template.
 	//go:embed ats_minimal_html.tmpl
 	atsMinimalHTML string
+	// atsMinimalMarkdown is the embedded Markdown template for the ATS Minimal template.
 	//go:embed ats_minimal_markdown.tmpl
 	atsMinimalMarkdown string
+	// atsMinimalText is the embedded plain-text template for the ATS Minimal template.
 	//go:embed ats_minimal_text.tmpl
 	atsMinimalText string
 
+	// atsHybridTechCSS is the embedded CSS stylesheet for the ATS Hybrid Tech template.
 	//go:embed ats_hybrid_tech_css.tmpl
 	atsHybridTechCSS string
+	// atsHybridTechHTML is the embedded HTML template for the ATS Hybrid Tech template.
 	//go:embed ats_hybrid_tech_html.tmpl
 	atsHybridTechHTML string
+	// atsHybridTechMarkdown is the embedded Markdown template for the ATS Hybrid Tech template.
 	//go:embed ats_hybrid_tech_markdown.tmpl
 	atsHybridTechMarkdown string
+	// atsHybridTechText is the embedded plain-text template for the ATS Hybrid Tech template.
 	//go:embed ats_hybrid_tech_text.tmpl
 	atsHybridTechText string
 
+	// atsExecutiveCleanCSS is the embedded CSS stylesheet for the ATS Executive Clean template.
 	//go:embed ats_executive_clean_css.tmpl
 	atsExecutiveCleanCSS string
+	// atsExecutiveCleanHTML is the embedded HTML template for the ATS Executive Clean template.
 	//go:embed ats_executive_clean_html.tmpl
 	atsExecutiveCleanHTML string
+	// atsExecutiveCleanMarkdown is the embedded Markdown template for the ATS Executive Clean template.
 	//go:embed ats_executive_clean_markdown.tmpl
 	atsExecutiveCleanMarkdown string
+	// atsExecutiveCleanText is the embedded plain-text template for the ATS Executive Clean template.
 	//go:embed ats_executive_clean_text.tmpl
 	atsExecutiveCleanText string
 )

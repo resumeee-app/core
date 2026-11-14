@@ -8,36 +8,24 @@ import (
 	"github.com/resumeee-app/resumeee-core/llm"
 )
 
-// recursivelyCheckDescriptions ensures every property node in a JSON schema has a non-empty description.
-func recursivelyCheckDescriptions(t *testing.T, path string, node map[string]any) {
+func recursivelyCheckDescriptions(t *testing.T, path string, node *llm.Schema) {
 	t.Helper()
-	properties, ok := node["properties"].(map[string]any)
-	if !ok {
+	if node == nil {
 		return
 	}
-	for propName, propVal := range properties {
-		propMap, isMap := propVal.(map[string]any)
-		if !isMap {
+	for propName, prop := range node.Properties {
+		if prop == nil {
 			continue
 		}
 		currentPath := path + "." + propName
-
-		// Check description
-		desc, hasDesc := propMap["description"].(string)
-		if !hasDesc || strings.TrimSpace(desc) == "" {
+		if strings.TrimSpace(prop.Description) == "" {
 			t.Errorf("schema property %q is missing a non-empty description", currentPath)
 		}
-
-		// Recurse into object properties
-		if propType, _ := propMap["type"].(string); propType == "object" {
-			recursivelyCheckDescriptions(t, currentPath, propMap)
+		if prop.Type.Contains(llm.TypeObject) {
+			recursivelyCheckDescriptions(t, currentPath, prop)
 		}
-
-		// Recurse into array item properties
-		if items, hasItems := propMap["items"].(map[string]any); hasItems {
-			if itemType, _ := items["type"].(string); itemType == "object" {
-				recursivelyCheckDescriptions(t, currentPath+"[]", items)
-			}
+		if prop.Items != nil && prop.Items.Type.Contains(llm.TypeObject) {
+			recursivelyCheckDescriptions(t, currentPath+"[]", prop.Items)
 		}
 	}
 }
@@ -47,7 +35,6 @@ func TestGenerationResponseSchema_EnrichedFieldDescriptions(t *testing.T) {
 	if schema == nil {
 		t.Fatal("GenerationResponseSchema returned nil")
 	}
-
 	recursivelyCheckDescriptions(t, "root", schema)
 }
 
@@ -56,7 +43,6 @@ func TestGapAnalysisResponseSchema_EnrichedFieldDescriptions(t *testing.T) {
 	if schema == nil {
 		t.Fatal("GapAnalysisResponseSchema returned nil")
 	}
-
 	recursivelyCheckDescriptions(t, "root", schema)
 }
 
@@ -65,7 +51,6 @@ func TestLeanMainProfileSchema_EnrichedFieldDescriptions(t *testing.T) {
 	if schema == nil {
 		t.Fatal("LeanMainProfileSchema returned nil")
 	}
-
 	recursivelyCheckDescriptions(t, "root", schema)
 }
 
@@ -74,7 +59,6 @@ func TestATSExtractionResponseSchema_EnrichedFieldDescriptions(t *testing.T) {
 	if schema == nil {
 		t.Fatal("ATSExtractionResponseSchema returned nil")
 	}
-
 	recursivelyCheckDescriptions(t, "root", schema)
 }
 
@@ -83,7 +67,6 @@ func TestATSMatchingResponseSchema_EnrichedFieldDescriptions(t *testing.T) {
 	if schema == nil {
 		t.Fatal("ATSMatchingResponseSchema returned nil")
 	}
-
 	recursivelyCheckDescriptions(t, "root", schema)
 }
 
@@ -94,14 +77,10 @@ func TestGapReportSchema_Integrity(t *testing.T) {
 	}
 	recursivelyCheckDescriptions(t, "root", schema)
 
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("expected properties map in GapReportSchema")
-	}
-	if _, ok := props["overall_match_summary"]; !ok {
+	if _, ok := schema.Properties["overall_match_summary"]; !ok {
 		t.Error("expected overall_match_summary property in GapReportSchema")
 	}
-	if _, ok := props["missing_requirements"]; !ok {
+	if _, ok := schema.Properties["missing_requirements"]; !ok {
 		t.Error("expected missing_requirements property in GapReportSchema")
 	}
 }
@@ -160,89 +139,68 @@ func TestResumeExtractResponseSchema_ExistsAndEnriched(t *testing.T) {
 	if schema == nil {
 		t.Fatal("ResumeExtractResponseSchema returned nil")
 	}
-
 	recursivelyCheckDescriptions(t, "root", schema)
-
-	// Verify Gemini sanitization compatibility
-	geminiSchema := llm.SanitizeGeminiSchema(schema)
-	if geminiSchema == nil {
-		t.Fatal("SanitizeGeminiSchema returned nil for ResumeExtractResponseSchema")
-	}
 }
 
-func assertStrictNormalizedObjectRecursively(t *testing.T, path string, node any) {
+func assertStrictNormalizedObjectRecursively(t *testing.T, path string, node *llm.Schema) {
 	t.Helper()
-	m, ok := node.(map[string]any)
-	if !ok {
+	if node == nil {
 		return
 	}
 
-	if anyOfList, hasAnyOf := m["anyOf"].([]any); hasAnyOf {
-		for _, item := range anyOfList {
-			assertStrictNormalizedObjectRecursively(t, path+".anyOf[]", item)
-		}
+	for _, item := range node.AnyOf {
+		assertStrictNormalizedObjectRecursively(t, path+".anyOf[]", item)
+	}
+	for _, item := range node.OneOf {
+		assertStrictNormalizedObjectRecursively(t, path+".oneOf[]", item)
+	}
+	for _, item := range node.AllOf {
+		assertStrictNormalizedObjectRecursively(t, path+".allOf[]", item)
 	}
 
-	props, hasProps := m["properties"].(map[string]any)
-	if hasProps {
-		if ap, exists := m["additionalProperties"]; !exists || ap != false {
-			t.Errorf("%s: expected additionalProperties=false, got %v", path, ap)
+	if len(node.Properties) > 0 || node.Type.Contains(llm.TypeObject) {
+		if node.AdditionalProperties == nil || *node.AdditionalProperties {
+			t.Errorf("%s: expected additionalProperties=false, got %v", path, node.AdditionalProperties)
 		}
-		reqSet := make(map[string]bool)
-		switch req := m["required"].(type) {
-		case []string:
-			for _, k := range req {
-				reqSet[k] = true
-			}
-		case []any:
-			for _, v := range req {
-				if s, ok := v.(string); ok {
-					reqSet[s] = true
-				}
-			}
+		if node.Required == nil {
+			t.Errorf("%s: expected non-nil Required slice on strict object", path)
 		}
-		for propName, propVal := range props {
+		reqSet := make(map[string]bool, len(node.Required))
+		for _, k := range node.Required {
+			reqSet[k] = true
+		}
+		for propName, propVal := range node.Properties {
 			if !reqSet[propName] {
-				t.Errorf("%s: property %q missing from required slice (optional parameters violate strict/grammar limits)", path, propName)
+				t.Errorf("%s: property %q missing from required slice", path, propName)
 			}
 			assertStrictNormalizedObjectRecursively(t, path+"."+propName, propVal)
 		}
 	}
 
-	if items, hasItems := m["items"]; hasItems {
-		assertStrictNormalizedObjectRecursively(t, path+"[]", items)
+	if node.Items != nil {
+		assertStrictNormalizedObjectRecursively(t, path+"[]", node.Items)
 	}
 }
 
-func isPropertyNullable(prop map[string]any) bool {
-	switch tv := prop["type"].(type) {
-	case []string:
-		for _, s := range tv {
-			if s == "null" {
-				return true
-			}
-		}
-	case []any:
-		for _, v := range tv {
-			if s, ok := v.(string); ok && s == "null" {
-				return true
-			}
-		}
+func isPropertyNullable(prop *llm.Schema) bool {
+	if prop == nil {
+		return false
 	}
-	if anyOfList, ok := prop["anyOf"].([]any); ok {
-		for _, item := range anyOfList {
-			if im, ok := item.(map[string]any); ok && im["type"] == "null" {
-				return true
-			}
+	if prop.Type.Contains(llm.TypeNull) {
+		return true
+	}
+	for _, item := range prop.AnyOf {
+		if item != nil && item.Type.Contains(llm.TypeNull) {
+			return true
 		}
 	}
 	return false
 }
 
-func TestSanitizeOpenAIAndAnthropicSchemas_StrictAndNonMutating(t *testing.T) {
+func TestSchemaStrictAndClone_NonMutating(t *testing.T) {
 	canonicalSchemas := []struct {
 		name   string
-		getter func() map[string]any
+		getter func() *llm.Schema
 	}{
 		{"GenerationResponseSchema", llm.GenerationResponseSchema},
 		{"GapAnalysisResponseSchema", llm.GapAnalysisResponseSchema},
@@ -259,99 +217,72 @@ func TestSanitizeOpenAIAndAnthropicSchemas_StrictAndNonMutating(t *testing.T) {
 				t.Fatalf("failed to marshal canonical schema %s: %v", sc.name, err)
 			}
 
-			oai := llm.SanitizeOpenAISchema(orig)
-			assertStrictNormalizedObjectRecursively(t, sc.name+"(OpenAI)", oai)
+			strict := orig.Strict()
+			assertStrictNormalizedObjectRecursively(t, sc.name+"(Strict)", strict)
 
-			ant := llm.SanitizeAnthropicSchema(orig)
-			assertStrictNormalizedObjectRecursively(t, sc.name+"(Anthropic)", ant)
-
-			gem := llm.SanitizeGeminiJSONSchema(orig)
-			if gem == nil {
-				t.Fatalf("SanitizeGeminiJSONSchema returned nil for %s", sc.name)
+			cloned := orig.Clone()
+			if cloned == nil {
+				t.Fatalf("Clone returned nil for %s", sc.name)
 			}
 
 			afterBytes, err := json.Marshal(orig)
 			if err != nil {
-				t.Fatalf("failed to marshal canonical schema %s after sanitization: %v", sc.name, err)
+				t.Fatalf("failed to marshal canonical schema %s after Strict/Clone: %v", sc.name, err)
 			}
 			if string(beforeBytes) != string(afterBytes) {
-				t.Errorf("%s: canonical schema map was mutated in place!\nbefore: %s\nafter:  %s", sc.name, string(beforeBytes), string(afterBytes))
+				t.Errorf("%s: canonical schema was mutated in place!\nbefore: %s\nafter:  %s", sc.name, string(beforeBytes), string(afterBytes))
 			}
 		})
 	}
 
 	t.Run("falsifiable optional vs required nullability and deep non-mutation", func(t *testing.T) {
-		input := map[string]any{
-			"$schema":     "http://json-schema.org/draft-07/schema#",
-			"definitions": map[string]any{"x": map[string]any{"type": "string"}},
-			"type":        "object",
-			"properties": map[string]any{
-				"req_str": map[string]any{"type": "string", "description": "Required scalar"},
-				"opt_str": map[string]any{"type": "string", "description": "Optional scalar"},
-				"opt_arr": map[string]any{
-					"type":        "array",
-					"description": "Optional array",
-					"items":       map[string]any{"type": "string"},
+		input := &llm.Schema{
+			Type: llm.SchemaTypes{llm.TypeObject},
+			Properties: map[string]*llm.Schema{
+				"req_str": {Type: llm.SchemaTypes{llm.TypeString}, Description: "Required scalar"},
+				"opt_str": {Type: llm.SchemaTypes{llm.TypeString}, Description: "Optional scalar"},
+				"opt_arr": {
+					Type:        llm.SchemaTypes{llm.TypeArray},
+					Description: "Optional array",
+					Items:       &llm.Schema{Type: llm.SchemaTypes{llm.TypeString}},
 				},
-				"opt_enum": map[string]any{
-					"type":        "string",
-					"enum":        []string{"a", "b"},
-					"description": "Optional enum",
+				"opt_enum": {
+					Type:        llm.SchemaTypes{llm.TypeString},
+					Enum:        []string{"a", "b"},
+					Description: "Optional enum",
 				},
-				"opt_obj": map[string]any{
-					"type":        "object",
-					"description": "Optional nested object",
-					"properties": map[string]any{
-						"inner_req": map[string]any{"type": "number", "description": "Inner required"},
-						"inner_opt": map[string]any{"type": "boolean", "description": "Inner optional"},
+				"opt_obj": {
+					Type:        llm.SchemaTypes{llm.TypeObject},
+					Description: "Optional nested object",
+					Properties: map[string]*llm.Schema{
+						"inner_req": {Type: llm.SchemaTypes{llm.TypeNumber}, Description: "Inner required"},
+						"inner_opt": {Type: llm.SchemaTypes{llm.TypeBoolean}, Description: "Inner optional"},
 					},
-					"required": []string{"inner_req"},
+					Required: []string{"inner_req"},
 				},
 			},
-			"required": []string{"req_str"},
+			Required: []string{"req_str"},
 		}
 
-		for _, fn := range []struct {
-			name string
-			call func(map[string]any) map[string]any
-		}{
-			{"SanitizeOpenAISchema", llm.SanitizeOpenAISchema},
-			{"SanitizeAnthropicSchema", llm.SanitizeAnthropicSchema},
-		} {
-			t.Run(fn.name, func(t *testing.T) {
-				out := fn.call(input)
-				assertStrictNormalizedObjectRecursively(t, fn.name, out)
+		out := input.Strict()
+		assertStrictNormalizedObjectRecursively(t, "Strict", out)
 
-				if _, hasMeta := out["$schema"]; hasMeta {
-					t.Errorf("%s failed to strip $schema", fn.name)
-				}
-				if _, hasDefs := out["definitions"]; hasDefs {
-					t.Errorf("%s failed to strip definitions", fn.name)
-				}
+		if isPropertyNullable(out.Properties["req_str"]) {
+			t.Errorf("Strict erroneously made originally required property req_str nullable")
+		}
+		for _, optKey := range []string{"opt_str", "opt_arr", "opt_enum", "opt_obj"} {
+			if !isPropertyNullable(out.Properties[optKey]) {
+				t.Errorf("Strict failed to make optional property %q nullable: %+v", optKey, out.Properties[optKey])
+			}
+		}
 
-				props := out["properties"].(map[string]any)
-				if isPropertyNullable(props["req_str"].(map[string]any)) {
-					t.Errorf("%s erroneously made originally required property req_str nullable", fn.name)
-				}
-				for _, optKey := range []string{"opt_str", "opt_arr", "opt_enum", "opt_obj"} {
-					if !isPropertyNullable(props[optKey].(map[string]any)) {
-						t.Errorf("%s failed to make optional property %q nullable: %+v", fn.name, optKey, props[optKey])
-					}
-				}
-
-				// Mutating returned schema must not affect input map
-				props["req_str"].(map[string]any)["type"] = "mutated"
-				origReqList := input["required"].([]string)
-				if len(origReqList) != 1 || origReqList[0] != "req_str" {
-					t.Errorf("%s mutated caller's required slice: %v", fn.name, origReqList)
-				}
-				if input["properties"].(map[string]any)["req_str"].(map[string]any)["type"] != "string" {
-					t.Errorf("%s shared mutable map references with caller input", fn.name)
-				}
-				if _, stillHasMeta := input["$schema"]; !stillHasMeta {
-					t.Errorf("%s deleted $schema from caller input map", fn.name)
-				}
-			})
+		// Mutating returned schema must not affect input schema.
+		out.Properties["req_str"].Type = llm.SchemaTypes{"mutated"}
+		if len(input.Required) != 1 || input.Required[0] != "req_str" {
+			t.Errorf("Strict mutated caller's required slice: %v", input.Required)
+		}
+		if len(input.Properties["req_str"].Type) != 1 || input.Properties["req_str"].Type[0] != llm.TypeString {
+			t.Errorf("Strict shared mutable references with caller input")
 		}
 	})
 }
@@ -398,7 +329,6 @@ func TestResumeExtractPrompt_Composition(t *testing.T) {
 				t.Fatalf("BuildResumeExtractPrompt failed for %q: %v", tc.name, err)
 			}
 
-			// Validate SystemPrompt invariants across all cases
 			if !strings.Contains(payload.SystemPrompt, "expert resume parsing engine") {
 				t.Errorf("expected SystemPrompt to contain parser persona, got: %s", payload.SystemPrompt)
 			}
@@ -409,7 +339,6 @@ func TestResumeExtractPrompt_Composition(t *testing.T) {
 				t.Errorf("expected SystemPrompt to contain schema hints outline")
 			}
 
-			// Validate UserPrompt composition
 			if !strings.Contains(payload.UserPrompt, "<raw_resume_text>") {
 				t.Errorf("expected UserPrompt to contain <raw_resume_text> opening tag")
 			}
@@ -426,45 +355,42 @@ func TestResumeExtractPrompt_Composition(t *testing.T) {
 	}
 }
 
-func TestSanitizers_CombinatorsStandardSchemaAndIdempotency(t *testing.T) {
-	combinatorSchema := map[string]any{
-		"$schema": "https://json-schema.org/draft/2020-12/schema",
-		"type":    "object",
-		"properties": map[string]any{
-			"choice": map[string]any{
-				"anyOf": []any{
-					map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"a": map[string]any{"type": "string"},
-							"b": map[string]any{"type": "integer"},
+func TestSchemaStrict_CombinatorsEmptyObjectAndIdempotency(t *testing.T) {
+	combinatorSchema := &llm.Schema{
+		Type: llm.SchemaTypes{llm.TypeObject},
+		Properties: map[string]*llm.Schema{
+			"choice": {
+				AnyOf: []*llm.Schema{
+					{
+						Type: llm.SchemaTypes{llm.TypeObject},
+						Properties: map[string]*llm.Schema{
+							"a": {Type: llm.SchemaTypes{llm.TypeString}},
+							"b": {Type: llm.SchemaTypes{llm.TypeInteger}},
 						},
-						"required": []string{"a"},
+						Required: []string{"a"},
 					},
-					map[string]any{"type": "string"},
+					{Type: llm.SchemaTypes{llm.TypeString}},
 				},
 			},
-			"alt": map[string]any{
-				"oneOf": []any{
-					map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"flag": map[string]any{"type": "boolean"},
+			"alt": {
+				OneOf: []*llm.Schema{
+					{
+						Type: llm.SchemaTypes{llm.TypeObject},
+						Properties: map[string]*llm.Schema{
+							"flag": {Type: llm.SchemaTypes{llm.TypeBoolean}},
 						},
 					},
 				},
+			},
+			"empty_obj": {
+				Type: llm.SchemaTypes{llm.TypeObject},
 			},
 		},
-		"required": []string{"choice"},
+		Required: []string{"choice", "empty_obj"},
 	}
 
-	std := llm.SanitizeStandardJSONSchema(combinatorSchema)
-	if _, hasMeta := std["$schema"]; hasMeta {
-		t.Errorf("expected SanitizeStandardJSONSchema to strip $schema")
-	}
-
-	once := llm.SanitizeOpenAISchema(combinatorSchema)
-	twice := llm.SanitizeOpenAISchema(once)
+	once := combinatorSchema.Strict()
+	twice := once.Strict()
 
 	onceBytes, err := json.Marshal(once)
 	if err != nil {
@@ -475,13 +401,16 @@ func TestSanitizers_CombinatorsStandardSchemaAndIdempotency(t *testing.T) {
 		t.Fatalf("failed to marshal twice: %v", err)
 	}
 	if string(onceBytes) != string(twiceBytes) {
-		t.Errorf("expected SanitizeOpenAISchema to be idempotent:\nonce:  %s\ntwice: %s", string(onceBytes), string(twiceBytes))
+		t.Errorf("expected Strict() to be idempotent:\nonce:  %s\ntwice: %s", string(onceBytes), string(twiceBytes))
 	}
 
-	props := once["properties"].(map[string]any)
-	choiceBranches := props["choice"].(map[string]any)["anyOf"].([]any)
-	firstBranch := choiceBranches[0].(map[string]any)
-	if firstBranch["additionalProperties"] != false {
-		t.Errorf("expected nested anyOf object branch to set additionalProperties=false, got %v", firstBranch["additionalProperties"])
+	firstBranch := once.Properties["choice"].AnyOf[0]
+	if firstBranch.AdditionalProperties == nil || *firstBranch.AdditionalProperties {
+		t.Errorf("expected nested anyOf object branch to set additionalProperties=false")
+	}
+
+	// Empty object in strict mode must serialize `"required":[]`.
+	if !strings.Contains(string(onceBytes), `"required":[]`) {
+		t.Errorf("expected empty strict object to marshal \"required\":[], got %s", string(onceBytes))
 	}
 }

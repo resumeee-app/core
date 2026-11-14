@@ -2,13 +2,14 @@ package core
 
 import "context"
 
-type contextKey string
+// ContextKey identifies request-scoped values stored in a context.Context.
+type ContextKey string
 
 // UserIDContextKey is the context key for authenticated tenant user IDs.
-const UserIDContextKey contextKey = "resumeee.user_id"
+const UserIDContextKey ContextKey = "resumeee.user_id"
 
 // IsAdminContextKey is the context key for administrative privilege indicators.
-const IsAdminContextKey contextKey = "resumeee.is_admin"
+const IsAdminContextKey ContextKey = "resumeee.is_admin"
 
 // WithUserID binds an authenticated tenant user ID into the context.
 func WithUserID(ctx context.Context, userID string) context.Context {

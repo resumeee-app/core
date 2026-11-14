@@ -42,21 +42,25 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 		}
 	}
 
-	tc := &TailoredContent{
+	factsByOwner := indexFactsByOwner(snapshot.Facts)
+	return &TailoredContent{
 		Summary:        snapshot.Profile.Summary,
-		SkillGroups:    make([]TailoredSkillGroup, 0, len(snapshot.Skills)),
-		Experiences:    make([]TailoredExperience, 0, len(snapshot.Experiences)),
-		Projects:       make([]TailoredProject, 0, len(snapshot.Projects)),
-		Education:      make([]TailoredEducation, 0, len(snapshot.Education)),
-		Certifications: make([]TailoredCert, 0, len(snapshot.Certifications)),
+		SkillGroups:    buildTailoredSkillGroups(snapshot),
+		Experiences:    mapExperiencesToTailored(snapshot.Experiences, factsByOwner),
+		Projects:       mapProjectsToTailored(snapshot.Projects, factsByOwner),
+		Education:      mapEducationToTailored(snapshot.Education, factsByOwner),
+		Certifications: mapCertsToTailored(snapshot.Certifications),
 	}
+}
 
-	// 1. Group skills by Category using all consolidated skills across the snapshot.
+// buildTailoredSkillGroups consolidates snapshot skills grouped by category in deterministic order.
+func buildTailoredSkillGroups(snapshot *MainProfileSnapshot) []TailoredSkillGroup {
 	type groupEntry struct {
 		category string
 		skills   []string
 		skillIDs []string
 	}
+
 	allSkills := snapshot.AllSkills()
 	groupOrder := make([]string, 0, len(allSkills))
 	groups := make(map[string]*groupEntry, len(allSkills))
@@ -78,48 +82,61 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 		groups[cat].skillIDs = append(groups[cat].skillIDs, skill.ID)
 	}
 
+	result := make([]TailoredSkillGroup, 0, len(groupOrder))
 	for _, cat := range groupOrder {
 		g := groups[cat]
-		tc.SkillGroups = append(tc.SkillGroups, TailoredSkillGroup{
+		result = append(result, TailoredSkillGroup{
 			Category:       g.category,
 			Skills:         g.skills,
 			SourceSkillIDs: g.skillIDs,
 		})
 	}
+	return result
+}
 
-	// 2. Index snapshot.Facts by OwnerID as fallback if entity child facts are not preloaded.
-	factsByOwner := make(map[string][]Fact, len(snapshot.Facts))
-	for _, f := range snapshot.Facts {
+// indexFactsByOwner indexes standalone facts by their polymorphic OwnerID as a fallback when nested slices are empty.
+func indexFactsByOwner(facts []Fact) map[string][]Fact {
+	factsByOwner := make(map[string][]Fact, len(facts))
+	for _, f := range facts {
 		factsByOwner[f.OwnerID] = append(factsByOwner[f.OwnerID], f)
 	}
+	return factsByOwner
+}
 
-	// Helper to map a slice of core.Fact to []TailoredBullet
-	mapFactsToBullets := func(facts []Fact) []TailoredBullet {
-		bullets := make([]TailoredBullet, 0, len(facts))
-		for _, f := range facts {
-			var skillIDs []string
-			if len(f.Skills) > 0 {
-				skillIDs = make([]string, 0, len(f.Skills))
-				for _, s := range f.Skills {
-					skillIDs = append(skillIDs, s.ID)
-				}
-			}
-			bullets = append(bullets, TailoredBullet{
-				Text:           f.Statement,
-				SourceFactIDs:  []string{f.ID},
-				SourceSkillIDs: skillIDs,
-			})
-		}
-		return bullets
+// resolveEntityFacts selects inline facts when preloaded, falling back to snapshot-level indexed facts.
+func resolveEntityFacts(inline []Fact, ownerID string, factsByOwner map[string][]Fact) []Fact {
+	if len(inline) == 0 && len(factsByOwner) > 0 {
+		return factsByOwner[ownerID]
 	}
+	return inline
+}
 
-	// 3. Experiences
-	for _, exp := range snapshot.Experiences {
-		facts := exp.Facts
-		if len(facts) == 0 && len(snapshot.Facts) > 0 {
-			facts = factsByOwner[exp.ID]
+// mapFactsToBullets converts domain Fact records into TailoredBullet items with source provenance IDs.
+func mapFactsToBullets(facts []Fact) []TailoredBullet {
+	bullets := make([]TailoredBullet, 0, len(facts))
+	for _, f := range facts {
+		var skillIDs []string
+		if len(f.Skills) > 0 {
+			skillIDs = make([]string, 0, len(f.Skills))
+			for _, s := range f.Skills {
+				skillIDs = append(skillIDs, s.ID)
+			}
 		}
-		tc.Experiences = append(tc.Experiences, TailoredExperience{
+		bullets = append(bullets, TailoredBullet{
+			Text:           f.Statement,
+			SourceFactIDs:  []string{f.ID},
+			SourceSkillIDs: skillIDs,
+		})
+	}
+	return bullets
+}
+
+// mapExperiencesToTailored projects domain work experiences into TailoredExperience entries.
+func mapExperiencesToTailored(exps []WorkExperience, factsByOwner map[string][]Fact) []TailoredExperience {
+	result := make([]TailoredExperience, 0, len(exps))
+	for _, exp := range exps {
+		facts := resolveEntityFacts(exp.Facts, exp.ID, factsByOwner)
+		result = append(result, TailoredExperience{
 			SourceEntityID:    exp.ID,
 			Company:           exp.Company,
 			RoleTitle:         exp.RoleTitle,
@@ -138,14 +155,15 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 			Metadata:          CloneMetadata(exp.Metadata),
 		})
 	}
+	return result
+}
 
-	// 4. Projects
-	for _, proj := range snapshot.Projects {
-		facts := proj.Facts
-		if len(facts) == 0 && len(snapshot.Facts) > 0 {
-			facts = factsByOwner[proj.ID]
-		}
-		tc.Projects = append(tc.Projects, TailoredProject{
+// mapProjectsToTailored projects domain projects into TailoredProject entries.
+func mapProjectsToTailored(projs []Project, factsByOwner map[string][]Fact) []TailoredProject {
+	result := make([]TailoredProject, 0, len(projs))
+	for _, proj := range projs {
+		facts := resolveEntityFacts(proj.Facts, proj.ID, factsByOwner)
+		result = append(result, TailoredProject{
 			SourceEntityID: proj.ID,
 			Name:           proj.Name,
 			Role:           proj.Role,
@@ -157,14 +175,15 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 			Metadata:       CloneMetadata(proj.Metadata),
 		})
 	}
+	return result
+}
 
-	// 5. Education
-	for _, edu := range snapshot.Education {
-		facts := edu.Facts
-		if len(facts) == 0 && len(snapshot.Facts) > 0 {
-			facts = factsByOwner[edu.ID]
-		}
-		tc.Education = append(tc.Education, TailoredEducation{
+// mapEducationToTailored projects domain education entries into TailoredEducation records.
+func mapEducationToTailored(edus []Education, factsByOwner map[string][]Fact) []TailoredEducation {
+	result := make([]TailoredEducation, 0, len(edus))
+	for _, edu := range edus {
+		facts := resolveEntityFacts(edu.Facts, edu.ID, factsByOwner)
+		result = append(result, TailoredEducation{
 			SourceEntityID: edu.ID,
 			Institution:    edu.Institution,
 			Degree:         edu.Degree,
@@ -177,10 +196,14 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 			Metadata:       CloneMetadata(edu.Metadata),
 		})
 	}
+	return result
+}
 
-	// 6. Certifications
-	for _, cert := range snapshot.Certifications {
-		tc.Certifications = append(tc.Certifications, TailoredCert{
+// mapCertsToTailored projects domain certifications into TailoredCert entries.
+func mapCertsToTailored(certs []Certification) []TailoredCert {
+	result := make([]TailoredCert, 0, len(certs))
+	for _, cert := range certs {
+		result = append(result, TailoredCert{
 			SourceEntityID: cert.ID,
 			Name:           cert.Name,
 			Issuer:         cert.Issuer,
@@ -190,6 +213,5 @@ func SnapshotToTailoredContent(snapshot *MainProfileSnapshot) *TailoredContent {
 			Metadata:       CloneMetadata(cert.Metadata),
 		})
 	}
-
-	return tc
+	return result
 }

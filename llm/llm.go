@@ -1,19 +1,15 @@
-// Package llm provides client adapters, prompt engineering pipelines, schema enforcement,
-// and provider registry resolution for generative AI model providers.
+// Package llm provides transport-agnostic provider orchestration, prompt engineering
+// pipelines, structured JSON schema definitions, and completion tracing for generative AI models.
 //
-// Supported model provider backends include:
-//   - Google Gemini (gemini-3.8-flash, gemini-4-argon, gemini-2.5-pro, gemini-2.5-flash)
-//   - OpenAI (gpt-4o, gpt-4o-mini, o3-mini, gpt-5)
-//   - Anthropic (claude-sonnet-4-5, claude-haiku-4-5, claude-opus-4-1)
-//   - Ollama native /api/chat (llama3.1, qwen2.5, etc.)
-//   - OpenAI-compatible endpoints (LocalAI, vLLM, DeepSeek)
-//
-// The package enforces structured JSON outputs conforming to core.TailoredContent
-// schemas and emits structured operational observability telemetry.
+// Pure domain logic lives in this package without direct net/http or vendor SDK imports.
+// Concrete provider implementations live in subpackages under llm/ (gemini, openai, anthropic,
+// ollama, and openaicompat) and implement Client.
 package llm
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -21,265 +17,45 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// ProviderConfig holds credentials and endpoint configuration for initializing transport clients.
-type ProviderConfig struct {
-	DefaultProvider string
-	DefaultModel    string
-	GeminiAPIKey    string
-	GeminiModel     string
-	OpenAIAPIKey    string
-	OpenAIModel     string
-	AnthropicAPIKey string
-	AnthropicModel  string
-	OllamaBaseURL   string
-	OllamaAPIKey    string
-	OllamaModel     string
-	CompatBaseURL   string
-	CompatAPIKey    string
-	CompatModel     string
-}
+// Supported LLM provider identifiers and default model identifiers used across registry resolution.
+const (
+	// ProviderGemini identifies the Google Gemini backend.
+	ProviderGemini = "gemini"
 
-// RegisterClients registers all configured transport clients into a Registry.
-func RegisterClients(reg *Registry, cfg ProviderConfig, clientOpts ...Option) {
-	if reg == nil {
-		return
-	}
+	// ProviderOpenAI identifies the OpenAI backend.
+	ProviderOpenAI = "openai"
 
-	if key := strings.TrimSpace(cfg.GeminiAPIKey); key != "" {
-		opts := append([]Option{}, clientOpts...)
-		if m := strings.TrimSpace(cfg.GeminiModel); m != "" {
-			opts = append(opts, WithDefaultModel(m))
-		}
-		reg.RegisterClient(NewGeminiProvider(key, opts...))
-	}
+	// ProviderAnthropic identifies the Anthropic Claude backend.
+	ProviderAnthropic = "anthropic"
 
-	if key := strings.TrimSpace(cfg.OpenAIAPIKey); key != "" {
-		opts := append([]Option{}, clientOpts...)
-		if m := strings.TrimSpace(cfg.OpenAIModel); m != "" {
-			opts = append(opts, WithDefaultModel(m))
-		}
-		reg.RegisterClient(NewOpenAIProvider(key, opts...))
-	}
+	// ProviderOllama identifies a local or remote Ollama backend.
+	ProviderOllama = "ollama"
 
-	if key := strings.TrimSpace(cfg.AnthropicAPIKey); key != "" {
-		opts := append([]Option{}, clientOpts...)
-		if m := strings.TrimSpace(cfg.AnthropicModel); m != "" {
-			opts = append(opts, WithDefaultModel(m))
-		}
-		reg.RegisterClient(NewAnthropicProvider(key, opts...))
-	}
+	// ProviderCompat identifies a generic OpenAI-compatible HTTP endpoint.
+	ProviderCompat = "compat"
 
-	if ollamaURL := strings.TrimSpace(cfg.OllamaBaseURL); ollamaURL != "" || strings.TrimSpace(cfg.OllamaModel) != "" {
-		opts := append([]Option{}, clientOpts...)
-		if m := strings.TrimSpace(cfg.OllamaModel); m != "" {
-			opts = append(opts, WithDefaultModel(m))
-		}
-		reg.RegisterClient(NewOllamaProvider(ollamaURL, strings.TrimSpace(cfg.OllamaAPIKey), opts...))
-	}
+	// ProviderCompatAlt is an accepted alias for ProviderCompat.
+	ProviderCompatAlt = "openai-compat"
 
-	if baseURL := strings.TrimSpace(cfg.CompatBaseURL); baseURL != "" {
-		opts := append([]Option{}, clientOpts...)
-		if m := strings.TrimSpace(cfg.CompatModel); m != "" {
-			opts = append(opts, WithDefaultModel(m))
-		}
-		reg.RegisterClient(NewCompatProvider(baseURL, strings.TrimSpace(cfg.CompatAPIKey), opts...))
-	}
+	// defaultGeminiModel is the fallback Gemini model when no override is configured.
+	defaultGeminiModel = "gemini-3.8-flash"
 
-	if def := strings.TrimSpace(cfg.DefaultProvider); def != "" {
-		reg.SetDefault(def, strings.TrimSpace(cfg.DefaultModel))
-	}
-}
+	// defaultOpenAIModel is the fallback OpenAI model when no override is configured.
+	defaultOpenAIModel = "gpt-4o"
 
-// Registry manages configured LLM providers and resolves provider/model selection
-// according to the 4-tier resolution hierarchy.
-type Registry struct {
-	mu              sync.RWMutex
-	providers       map[string]core.LLMProvider
-	defaultProvider string
-	defaultModel    string
-	explicitDefault bool
-	opts            []Option
-}
+	// defaultAnthropicModel is the fallback Anthropic model when no override is configured.
+	defaultAnthropicModel = "claude-sonnet-4-5"
 
-// NewRegistry constructs an injectable LLM provider Registry.
-// Providers are registered via RegisterClient, RegisterClients, or Register.
-func NewRegistry(opts ...Option) *Registry {
-	return &Registry{
-		providers: make(map[string]core.LLMProvider),
-		opts:      opts,
-	}
-}
+	// defaultOllamaModel is the fallback Ollama model when no override is configured.
+	defaultOllamaModel = "llama3.1"
 
-// RegisterClient wraps a transport-only core.LLMClient with prompt compilation and observability,
-// and registers it in the Registry.
-func (r *Registry) RegisterClient(client core.LLMClient, extraOpts ...Option) {
-	if client == nil {
-		return
-	}
-	combinedOpts := append(append([]Option{}, r.opts...), extraOpts...)
-	r.Register(NewClientProvider(client, combinedOpts...))
-}
+	// defaultCompatModel is the fallback OpenAI-compatible model identifier.
+	defaultCompatModel = "default"
+)
 
-// Register adds an LLMProvider to the registry and updates the system default provider hierarchy.
-func (r *Registry) Register(provider core.LLMProvider) {
-	if provider == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	name := strings.ToLower(strings.TrimSpace(provider.Name()))
-	r.providers[name] = provider
-
-	if !r.explicitDefault {
-		r.recomputeDefaultLocked()
-	}
-}
-
-// recomputeDefaultLocked selects the highest-priority registered provider and its default model.
-func (r *Registry) recomputeDefaultLocked() {
-	priority := []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderOllama, ProviderCompat, ProviderCompatAlt}
-	for _, pName := range priority {
-		if prov, ok := r.providers[pName]; ok {
-			r.defaultProvider = pName
-			if pName == ProviderCompatAlt {
-				r.defaultProvider = ProviderCompat
-			}
-			if dm := strings.TrimSpace(prov.DefaultModel()); dm != "" {
-				r.defaultModel = dm
-			} else {
-				r.defaultModel = defaultModelForProvider(r.defaultProvider)
-			}
-			return
-		}
-	}
-	if r.defaultProvider == "" {
-		for name, prov := range r.providers {
-			r.defaultProvider = name
-			if dm := strings.TrimSpace(prov.DefaultModel()); dm != "" {
-				r.defaultModel = dm
-			} else {
-				r.defaultModel = defaultModelForProvider(name)
-			}
-			return
-		}
-	}
-}
-
-// Get returns the named provider, handling aliases (such as openai-compat).
-func (r *Registry) Get(name string) (core.LLMProvider, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	norm := strings.ToLower(strings.TrimSpace(name))
-	if p, ok := r.providers[norm]; ok {
-		return p, nil
-	}
-
-	// Alias resolution: openai-compat <-> compat
-	switch norm {
-	case ProviderCompatAlt:
-		if p, ok := r.providers[ProviderCompat]; ok {
-			return p, nil
-		}
-	case ProviderCompat:
-		if p, ok := r.providers[ProviderCompatAlt]; ok {
-			return p, nil
-		}
-	}
-
-	return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, name)
-}
-
-// List returns a sorted list of registered provider names.
-func (r *Registry) List() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	keys := make([]string, 0, len(r.providers))
-	for k := range r.providers {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// DefaultProvider returns the configured default provider name.
-func (r *Registry) DefaultProvider() string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.defaultProvider
-}
-
-// DefaultModel returns the configured default model.
-func (r *Registry) DefaultModel() string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.defaultModel
-}
-
-// SetDefault explicitly overrides the default provider and model.
-func (r *Registry) SetDefault(provider, model string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.defaultProvider = strings.ToLower(strings.TrimSpace(provider))
-	r.defaultModel = strings.TrimSpace(model)
-	r.explicitDefault = true
-}
-
-// Resolve resolves the active LLMProvider and model according to the precedence ladder:
-// 1. GenerationRequest overrides (req.Model, req.BranchContext.ProviderOverride)
-// 2. Branch overrides (branch.ProviderOverride, branch.ModelOverride)
-// 3. System fallbacks (Registry default provider and model)
-func (r *Registry) Resolve(req core.GenerationRequest, _ *core.Preset, _ *core.Profile) (core.LLMProvider, string, error) {
-	r.mu.RLock()
-	hasProviders := len(r.providers) > 0
-	r.mu.RUnlock()
-
-	if !hasProviders {
-		return nil, "", ErrNoProviders
-	}
-
-	// 1. Resolve Provider
-	providerName := ""
-	if p := strings.TrimSpace(req.BranchContext.ProviderOverride); p != "" {
-		providerName = p
-	} else {
-		providerName = r.DefaultProvider()
-	}
-
-	if providerName == "" {
-		list := r.List()
-		if len(list) > 0 {
-			providerName = list[0]
-		}
-	}
-
-	provider, err := r.Get(providerName)
-	if err != nil {
-		return nil, "", err
-	}
-
-	// 2. Resolve Model
-	modelName := ""
-	if m := strings.TrimSpace(req.Model); m != "" {
-		modelName = m
-	} else if m := strings.TrimSpace(req.BranchContext.ModelOverride); m != "" {
-		modelName = m
-	} else if r.DefaultModel() != "" && r.DefaultProvider() == provider.Name() {
-		modelName = r.DefaultModel()
-	} else if dm := strings.TrimSpace(provider.DefaultModel()); dm != "" {
-		modelName = dm
-	} else {
-		modelName = defaultModelForProvider(provider.Name())
-	}
-
-	return provider, modelName, nil
-}
-
-// defaultModelForProvider returns the recommended fallback model identifier for a given provider name.
-func defaultModelForProvider(name string) string {
-	switch strings.ToLower(name) {
+// DefaultModelForProvider returns the recommended fallback model identifier for a provider name.
+func DefaultModelForProvider(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
 	case ProviderGemini:
 		return defaultGeminiModel
 	case ProviderOpenAI:
@@ -295,8 +71,9 @@ func defaultModelForProvider(name string) string {
 	}
 }
 
+// providerDisplayPrefix returns the human-readable catalog prefix for a provider identifier.
 func providerDisplayPrefix(name string) string {
-	switch strings.ToLower(name) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
 	case ProviderGemini:
 		return "Google Gemini"
 	case ProviderOpenAI:
@@ -312,18 +89,279 @@ func providerDisplayPrefix(name string) string {
 	}
 }
 
-// AvailableModels returns a list of configured default models from active providers.
-// Only providers registered in the registry (i.e. having active credentials) are included.
-// The list is safe for public exposure and contains zero credentials or secrets.
-func (r *Registry) AvailableModels() []core.ModelOption {
+// Request defines parameters for a transport-level LLM text or structured completion call.
+type Request struct {
+	Model          string
+	SystemPrompt   string
+	UserPrompt     string
+	ResponseSchema *Schema
+	SchemaName     string
+	ReasoningLevel string
+}
+
+// Response defines the result returned by an LLM transport client.
+type Response struct {
+	Text       string
+	RawBody    string
+	StatusCode int
+	Usage      core.TokenUsage
+}
+
+// Client defines the vendor-agnostic completion contract implemented by each LLM provider backend.
+type Client interface {
+	Name() string
+	DefaultModel() string
+	Models() []core.ModelOption
+	SupportsStructuredOutput(model string) bool
+	Complete(ctx context.Context, req Request) (*Response, error)
+}
+
+// RegistryOption configures optional settings on a Registry instance.
+type RegistryOption func(*Registry)
+
+// WithLogger configures the structured logger used by Registry for completion telemetry.
+func WithLogger(logger *slog.Logger) RegistryOption {
+	return func(r *Registry) {
+		if logger != nil {
+			r.logger = logger
+		}
+	}
+}
+
+// Registry manages configured LLM Client backends and resolves provider/model selection
+// alongside capability-aware completion tracing.
+type Registry struct {
+	mu              sync.RWMutex
+	clients         map[string]Client
+	defaultProvider string
+	defaultModel    string
+	explicitDefault bool
+	logger          *slog.Logger
+}
+
+// NewRegistry constructs an injectable LLM Client Registry with optional telemetry configuration.
+func NewRegistry(opts ...RegistryOption) *Registry {
+	r := &Registry{
+		clients: make(map[string]Client),
+		logger:  slog.Default(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
+	return r
+}
+
+// Register adds an LLM Client to the registry and updates default provider selection when unset.
+func (r *Registry) Register(client Client) {
+	if r == nil || client == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.clients == nil {
+		r.clients = make(map[string]Client)
+	}
+	name := strings.ToLower(strings.TrimSpace(client.Name()))
+	r.clients[name] = client
+
+	if !r.explicitDefault {
+		r.recomputeDefaultLocked()
+	}
+}
+
+// recomputeDefaultLocked selects the highest-priority registered client and its default model.
+func (r *Registry) recomputeDefaultLocked() {
+	priority := []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderOllama, ProviderCompat, ProviderCompatAlt}
+	for _, pName := range priority {
+		if client, ok := r.clients[pName]; ok {
+			r.defaultProvider = pName
+			if pName == ProviderCompatAlt {
+				r.defaultProvider = ProviderCompat
+			}
+			r.defaultModel = resolvedClientDefaultModel(client, r.defaultProvider)
+			return
+		}
+	}
+	if r.defaultProvider == "" {
+		for name, client := range r.clients {
+			r.defaultProvider = name
+			r.defaultModel = resolvedClientDefaultModel(client, name)
+			return
+		}
+	}
+}
+
+// resolvedClientDefaultModel returns client.DefaultModel() when non-blank, otherwise the provider fallback.
+func resolvedClientDefaultModel(client Client, providerName string) string {
+	if client != nil {
+		if dm := strings.TrimSpace(client.DefaultModel()); dm != "" {
+			return dm
+		}
+	}
+	return DefaultModelForProvider(providerName)
+}
+
+// Client returns the named registered Client, resolving compat aliases when needed.
+func (r *Registry) Client(name string) (Client, error) {
+	if r == nil {
+		return nil, ErrNoProviders
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	norm := strings.ToLower(strings.TrimSpace(name))
+	if c, ok := r.clients[norm]; ok {
+		return c, nil
+	}
+
+	switch norm {
+	case ProviderCompatAlt:
+		if c, ok := r.clients[ProviderCompat]; ok {
+			return c, nil
+		}
+	case ProviderCompat:
+		if c, ok := r.clients[ProviderCompatAlt]; ok {
+			return c, nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, name)
+}
+
+// List returns a sorted slice of registered provider identifiers.
+func (r *Registry) List() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	keys := make([]string, 0, len(r.clients))
+	for k := range r.clients {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// DefaultProvider returns the active default provider identifier.
+func (r *Registry) DefaultProvider() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.defaultProvider
+}
+
+// DefaultModel returns the active default model identifier.
+func (r *Registry) DefaultModel() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.defaultModel
+}
+
+// SetDefault explicitly overrides the registry's default provider and model.
+func (r *Registry) SetDefault(provider, model string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.defaultProvider = strings.ToLower(strings.TrimSpace(provider))
+	r.defaultModel = strings.TrimSpace(model)
+	r.explicitDefault = true
+}
+
+// Resolve selects the active Client and model according to request, branch, and registry defaults.
+func (r *Registry) Resolve(req core.GenerationRequest, _ *core.Preset, _ *core.Profile) (Client, string, error) {
+	if r == nil {
+		return nil, "", ErrNoProviders
+	}
+	r.mu.RLock()
+	hasClients := len(r.clients) > 0
+	r.mu.RUnlock()
+
+	if !hasClients {
+		return nil, "", ErrNoProviders
+	}
+
+	client, err := r.resolveClient(req)
+	if err != nil {
+		return nil, "", err
+	}
+	modelName := r.resolveModel(req, client)
+	return client, modelName, nil
+}
+
+// resolveClient resolves the target Client from branch override, registry default, or sorted client list.
+func (r *Registry) resolveClient(req core.GenerationRequest) (Client, error) {
+	providerName := strings.TrimSpace(req.BranchContext.ProviderOverride)
+	if providerName == "" {
+		providerName = r.DefaultProvider()
+	}
+	if providerName == "" {
+		list := r.List()
+		if len(list) > 0 {
+			providerName = list[0]
+		}
+	}
+	return r.Client(providerName)
+}
+
+// resolveModel resolves the target model using request override, branch override, registry default, or client default.
+func (r *Registry) resolveModel(req core.GenerationRequest, client Client) string {
+	if m := strings.TrimSpace(req.Model); m != "" {
+		return m
+	}
+	if m := strings.TrimSpace(req.BranchContext.ModelOverride); m != "" {
+		return m
+	}
+	if defMod := r.DefaultModel(); defMod != "" && r.DefaultProvider() == client.Name() {
+		return defMod
+	}
+	return resolvedClientDefaultModel(client, client.Name())
+}
+
+// AvailableModels returns configured model options from all active clients without exposing credentials.
+func (r *Registry) AvailableModels() []core.ModelOption {
+	if r == nil {
+		return []core.ModelOption{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	providers := r.sortedCanonicalProvidersLocked()
 	var models []core.ModelOption
 
-	providers := make([]string, 0, len(r.providers))
-	seen := make(map[string]bool)
-	for name := range r.providers {
+	for _, p := range providers {
+		client := r.lookupProviderLocked(p)
+		if client != nil {
+			if customCatalog := client.Models(); len(customCatalog) > 0 {
+				models = append(models, r.markCatalogDefaultsLocked(p, client.DefaultModel(), customCatalog)...)
+				continue
+			}
+		}
+		models = append(models, r.fallbackModelOptionLocked(p))
+	}
+
+	if models == nil {
+		return []core.ModelOption{}
+	}
+	return models
+}
+
+// sortedCanonicalProvidersLocked deduplicates compat aliases and returns sorted provider keys.
+func (r *Registry) sortedCanonicalProvidersLocked() []string {
+	providers := make([]string, 0, len(r.clients))
+	seen := make(map[string]bool, len(r.clients))
+	for name := range r.clients {
 		canonical := name
 		if canonical == ProviderCompatAlt {
 			canonical = ProviderCompat
@@ -334,48 +372,108 @@ func (r *Registry) AvailableModels() []core.ModelOption {
 		}
 	}
 	sort.Strings(providers)
-
-	for _, p := range providers {
-		prov, ok := r.providers[p]
-		if !ok && p == ProviderCompat {
-			prov = r.providers[ProviderCompatAlt]
-		}
-		if prov != nil {
-			if customCatalog := prov.Models(); len(customCatalog) > 0 {
-				defMod := prov.DefaultModel()
-				for _, item := range customCatalog {
-					cp := item
-					cp.IsDefault = (r.defaultProvider == p && (r.defaultModel == cp.Model || (r.defaultModel == "" && cp.Model == defMod)))
-					models = append(models, cp)
-				}
-				continue
-			}
-		}
-
-		defMod := defaultModelForProvider(p)
-		isDefault := ((r.defaultProvider == p || (p == ProviderCompat && r.defaultProvider == ProviderCompatAlt)) &&
-			(r.defaultModel == defMod || r.defaultModel == ""))
-		models = append(models, core.ModelOption{
-			Provider:    p,
-			Model:       defMod,
-			DisplayName: fmt.Sprintf("%s — %s", providerDisplayPrefix(p), defMod),
-			IsDefault:   isDefault,
-		})
-	}
-
-	if models == nil {
-		models = []core.ModelOption{}
-	}
-	return models
+	return providers
 }
 
-// Compile-time interface assertions ensuring all concrete provider adapters satisfy core.LLMClient
-// and Registry satisfies core.ModelEnumerator.
-var (
-	_ core.LLMClient       = (*GeminiProvider)(nil)
-	_ core.LLMClient       = (*OpenAIProvider)(nil)
-	_ core.LLMClient       = (*AnthropicProvider)(nil)
-	_ core.LLMClient       = (*OllamaProvider)(nil)
-	_ core.LLMClient       = (*CompatProvider)(nil)
-	_ core.ModelEnumerator = (*Registry)(nil)
-)
+// lookupProviderLocked fetches the Client matching a canonical provider name under read lock.
+func (r *Registry) lookupProviderLocked(canonical string) Client {
+	if client, ok := r.clients[canonical]; ok {
+		return client
+	}
+	if canonical == ProviderCompat {
+		return r.clients[ProviderCompatAlt]
+	}
+	return nil
+}
+
+// markCatalogDefaultsLocked clones a custom client catalog and marks the matching default model.
+func (r *Registry) markCatalogDefaultsLocked(provider, clientDefault string, catalog []core.ModelOption) []core.ModelOption {
+	out := make([]core.ModelOption, len(catalog))
+	for i, item := range catalog {
+		item.IsDefault = r.defaultProvider == provider &&
+			(r.defaultModel == item.Model || (r.defaultModel == "" && item.Model == clientDefault))
+		out[i] = item
+	}
+	return out
+}
+
+// fallbackModelOptionLocked synthesizes a default ModelOption when a client omits a catalog.
+func (r *Registry) fallbackModelOptionLocked(provider string) core.ModelOption {
+	defMod := DefaultModelForProvider(provider)
+	isCompatDefault := provider == ProviderCompat && r.defaultProvider == ProviderCompatAlt
+	isDefault := (r.defaultProvider == provider || isCompatDefault) &&
+		(r.defaultModel == defMod || r.defaultModel == "")
+	return core.ModelOption{
+		Provider:    provider,
+		Model:       defMod,
+		DisplayName: fmt.Sprintf("%s — %s", providerDisplayPrefix(provider), defMod),
+		IsDefault:   isDefault,
+	}
+}
+
+// Complete dispatches a completion request through client while emitting structured telemetry logs.
+func (r *Registry) Complete(ctx context.Context, client Client, operation string, req Request) (resp *Response, retErr error) {
+	if r == nil || client == nil {
+		return nil, ErrNoProviders
+	}
+
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = resolvedClientDefaultModel(client, client.Name())
+	}
+	req.Model = model
+
+	if strings.TrimSpace(operation) == "" {
+		operation = "CompleteText"
+	}
+
+	logger := r.logger
+	trace := logLLMRequest(ctx, logger, client.Name(), model, operation)
+
+	var statusCode int
+	defer func() {
+		logLLMResponse(ctx, logger, trace, statusCode, retErr)
+	}()
+
+	resp, err := client.Complete(ctx, req)
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	if err != nil {
+		retErr = err
+		return resp, retErr
+	}
+	if resp == nil {
+		retErr = fmt.Errorf("%w: empty completion response from provider %s", ErrInvalidResponse, client.Name())
+		return nil, retErr
+	}
+	return resp, nil
+}
+
+// CompleteStructured dispatches a capability-aware completion request, omitting ResponseSchema when unsupported.
+func (r *Registry) CompleteStructured(ctx context.Context, client Client, operation string, req Request) (string, core.TokenUsage, error) {
+	if r == nil || client == nil {
+		return "", core.TokenUsage{}, ErrNoProviders
+	}
+
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = resolvedClientDefaultModel(client, client.Name())
+	}
+	req.Model = model
+
+	// Strip transport-level schemas when the selected model requires inline prompt instructions instead.
+	if req.ResponseSchema != nil && !client.SupportsStructuredOutput(model) {
+		req.ResponseSchema = nil
+		req.SchemaName = ""
+	}
+
+	resp, err := r.Complete(ctx, client, operation, req)
+	if err != nil {
+		return "", core.TokenUsage{}, err
+	}
+	return strings.TrimSpace(resp.Text), resp.Usage, nil
+}
+
+// _ enforces at compile time that Registry implements core.ModelEnumerator.
+var _ core.ModelEnumerator = (*Registry)(nil)

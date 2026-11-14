@@ -8,7 +8,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// shortIDCharset defines the lowercase alphanumeric alphabet used for compact deterministic IDs.
 const shortIDCharset = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+// shortIDLength specifies the character length of generated short IDs.
 const shortIDLength = 6
 
 // GenerateID generates a canonical persistent UUID identifier, optionally prefixed by an entity category tag.
@@ -141,13 +144,14 @@ func Slugify(s string) string {
 	lastHyphen := false
 	for _, r := range s {
 		r = unaccent(r)
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
 			b.WriteRune(r)
 			lastHyphen = false
-		} else if r >= 'A' && r <= 'Z' {
+		case r >= 'A' && r <= 'Z':
 			b.WriteRune(r + ('a' - 'A'))
 			lastHyphen = false
-		} else if r == '-' || r == '_' || r == ' ' || r == '.' || r == '/' {
+		case r == '-' || r == '_' || r == ' ' || r == '.' || r == '/':
 			if !lastHyphen && b.Len() > 0 {
 				b.WriteByte('-')
 				lastHyphen = true

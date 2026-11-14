@@ -1,12 +1,16 @@
 package core_test
 
 import (
+	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 // TestPackageDocCommentConsistency verifies that:
@@ -121,6 +125,173 @@ func TestPackageDocCommentConsistency(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSymbolDocComments enforces that every exported and unexported symbol (function, method,
+// type, constant, and package-level variable) plus every grouped const/var block in non-test
+// Go files carries a doc comment starting with the exact identifier name.
+func TestSymbolDocComments(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	pkgDirs := discoverPackageDirectories(t, repoRoot)
+	fset := token.NewFileSet()
+	var violations []string
+
+	for _, dir := range pkgDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("failed to read dir %s: %v", dir, err)
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+
+			filePath := filepath.Join(dir, entry.Name())
+			relPath, relErr := filepath.Rel(repoRoot, filePath)
+			if relErr != nil {
+				relPath = filePath
+			}
+
+			f, parseErr := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+			if parseErr != nil {
+				t.Fatalf("failed to parse %s: %v", relPath, parseErr)
+			}
+
+			violations = append(violations, collectFileDocViolations(fset, relPath, f)...)
+		}
+	}
+
+	if len(violations) > 0 {
+		t.Errorf("found %d symbol doc comment violation(s):\n%s", len(violations), strings.Join(violations, "\n"))
+	}
+}
+
+// hasSymbolDocPrefix reports whether doc is non-nil and starts with name followed by a non-identifier rune.
+func hasSymbolDocPrefix(doc *ast.CommentGroup, name string) bool {
+	if doc == nil {
+		return false
+	}
+	text := strings.TrimSpace(doc.Text())
+	if !strings.HasPrefix(text, name) || len(text) <= len(name) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(text[len(name):])
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+}
+
+// hasNonEmptyDoc reports whether doc contains non-whitespace commentary.
+func hasNonEmptyDoc(doc *ast.CommentGroup) bool {
+	return doc != nil && strings.TrimSpace(doc.Text()) != ""
+}
+
+// collectFileDocViolations inspects all top-level declarations in a single parsed AST file.
+func collectFileDocViolations(fset *token.FileSet, relPath string, f *ast.File) []string {
+	var violations []string
+
+	for _, decl := range f.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if !hasSymbolDocPrefix(d.Doc, d.Name.Name) {
+				line := fset.Position(d.Pos()).Line
+				violations = append(violations, fmt.Sprintf("%s:%d: function %s must have a doc comment starting with %q", relPath, line, d.Name.Name, d.Name.Name))
+			}
+		case *ast.GenDecl:
+			violations = append(violations, collectGenDeclDocViolations(fset, relPath, d)...)
+		}
+	}
+
+	return violations
+}
+
+// collectGenDeclDocViolations checks type, const, and var declarations against AGENTS.md doc rules.
+func collectGenDeclDocViolations(fset *token.FileSet, relPath string, decl *ast.GenDecl) []string {
+	switch decl.Tok {
+	case token.IMPORT:
+		return nil
+	case token.TYPE:
+		return collectTypeDocViolations(fset, relPath, decl)
+	case token.CONST:
+		return collectValueDeclDocViolations(fset, relPath, decl, "const")
+	case token.VAR:
+		if allBlankIdents(decl) {
+			return nil
+		}
+		return collectValueDeclDocViolations(fset, relPath, decl, "var")
+	default:
+		return nil
+	}
+}
+
+// collectTypeDocViolations verifies doc comments on single or grouped type declarations.
+func collectTypeDocViolations(fset *token.FileSet, relPath string, decl *ast.GenDecl) []string {
+	var violations []string
+	for _, spec := range decl.Specs {
+		ts, ok := spec.(*ast.TypeSpec)
+		if !ok {
+			continue
+		}
+		doc := ts.Doc
+		if !decl.Lparen.IsValid() && len(decl.Specs) == 1 {
+			doc = decl.Doc
+		}
+		if !hasSymbolDocPrefix(doc, ts.Name.Name) {
+			line := fset.Position(ts.Pos()).Line
+			violations = append(violations, fmt.Sprintf("%s:%d: type %s must have a doc comment starting with %q", relPath, line, ts.Name.Name, ts.Name.Name))
+		}
+	}
+	return violations
+}
+
+// collectValueDeclDocViolations verifies grouped block headers and per-identifier doc comments on const/var declarations.
+func collectValueDeclDocViolations(fset *token.FileSet, relPath string, decl *ast.GenDecl, kind string) []string {
+	var violations []string
+	grouped := decl.Lparen.IsValid()
+
+	if grouped && !hasNonEmptyDoc(decl.Doc) {
+		line := fset.Position(decl.Pos()).Line
+		violations = append(violations, fmt.Sprintf("%s:%d: grouped %s block must have a leading doc comment", relPath, line, kind))
+	}
+
+	for _, spec := range decl.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		doc := decl.Doc
+		if grouped {
+			doc = vs.Doc
+		}
+		for _, ident := range vs.Names {
+			if ident.Name == "_" {
+				continue
+			}
+			if !hasSymbolDocPrefix(doc, ident.Name) {
+				line := fset.Position(ident.Pos()).Line
+				violations = append(violations, fmt.Sprintf("%s:%d: %s %s must have a doc comment starting with %q", relPath, line, kind, ident.Name, ident.Name))
+			}
+		}
+	}
+
+	return violations
+}
+
+// allBlankIdents reports whether every declared identifier in decl is the blank identifier "_".
+func allBlankIdents(decl *ast.GenDecl) bool {
+	hasAny := false
+	for _, spec := range decl.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		for _, ident := range vs.Names {
+			hasAny = true
+			if ident.Name != "_" {
+				return false
+			}
+		}
+	}
+	return hasAny
 }
 
 func findRepoRoot(t *testing.T) string {

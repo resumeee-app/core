@@ -65,8 +65,8 @@ type JSONResumeWork struct {
 	Location   string   `json:"location,omitempty"`
 }
 
-// GetCompany returns Company if populated, or Name as fallback.
-func (w JSONResumeWork) GetCompany() string {
+// CompanyName returns Name if populated, or Company as fallback.
+func (w JSONResumeWork) CompanyName() string {
 	if w.Name != "" {
 		return w.Name
 	}
@@ -167,6 +167,24 @@ type JSONResumeMeta struct {
 	LastModified string `json:"lastModified,omitempty"`
 }
 
+// knownJSONResumeRootKeys enumerates top-level JSON Resume properties mapped into structured fields.
+var knownJSONResumeRootKeys = map[string]bool{
+	"$schema":      true,
+	"basics":       true,
+	"work":         true,
+	"volunteer":    true,
+	"education":    true,
+	"awards":       true,
+	"certificates": true,
+	"publications": true,
+	"skills":       true,
+	"languages":    true,
+	"interests":    true,
+	"references":   true,
+	"projects":     true,
+	"meta":         true,
+}
+
 // UnmarshalJSON implements custom unmarshaling to capture unmapped top-level properties
 // into the Unmapped map without data loss.
 func (r *JSONResume) UnmarshalJSON(data []byte) error {
@@ -181,26 +199,9 @@ func (r *JSONResume) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	knownKeys := map[string]bool{
-		"$schema":      true,
-		"basics":       true,
-		"work":         true,
-		"volunteer":    true,
-		"education":    true,
-		"awards":       true,
-		"certificates": true,
-		"publications": true,
-		"skills":       true,
-		"languages":    true,
-		"interests":    true,
-		"references":   true,
-		"projects":     true,
-		"meta":         true,
-	}
-
 	unmapped := make(map[string]json.RawMessage)
 	for k, v := range rawMap {
-		if !knownKeys[k] {
+		if !knownJSONResumeRootKeys[k] {
 			unmapped[k] = v
 		}
 	}

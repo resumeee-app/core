@@ -18,16 +18,17 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-type defaultPDFExtractor struct{}
+// Extractor extracts plain text content from PDF documents using ledongthuc/pdf.
+type Extractor struct{}
 
 // NewExtractor constructs a pure-Go PDF text extractor based on ledongthuc/pdf.
-func NewExtractor() core.PDFTextExtractor {
-	return &defaultPDFExtractor{}
+func NewExtractor() *Extractor {
+	return &Extractor{}
 }
 
 // ExtractText validates PDF headers, extracts plain text content from all pages,
 // and enforces domain validation boundaries.
-func (e *defaultPDFExtractor) ExtractText(ctx context.Context, r io.ReaderAt, size int64) (string, error) {
+func (e *Extractor) ExtractText(ctx context.Context, r io.ReaderAt, size int64) (string, error) {
 	if r == nil || size <= 0 {
 		return "", fmt.Errorf("%w: empty file payload", core.ErrValidation)
 	}

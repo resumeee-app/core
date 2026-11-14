@@ -4,8 +4,7 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// LeanProfile represents a sanitized profile header containing only candidate headline and professional summary.
-// It strips internal tenant IDs, configuration parameters, database timestamps, and non-tailoring PII (contact details, name, social links, location).
+// LeanProfile represents a sanitized profile header containing only candidate headline and summary.
 type LeanProfile struct {
 	Headline string `json:"headline,omitempty"`
 	Summary  string `json:"summary,omitempty"`
@@ -31,7 +30,7 @@ type LeanFact struct {
 	Skills    []LeanSkill `json:"skills,omitempty"`
 }
 
-// LeanExperience captures professional work history without internal timestamps, tenant attributes, or non-tailoring administrative metadata.
+// LeanExperience captures work history without internal timestamps or tenant attributes.
 type LeanExperience struct {
 	ID             string              `json:"id"`
 	Company        string              `json:"company"`
@@ -70,7 +69,7 @@ type LeanEducation struct {
 	Facts       []LeanFact `json:"facts,omitempty"`
 }
 
-// LeanCertification captures credentials with short identifier for provenance.
+// LeanCertification captures credentials with compact short identifiers for provenance.
 type LeanCertification struct {
 	ID      string     `json:"id"`
 	Name    string     `json:"name"`
@@ -81,9 +80,6 @@ type LeanCertification struct {
 }
 
 // LeanMainProfile represents the projected, minimal main profile structure for LLM prompts.
-// It excludes internal database fields (user_id, created_at, updated_at, is_global, metadata,
-// main_revision, exported_at) while retaining effective short IDs
-// for provenance validation and grounding.
 type LeanMainProfile struct {
 	Profile        LeanProfile         `json:"profile"`
 	Skills         []LeanSkill         `json:"skills,omitempty"`
@@ -94,7 +90,7 @@ type LeanMainProfile struct {
 	Facts          []LeanFact          `json:"facts,omitempty"`
 }
 
-// projectLeanSkills converts a slice of core.Skill entities into LeanSkill DTOs with short IDs.
+// projectLeanSkills converts core.Skill entities into LeanSkill DTOs with short IDs.
 func projectLeanSkills(skills []core.Skill) []LeanSkill {
 	if len(skills) == 0 {
 		return nil
@@ -113,7 +109,7 @@ func projectLeanSkills(skills []core.Skill) []LeanSkill {
 	return res
 }
 
-// projectLeanFact converts a single core.Fact into a LeanFact DTO with a specified owner short ID.
+// projectLeanFact converts a core.Fact into a LeanFact DTO with the provided owner short ID.
 func projectLeanFact(f core.Fact, ownerID string) LeanFact {
 	var ownerType string
 	if f.OwnerType != "" {
@@ -129,7 +125,7 @@ func projectLeanFact(f core.Fact, ownerID string) LeanFact {
 	}
 }
 
-// projectLeanFacts converts a slice of core.Fact entities into LeanFact DTOs with short IDs.
+// projectLeanFacts converts core.Fact entities into LeanFact DTOs with short IDs.
 func projectLeanFacts(facts []core.Fact, ownerShortID string) []LeanFact {
 	if len(facts) == 0 {
 		return nil
@@ -145,114 +141,123 @@ func projectLeanFacts(facts []core.Fact, ownerShortID string) []LeanFact {
 	return res
 }
 
-// ProjectLeanMainProfile clones and transforms a MainProfileSnapshot so that all entities
-// and facts are projected into a minimal, lean data transfer object. All internal multi-tenancy
-// (user_id), database audit timestamps (created_at, updated_at), database flags (is_global, slug),
-// snapshot tracking (main_revision, exported_at), and arbitrary metadata maps are stripped,
-// while compact short identifiers are retained under "id" for provenance citations.
-//
-// Parameters:
-//   - snap: Authoritative MainProfileSnapshot to project.
-//   - idMap: Map associating canonical UUIDs with compact short IDs.
-//
-// Returns:
-//   - A new LeanMainProfile instance, or nil if snap is nil.
+// ProjectLeanMainProfile projects snap into a minimal DTO stripping multi-tenant,
+// audit, and arbitrary metadata fields while retaining compact short IDs for grounding.
 func ProjectLeanMainProfile(snap *core.MainProfileSnapshot, idMap map[string]string) *LeanMainProfile {
 	if snap == nil {
 		return nil
 	}
-
-	lean := &LeanMainProfile{
+	return &LeanMainProfile{
 		Profile: LeanProfile{
 			Headline: snap.Profile.Headline,
 			Summary:  snap.Profile.Summary,
 		},
+		Skills:         projectLeanSkills(snap.Skills),
+		Experiences:    projectLeanExperiences(snap.Experiences),
+		Projects:       projectLeanProjects(snap.Projects),
+		Education:      projectLeanEducation(snap.Education),
+		Certifications: projectLeanCertifications(snap.Certifications),
+		Facts:          projectTopLevelFacts(snap.Facts, idMap),
 	}
+}
 
-	if len(snap.Skills) > 0 {
-		lean.Skills = projectLeanSkills(snap.Skills)
+// projectLeanExperiences converts work experiences into LeanExperience DTOs with short IDs.
+func projectLeanExperiences(exps []core.WorkExperience) []LeanExperience {
+	if len(exps) == 0 {
+		return nil
 	}
-
-	if len(snap.Experiences) > 0 {
-		exps := make([]LeanExperience, len(snap.Experiences))
-		for i, exp := range snap.Experiences {
-			shortID := exp.EffectiveShortID()
-			exps[i] = LeanExperience{
-				ID:             shortID,
-				Company:        exp.Company,
-				RoleTitle:      exp.RoleTitle,
-				EmploymentType: exp.EmploymentType,
-				StartDate:      exp.StartDate,
-				EndDate:        exp.EndDate,
-				IsCurrent:      exp.IsCurrent,
-				DutiesSummary:  exp.DutiesSummary,
-				Facts:          projectLeanFacts(exp.Facts, shortID),
-				Skills:         projectLeanSkills(exp.Skills),
-			}
+	out := make([]LeanExperience, len(exps))
+	for i, exp := range exps {
+		shortID := exp.EffectiveShortID()
+		out[i] = LeanExperience{
+			ID:             shortID,
+			Company:        exp.Company,
+			RoleTitle:      exp.RoleTitle,
+			EmploymentType: exp.EmploymentType,
+			StartDate:      exp.StartDate,
+			EndDate:        exp.EndDate,
+			IsCurrent:      exp.IsCurrent,
+			DutiesSummary:  exp.DutiesSummary,
+			Facts:          projectLeanFacts(exp.Facts, shortID),
+			Skills:         projectLeanSkills(exp.Skills),
 		}
-		lean.Experiences = exps
 	}
+	return out
+}
 
-	if len(snap.Projects) > 0 {
-		projs := make([]LeanProject, len(snap.Projects))
-		for i, proj := range snap.Projects {
-			shortID := proj.EffectiveShortID()
-			projs[i] = LeanProject{
-				ID:        shortID,
-				Name:      proj.Name,
-				Role:      proj.Role,
-				URL:       proj.URL,
-				StartDate: proj.StartDate,
-				EndDate:   proj.EndDate,
-				Summary:   proj.Summary,
-				Facts:     projectLeanFacts(proj.Facts, shortID),
-				Skills:    projectLeanSkills(proj.Skills),
-			}
+// projectLeanProjects converts portfolio projects into LeanProject DTOs with short IDs.
+func projectLeanProjects(projs []core.Project) []LeanProject {
+	if len(projs) == 0 {
+		return nil
+	}
+	out := make([]LeanProject, len(projs))
+	for i, proj := range projs {
+		shortID := proj.EffectiveShortID()
+		out[i] = LeanProject{
+			ID:        shortID,
+			Name:      proj.Name,
+			Role:      proj.Role,
+			URL:       proj.URL,
+			StartDate: proj.StartDate,
+			EndDate:   proj.EndDate,
+			Summary:   proj.Summary,
+			Facts:     projectLeanFacts(proj.Facts, shortID),
+			Skills:    projectLeanSkills(proj.Skills),
 		}
-		lean.Projects = projs
 	}
+	return out
+}
 
-	if len(snap.Education) > 0 {
-		edus := make([]LeanEducation, len(snap.Education))
-		for i, edu := range snap.Education {
-			shortID := edu.EffectiveShortID()
-			edus[i] = LeanEducation{
-				ID:          shortID,
-				Institution: edu.Institution,
-				Degree:      edu.Degree,
-				Field:       edu.Field,
-				StartDate:   edu.StartDate,
-				EndDate:     edu.EndDate,
-				Score:       edu.Score,
-				Facts:       projectLeanFacts(edu.Facts, shortID),
-			}
+// projectLeanEducation converts academic records into LeanEducation DTOs with short IDs.
+func projectLeanEducation(edus []core.Education) []LeanEducation {
+	if len(edus) == 0 {
+		return nil
+	}
+	out := make([]LeanEducation, len(edus))
+	for i, edu := range edus {
+		shortID := edu.EffectiveShortID()
+		out[i] = LeanEducation{
+			ID:          shortID,
+			Institution: edu.Institution,
+			Degree:      edu.Degree,
+			Field:       edu.Field,
+			StartDate:   edu.StartDate,
+			EndDate:     edu.EndDate,
+			Score:       edu.Score,
+			Facts:       projectLeanFacts(edu.Facts, shortID),
 		}
-		lean.Education = edus
 	}
+	return out
+}
 
-	if len(snap.Certifications) > 0 {
-		certs := make([]LeanCertification, len(snap.Certifications))
-		for i, cert := range snap.Certifications {
-			certs[i] = LeanCertification{
-				ID:      cert.EffectiveShortID(),
-				Name:    cert.Name,
-				Issuer:  cert.Issuer,
-				Date:    cert.Date,
-				URL:     cert.URL,
-				Summary: cert.Summary,
-			}
+// projectLeanCertifications converts certifications into LeanCertification DTOs with short IDs.
+func projectLeanCertifications(certs []core.Certification) []LeanCertification {
+	if len(certs) == 0 {
+		return nil
+	}
+	out := make([]LeanCertification, len(certs))
+	for i, cert := range certs {
+		out[i] = LeanCertification{
+			ID:      cert.EffectiveShortID(),
+			Name:    cert.Name,
+			Issuer:  cert.Issuer,
+			Date:    cert.Date,
+			URL:     cert.URL,
+			Summary: cert.Summary,
 		}
-		lean.Certifications = certs
 	}
+	return out
+}
 
-	if len(snap.Facts) > 0 {
-		facts := make([]LeanFact, len(snap.Facts))
-		for i, f := range snap.Facts {
-			ownerShort := resolveShortID(f.OwnerID, idMap)
-			facts[i] = projectLeanFact(f, ownerShort)
-		}
-		lean.Facts = facts
+// projectTopLevelFacts converts unattached facts using idMap to resolve owner short IDs.
+func projectTopLevelFacts(facts []core.Fact, idMap map[string]string) []LeanFact {
+	if len(facts) == 0 {
+		return nil
 	}
-
-	return lean
+	out := make([]LeanFact, len(facts))
+	for i, f := range facts {
+		ownerShort := resolveShortID(f.OwnerID, idMap)
+		out[i] = projectLeanFact(f, ownerShort)
+	}
+	return out
 }

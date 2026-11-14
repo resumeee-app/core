@@ -7,10 +7,10 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/sanitizer"
 )
 
-func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
+func TestBuildPrompt_ContactSanitizerMasking(t *testing.T) {
 	realName := "Alex Mercer"
 	realEmail := "alex.mercer@cloudsystems.io"
 	realPhone := "+1 (555) 789-0123"
@@ -109,14 +109,14 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 	assertNoPII(t, "UserPrompt", payload.UserPrompt)
 
 	// Verify required obfuscated placeholders are present
-	if !strings.Contains(payload.UserPrompt, privacy.PlaceholderFullName) {
-		t.Errorf("UserPrompt missing PlaceholderFullName %q", privacy.PlaceholderFullName)
+	if !strings.Contains(payload.UserPrompt, sanitizer.PlaceholderFullName) {
+		t.Errorf("UserPrompt missing PlaceholderFullName %q", sanitizer.PlaceholderFullName)
 	}
-	if !strings.Contains(payload.UserPrompt, privacy.PlaceholderEmail) {
-		t.Errorf("UserPrompt missing PlaceholderEmail %q", privacy.PlaceholderEmail)
+	if !strings.Contains(payload.UserPrompt, sanitizer.PlaceholderEmail) {
+		t.Errorf("UserPrompt missing PlaceholderEmail %q", sanitizer.PlaceholderEmail)
 	}
-	if !strings.Contains(payload.UserPrompt, privacy.PlaceholderPhone) {
-		t.Errorf("UserPrompt missing PlaceholderPhone %q", privacy.PlaceholderPhone)
+	if !strings.Contains(payload.UserPrompt, sanitizer.PlaceholderPhone) {
+		t.Errorf("UserPrompt missing PlaceholderPhone %q", sanitizer.PlaceholderPhone)
 	}
 	if strings.Contains(payload.UserPrompt, "https://social.example.com/profile-1") {
 		t.Errorf("UserPrompt should not contain stripped social profile URL placeholder")
@@ -126,9 +126,12 @@ func TestBuildPrompt_ContactPrivacyMasking(t *testing.T) {
 	if req.MainProfile.Profile.FullName != realName {
 		t.Errorf("BuildPrompt mutated caller's MainProfile FullName")
 	}
+	if !strings.Contains(req.MainProfile.Profile.Summary, realName) {
+		t.Errorf("BuildPrompt mutated caller's MainProfile Summary")
+	}
 }
 
-func TestBuildGapAnalysisPrompt_ContactPrivacyMasking(t *testing.T) {
+func TestBuildGapAnalysisPrompt_ContactSanitizerMasking(t *testing.T) {
 	realName := "Samantha Ray"
 	realEmail := "samantha.ray@fintech.net"
 	realPhone := "+1 (555) 999-8888"
@@ -169,7 +172,7 @@ func TestBuildGapAnalysisPrompt_ContactPrivacyMasking(t *testing.T) {
 		t.Errorf("BuildGapAnalysisPrompt leaked candidate Phone %q", realPhone)
 	}
 
-	if !strings.Contains(payload.UserPrompt, privacy.PlaceholderFullName) {
-		t.Errorf("BuildGapAnalysisPrompt missing PlaceholderFullName %q", privacy.PlaceholderFullName)
+	if !strings.Contains(payload.UserPrompt, sanitizer.PlaceholderFullName) {
+		t.Errorf("BuildGapAnalysisPrompt missing PlaceholderFullName %q", sanitizer.PlaceholderFullName)
 	}
 }

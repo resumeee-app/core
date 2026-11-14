@@ -10,7 +10,7 @@ import (
 	"github.com/resumeee-app/resumeee-core/services/worker"
 )
 
-func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
+func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 	ctx := context.Background()
 	env := setupTestWorkerEnv(t)
 
@@ -106,7 +106,7 @@ func TestWorkerPool_TailoringPipeline_PrivacyDeobfuscation(t *testing.T) {
 
 	// Create and enqueue version
 	ver := core.BranchVersion{
-		ID:                "ver-privacy-test",
+		ID:                "ver-sanitizer-test",
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  2,

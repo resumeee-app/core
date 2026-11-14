@@ -10,7 +10,7 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/sanitizer"
 )
 
 func TestPromptTemplates_EmbeddedFilesExist(t *testing.T) {
@@ -109,8 +109,8 @@ func TestBuildGapAnalysisPrompt_Composition(t *testing.T) {
 	if strings.Contains(payload.UserPrompt, "Jane Doe") {
 		t.Errorf("gap analysis user prompt leaked candidate real name 'Jane Doe'")
 	}
-	if strings.Contains(payload.UserPrompt, privacy.PlaceholderFullName) {
-		t.Errorf("gap analysis user prompt should not contain candidate placeholder %q", privacy.PlaceholderFullName)
+	if strings.Contains(payload.UserPrompt, sanitizer.PlaceholderFullName) {
+		t.Errorf("gap analysis user prompt should not contain candidate placeholder %q", sanitizer.PlaceholderFullName)
 	}
 	if !strings.Contains(payload.UserPrompt, "Produce a valid JSON object with top-level key \"gap_report\"") {
 		t.Errorf("gap analysis user prompt missing specific top-level key instructions")
@@ -232,8 +232,8 @@ func TestBuildPrompt_Composition(t *testing.T) {
 	if strings.Contains(payload.UserPrompt, "Alex Mercer") {
 		t.Errorf("user prompt leaked candidate real name 'Alex Mercer'")
 	}
-	if strings.Contains(payload.UserPrompt, privacy.PlaceholderFullName) {
-		t.Errorf("user prompt should not contain candidate placeholder %q", privacy.PlaceholderFullName)
+	if strings.Contains(payload.UserPrompt, sanitizer.PlaceholderFullName) {
+		t.Errorf("user prompt should not contain candidate placeholder %q", sanitizer.PlaceholderFullName)
 	}
 	if !strings.Contains(payload.UserPrompt, "f-1") {
 		t.Errorf("user prompt missing projected short ID in profile data")

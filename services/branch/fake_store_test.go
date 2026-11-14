@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/sanitizer"
 	"github.com/resumeee-app/resumeee-core/seed"
 )
 
@@ -808,22 +808,24 @@ func (s *fakeBranchStore) ListUsageRecords(_ context.Context, userID string, _ i
 type fakePromptCompiler struct{}
 
 func (f *fakePromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.PromptPreview, error) {
-	session := privacy.NewSessionFromRequest(req)
+	session := sanitizer.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
 
-	fullName := obfReq.MainProfile.Profile.FullName
-	if fullName == "" {
-		fullName = privacy.PlaceholderFullName
+	var headline, summary string
+	if obfReq.MainProfile != nil {
+		headline = obfReq.MainProfile.Profile.Headline
+		summary = obfReq.MainProfile.Profile.Summary
 	}
 
-	userPrompt := fmt.Sprintf("Candidate: %s\nTarget Role: %s\nRequirements: %s",
-		fullName,
-		req.BranchContext.TargetRole,
-		req.BranchContext.TargetRequirements,
+	userPrompt := fmt.Sprintf("Headline: %s\nSummary: %s\nTarget Role: %s\nRequirements: %s",
+		headline,
+		summary,
+		obfReq.BranchContext.TargetRole,
+		obfReq.BranchContext.TargetRequirements,
 	)
 	sysPrompt := fmt.Sprintf("Rules: %s\nLanguage: %s",
-		req.GlobalRules,
-		req.TargetLanguage,
+		obfReq.GlobalRules,
+		obfReq.TargetLanguage,
 	)
 
 	return &core.PromptPreview{

@@ -9,7 +9,7 @@ import (
 	"text/template"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/sanitizer"
 )
 
 //go:embed templates/*
@@ -119,7 +119,7 @@ func recordFacts(idMap map[string]string, facts []core.Fact) {
 //   - PromptPayload with populated SystemPrompt and UserPrompt strings, or an error if generation fails.
 func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 	// Obfuscate candidate contact PII before compiling prompts
-	session := privacy.NewSessionFromRequest(req)
+	session := sanitizer.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
 
 	// 1. Build idMap for projecting snapshot, pinned/excluded entities, and prior version
@@ -204,11 +204,11 @@ func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 // BuildGapAnalysisPrompt constructs a targeted prompt payload designed exclusively for evaluating
 // candidate qualifications against target job requirements, avoiding full resume generation overhead.
 func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) {
-	// Obfuscate candidate contact PII before compiling prompts
-	session := privacy.NewSessionFromRequest(req)
-	obfReq := session.ObfuscateRequest(req)
+	// Obfuscate only the snapshot and branch fields projected into the gap analysis prompt
+	session := sanitizer.NewSessionFromSnapshot(req.MainProfile)
+	obfProfile := session.ObfuscateSnapshot(req.MainProfile)
 
-	idMap := buildShortIDMap(obfReq.MainProfile)
+	idMap := buildShortIDMap(obfProfile)
 
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(1024)
@@ -216,16 +216,16 @@ func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) 
 		return nil, fmt.Errorf("failed to render gap analysis system prompt template: %w", err)
 	}
 
-	profileJSONStr, err := serializeProjectedMainProfile(obfReq.MainProfile, idMap)
+	profileJSONStr, err := serializeProjectedMainProfile(obfProfile, idMap)
 	if err != nil {
 		return nil, err
 	}
 
 	ctx := gapAnalysisPromptContext{
-		TargetRole:         strings.TrimSpace(obfReq.BranchContext.TargetRole),
-		TargetCompany:      strings.TrimSpace(obfReq.BranchContext.TargetCompany),
-		TargetRequirements: strings.TrimSpace(obfReq.BranchContext.TargetRequirements),
-		BranchInstructions: strings.TrimSpace(obfReq.BranchContext.BranchInstructions),
+		TargetRole:         session.ObfuscateString(strings.TrimSpace(req.BranchContext.TargetRole)),
+		TargetCompany:      strings.TrimSpace(req.BranchContext.TargetCompany),
+		TargetRequirements: session.ObfuscateString(strings.TrimSpace(req.BranchContext.TargetRequirements)),
+		BranchInstructions: session.ObfuscateString(strings.TrimSpace(req.BranchContext.BranchInstructions)),
 		MainProfileJSON:    profileJSONStr,
 	}
 
@@ -303,13 +303,13 @@ func sanitizeATSPromptValue(content string, stripOuterTag string) string {
 
 // BuildATSExtractionPrompt compiles the Stage 1 ATS extraction system and user prompts,
 // obfuscating any candidate contact PII in the rendered resume text prior to LLM transmission.
-func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *privacy.Session, error) {
+func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *sanitizer.Session, error) {
 	formatUsed, err := core.NormalizeATSFormat(req.FormatUsed)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	session := privacy.NewSessionFromSnapshot(req.MainProfile)
+	session := sanitizer.NewSessionFromSnapshot(req.MainProfile)
 	obfResumeText := sanitizeATSPromptValue(session.ObfuscateString(strings.TrimSpace(req.ResumeText)), "resume_document")
 
 	var sysBuilder strings.Builder
@@ -337,7 +337,7 @@ func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *p
 
 // BuildATSMatchingPrompt compiles the Stage 2 ATS job matching system and user prompts
 // using exclusively the extracted candidate representation from Stage 1 and the target job description.
-func BuildATSMatchingPrompt(branch core.Branch, extracted *core.ATSExtractedCandidate, session *privacy.Session) (*PromptPayload, error) {
+func BuildATSMatchingPrompt(branch core.Branch, extracted *core.ATSExtractedCandidate, session *sanitizer.Session) (*PromptPayload, error) {
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(1024)
 	if err := atsMatchSystemTmpl.Execute(&sysBuilder, nil); err != nil {
@@ -360,7 +360,6 @@ func BuildATSMatchingPrompt(branch core.Branch, extracted *core.ATSExtractedCand
 	targetReqs := strings.TrimSpace(branch.TargetRequirements)
 	if session != nil {
 		targetRole = session.ObfuscateString(targetRole)
-		targetCompany = session.ObfuscateString(targetCompany)
 		targetReqs = session.ObfuscateString(targetReqs)
 	}
 

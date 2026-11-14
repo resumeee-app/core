@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-// allowedCorePackages lists the relative subpackages permitted within the resumeee-core package set.
+// allowedCoreSubpackages lists the relative subpackages permitted within the resumeee-core package set.
 var allowedCoreSubpackages = []string{
 	"seed",
 	"validator",
-	"privacy",
+	"sanitizer",
 	"branch",
 	"profile",
 	"renderer",
@@ -51,12 +51,12 @@ func TestCorePackageSet_ImportBoundaries(t *testing.T) {
 			}
 		}
 	} else if _, err := os.Stat(filepath.Join(repoRoot, "core.go")); err == nil {
-		// Extracted core repo layout: root (.), validator, privacy, services/branch, services/profile, services/renderer
+		// Extracted core repo layout: root (.), validator, sanitizer, services/branch, services/profile, services/renderer
 		extractedSubdirs := []string{
 			".",
 			"seed",
 			"validator",
-			"privacy",
+			"sanitizer",
 			filepath.Join("services", "branch"),
 			filepath.Join("services", "profile"),
 			filepath.Join("services", "renderer"),

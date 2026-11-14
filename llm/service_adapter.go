@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/sanitizer"
 )
 
 // ServiceAdapter adapts an LLM Registry into the core.LLMService and branch domain service interfaces,
@@ -51,7 +51,7 @@ func (a *ServiceAdapter) GenerateTailoredResume(ctx context.Context, req core.Ge
 	if err != nil {
 		return nil, err
 	}
-	session := privacy.NewSessionFromRequest(req)
+	session := sanitizer.NewSessionFromRequest(req)
 	session.DeobfuscateGenerationResponse(resp)
 	return resp, nil
 }
@@ -87,14 +87,14 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 					GapReport *core.GapReport `json:"gap_report"`
 				}
 				if err := json.Unmarshal([]byte(cleaned), &wrapper); err == nil && wrapper.GapReport != nil {
-					session := privacy.NewSessionFromRequest(req)
+					session := sanitizer.NewSessionFromRequest(req)
 					session.DeobfuscateGapReport(wrapper.GapReport)
 					wrapper.GapReport.Normalize()
 					return wrapper.GapReport, nil
 				}
 				var direct core.GapReport
 				if err := json.Unmarshal([]byte(cleaned), &direct); err == nil && (direct.OverallMatchSummary != "" || len(direct.MissingRequirements) > 0 || len(direct.IdentifiedGaps) > 0) {
-					session := privacy.NewSessionFromRequest(req)
+					session := sanitizer.NewSessionFromRequest(req)
 					session.DeobfuscateGapReport(&direct)
 					direct.Normalize()
 					return &direct, nil
@@ -108,7 +108,7 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 	if err != nil {
 		return nil, err
 	}
-	session := privacy.NewSessionFromRequest(req)
+	session := sanitizer.NewSessionFromRequest(req)
 	session.DeobfuscateGenerationResponse(resp)
 	resp.GapReport.Normalize()
 	return &resp.GapReport, nil

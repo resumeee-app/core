@@ -8,7 +8,7 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/privacy"
+	"github.com/resumeee-app/resumeee-core/sanitizer"
 )
 
 type sequencedATSProvider struct {
@@ -86,8 +86,8 @@ func TestBuildATSExtractionPrompt_ObfuscatesPII(t *testing.T) {
 	if strings.Contains(payload.UserPrompt, "jane.doe@example.com") {
 		t.Errorf("user prompt leaked candidate email")
 	}
-	if !strings.Contains(payload.UserPrompt, privacy.PlaceholderFullName) {
-		t.Errorf("expected placeholder %q in user prompt", privacy.PlaceholderFullName)
+	if !strings.Contains(payload.UserPrompt, sanitizer.PlaceholderFullName) {
+		t.Errorf("expected placeholder %q in user prompt", sanitizer.PlaceholderFullName)
 	}
 	if !strings.Contains(payload.UserPrompt, "markdown") {
 		t.Errorf("expected format 'markdown' in user prompt")
@@ -101,9 +101,9 @@ func TestServiceAdapter_SimulateATS_TwoStageFlow(t *testing.T) {
 		responses: []string{
 			`{
 				"extraction_confidence_score": 0.92,
-				"extraction_summary": "All resume sections parsed cleanly for ` + privacy.PlaceholderFullName + `",
+				"extraction_summary": "All resume sections parsed cleanly for ` + sanitizer.PlaceholderFullName + `",
 				"extracted_candidate": {
-					"summary": "` + privacy.PlaceholderFullName + ` is a distributed systems engineer.",
+					"summary": "` + sanitizer.PlaceholderFullName + ` is a distributed systems engineer.",
 					"skills": ["Go", "Kubernetes", "PostgreSQL"],
 					"experiences": [
 						{

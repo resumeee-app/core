@@ -302,6 +302,38 @@ func sanitizeSkillGroups(groups []core.TailoredSkillGroup, validSkills map[strin
 	return sanitized
 }
 
+// verifyGroundedEntity checks whether a tailored entity cites a valid, non-excluded canonical entity,
+// appending the corresponding provenance warning when the entry must be pruned.
+func verifyGroundedEntity(
+	kind string,
+	sourceID string,
+	tailoredLabel string,
+	found bool,
+	origID string,
+	origShortID string,
+	origLabel string,
+	excludedSet map[string]bool,
+	warnings *[]string,
+) bool {
+	if excludedSet[sourceID] {
+		label := tailoredLabel
+		if label == "" && found {
+			label = origLabel
+		}
+		*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded %s '%s' (%s)", kind, sourceID, label))
+		return false
+	}
+	if !found {
+		*warnings = append(*warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded %s '%s'", kind, sourceID))
+		return false
+	}
+	if isExcluded(excludedSet, sourceID, origID, origShortID) {
+		*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded %s '%s' (%s)", kind, sourceID, origLabel))
+		return false
+	}
+	return true
+}
+
 // sanitizeExperiences verifies experience identity, reconciles canonical metadata, and audits bullets.
 func sanitizeExperiences(exps []core.TailoredExperience, idx *snapshotIndex, excludedSet, retained map[string]bool, warnings *[]string) []core.TailoredExperience {
 	if exps == nil {
@@ -310,20 +342,11 @@ func sanitizeExperiences(exps []core.TailoredExperience, idx *snapshotIndex, exc
 	sanitized := make([]core.TailoredExperience, 0, len(exps))
 	for _, exp := range exps {
 		origExp, ok := idx.experiences[exp.SourceEntityID]
-		if excludedSet[exp.SourceEntityID] {
-			company := exp.Company
-			if company == "" && ok {
-				company = origExp.Company
-			}
-			*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded experience '%s' (%s)", exp.SourceEntityID, company))
-			continue
+		var origID, origShortID, origLabel string
+		if ok {
+			origID, origShortID, origLabel = origExp.ID, origExp.EffectiveShortID(), origExp.Company
 		}
-		if !ok {
-			*warnings = append(*warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded experience '%s'", exp.SourceEntityID))
-			continue
-		}
-		if isExcluded(excludedSet, exp.SourceEntityID, origExp.ID, origExp.EffectiveShortID()) {
-			*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded experience '%s' (%s)", exp.SourceEntityID, origExp.Company))
+		if !verifyGroundedEntity("experience", exp.SourceEntityID, exp.Company, ok, origID, origShortID, origLabel, excludedSet, warnings) {
 			continue
 		}
 
@@ -363,20 +386,11 @@ func sanitizeProjects(projs []core.TailoredProject, idx *snapshotIndex, excluded
 	sanitized := make([]core.TailoredProject, 0, len(projs))
 	for _, proj := range projs {
 		origProj, ok := idx.projects[proj.SourceEntityID]
-		if excludedSet[proj.SourceEntityID] {
-			name := proj.Name
-			if name == "" && ok {
-				name = origProj.Name
-			}
-			*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded project '%s' (%s)", proj.SourceEntityID, name))
-			continue
+		var origID, origShortID, origLabel string
+		if ok {
+			origID, origShortID, origLabel = origProj.ID, origProj.EffectiveShortID(), origProj.Name
 		}
-		if !ok {
-			*warnings = append(*warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded project '%s'", proj.SourceEntityID))
-			continue
-		}
-		if isExcluded(excludedSet, proj.SourceEntityID, origProj.ID, origProj.EffectiveShortID()) {
-			*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded project '%s' (%s)", proj.SourceEntityID, origProj.Name))
+		if !verifyGroundedEntity("project", proj.SourceEntityID, proj.Name, ok, origID, origShortID, origLabel, excludedSet, warnings) {
 			continue
 		}
 
@@ -409,20 +423,11 @@ func sanitizeEducation(edus []core.TailoredEducation, idx *snapshotIndex, exclud
 	sanitized := make([]core.TailoredEducation, 0, len(edus))
 	for _, edu := range edus {
 		origEdu, ok := idx.education[edu.SourceEntityID]
-		if excludedSet[edu.SourceEntityID] {
-			inst := edu.Institution
-			if inst == "" && ok {
-				inst = origEdu.Institution
-			}
-			*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded education '%s' (%s)", edu.SourceEntityID, inst))
-			continue
+		var origID, origShortID, origLabel string
+		if ok {
+			origID, origShortID, origLabel = origEdu.ID, origEdu.EffectiveShortID(), origEdu.Institution
 		}
-		if !ok {
-			*warnings = append(*warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded education '%s'", edu.SourceEntityID))
-			continue
-		}
-		if isExcluded(excludedSet, edu.SourceEntityID, origEdu.ID, origEdu.EffectiveShortID()) {
-			*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded education '%s' (%s)", edu.SourceEntityID, origEdu.Institution))
+		if !verifyGroundedEntity("education", edu.SourceEntityID, edu.Institution, ok, origID, origShortID, origLabel, excludedSet, warnings) {
 			continue
 		}
 
@@ -451,20 +456,11 @@ func sanitizeCertifications(certs []core.TailoredCert, idx *snapshotIndex, exclu
 	sanitized := make([]core.TailoredCert, 0, len(certs))
 	for _, cert := range certs {
 		origCert, ok := idx.certifications[cert.SourceEntityID]
-		if excludedSet[cert.SourceEntityID] {
-			name := cert.Name
-			if name == "" && ok {
-				name = origCert.Name
-			}
-			*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded certification '%s' (%s)", cert.SourceEntityID, name))
-			continue
+		var origID, origShortID, origLabel string
+		if ok {
+			origID, origShortID, origLabel = origCert.ID, origCert.EffectiveShortID(), origCert.Name
 		}
-		if !ok {
-			*warnings = append(*warnings, fmt.Sprintf("[UNGROUNDED_ENTITY] pruned ungrounded certification '%s'", cert.SourceEntityID))
-			continue
-		}
-		if isExcluded(excludedSet, cert.SourceEntityID, origCert.ID, origCert.EffectiveShortID()) {
-			*warnings = append(*warnings, fmt.Sprintf("[EXCLUDED_ENTITY] pruned excluded certification '%s' (%s)", cert.SourceEntityID, origCert.Name))
+		if !verifyGroundedEntity("certification", cert.SourceEntityID, cert.Name, ok, origID, origShortID, origLabel, excludedSet, warnings) {
 			continue
 		}
 
@@ -510,45 +506,26 @@ func sanitizeSkillGroup(group core.TailoredSkillGroup, validSkills map[string]co
 		return core.TailoredSkillGroup{}, warnings, false
 	}
 
+	alignedNames := len(group.Skills) == len(group.SourceSkillIDs)
 	var validIDs []string
 	var validSkillNames []string
 
-	if len(group.Skills) == len(group.SourceSkillIDs) {
-		for i, sid := range group.SourceSkillIDs {
-			if _, ok := validSkills[sid]; ok {
-				validIDs = append(validIDs, sid)
+	for i, sid := range group.SourceSkillIDs {
+		if _, ok := validSkills[sid]; ok {
+			validIDs = append(validIDs, sid)
+			if alignedNames {
 				validSkillNames = append(validSkillNames, group.Skills[i])
-			} else {
-				warnings = append(warnings, fmt.Sprintf("[UNGROUNDED_SKILL] pruned ungrounded skill '%s' from category '%s'", sid, group.Category))
 			}
-		}
-	} else {
-		for _, sid := range group.SourceSkillIDs {
-			if _, ok := validSkills[sid]; ok {
-				validIDs = append(validIDs, sid)
-			} else {
-				warnings = append(warnings, fmt.Sprintf("[UNGROUNDED_SKILL] pruned ungrounded skill '%s' from category '%s'", sid, group.Category))
-			}
-		}
-
-		validNameSet := make(map[string]bool, len(validIDs))
-		for _, sid := range validIDs {
-			validNameSet[strings.ToLower(validSkills[sid].Name)] = true
-		}
-		for _, sName := range group.Skills {
-			if validNameSet[strings.ToLower(sName)] {
-				validSkillNames = append(validSkillNames, sName)
-			}
-		}
-		if len(validSkillNames) == 0 && len(validIDs) > 0 {
-			for _, sid := range validIDs {
-				validSkillNames = append(validSkillNames, validSkills[sid].Name)
-			}
+		} else {
+			warnings = append(warnings, fmt.Sprintf("[UNGROUNDED_SKILL] pruned ungrounded skill '%s' from category '%s'", sid, group.Category))
 		}
 	}
 
 	if len(validIDs) == 0 {
 		return core.TailoredSkillGroup{}, warnings, false
+	}
+	if !alignedNames {
+		validSkillNames = reconcileMismatchedSkillNames(group.Skills, validIDs, validSkills)
 	}
 
 	return core.TailoredSkillGroup{
@@ -556,6 +533,30 @@ func sanitizeSkillGroup(group core.TailoredSkillGroup, validSkills map[string]co
 		Skills:         validSkillNames,
 		SourceSkillIDs: validIDs,
 	}, warnings, true
+}
+
+// reconcileMismatchedSkillNames filters display skill names against grounded validIDs, falling back to canonical names.
+func reconcileMismatchedSkillNames(rawNames, validIDs []string, validSkills map[string]core.Skill) []string {
+	validNameSet := make(map[string]bool, len(validIDs))
+	for _, sid := range validIDs {
+		validNameSet[strings.ToLower(validSkills[sid].Name)] = true
+	}
+
+	var matched []string
+	for _, sName := range rawNames {
+		if validNameSet[strings.ToLower(sName)] {
+			matched = append(matched, sName)
+		}
+	}
+	if len(matched) > 0 {
+		return matched
+	}
+
+	fallback := make([]string, 0, len(validIDs))
+	for _, sid := range validIDs {
+		fallback = append(fallback, validSkills[sid].Name)
+	}
+	return fallback
 }
 
 // validateBulletFacts ensures all source facts cited by a bullet exist and belong to the enclosing entity.

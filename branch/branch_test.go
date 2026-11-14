@@ -557,13 +557,13 @@ func TestService_GetAndListBranchesFallbackResolution(t *testing.T) {
 		t.Fatalf("update branch in repo: %v", err)
 	}
 
-	// 1. Service GetBranch must fallback-resolve GapReport
+	// 1. Service Branch must fallback-resolve GapReport
 	fetched, err := env.svc.Branch(ctx, env.defaultUser, b.ID)
 	if err != nil {
-		t.Fatalf("svc.GetBranch failed: %v", err)
+		t.Fatalf("svc.Branch failed: %v", err)
 	}
 	if fetched.GapReport == nil {
-		t.Fatalf("expected svc.GetBranch to fallback-resolve GapReport, got nil")
+		t.Fatalf("expected svc.Branch to fallback-resolve GapReport, got nil")
 	}
 	if fetched.GapReport.MatchScore == nil || *fetched.GapReport.MatchScore != score87 {
 		t.Errorf("expected fallback match score %f, got %v", score87, fetched.GapReport.MatchScore)
@@ -922,17 +922,17 @@ func TestService_EditVersionPreservesGapReport(t *testing.T) {
 	}
 }
 
-type stubLLMService struct {
+type stubGenerator struct {
 	gapReport *core.GapReport
 	genResp   *core.GenerationResponse
 	err       error
 }
 
-func (s *stubLLMService) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
+func (s *stubGenerator) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
 	return s.genResp, s.err
 }
 
-func (s *stubLLMService) GenerateGapAnalysis(_ context.Context, _ core.GenerationRequest) (*core.GapReport, error) {
+func (s *stubGenerator) GenerateGapAnalysis(_ context.Context, _ core.GenerationRequest) (*core.GapReport, error) {
 	if s.gapReport != nil {
 		return s.gapReport, s.err
 	}
@@ -942,7 +942,7 @@ func (s *stubLLMService) GenerateGapAnalysis(_ context.Context, _ core.Generatio
 	return nil, s.err
 }
 
-func (s *stubLLMService) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+func (s *stubGenerator) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
 	return &core.ATSSimulationResponse{}, s.err
 }
 
@@ -957,10 +957,10 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 	})
 
-	t.Run("analyzes gaps via LLMService and returns deterministic score", func(t *testing.T) {
+	t.Run("analyzes gaps via Generator and returns deterministic score", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 
-		stubLLM := &stubLLMService{
+		stubLLM := &stubGenerator{
 			gapReport: &core.GapReport{
 				OverallMatchSummary: "Decoupled fast analysis completed.",
 				MissingRequirements: []core.GapItem{
@@ -1010,7 +1010,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error and releases quota when LLMService returns a nil report without error", func(t *testing.T) {
+	t.Run("returns error and releases quota when Generator returns a nil report without error", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 		spyQuota := &spyQuotaRepo{}
 
@@ -1021,7 +1021,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 			JobEnqueuer: env.enqueuer,
 			Validator:   provenance.New(),
 			Renderer:    renderer.New(),
-			Generator:   &stubLLMService{}, // GenerateGapAnalysis returns (nil, nil)
+			Generator:   &stubGenerator{}, // GenerateGapAnalysis returns (nil, nil)
 		})
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
@@ -1045,7 +1045,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 	t.Run("normalizes identified_gaps before calculating deterministic match score", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 
-		stubLLM := &stubLLMService{
+		stubLLM := &stubGenerator{
 			gapReport: &core.GapReport{
 				OverallMatchSummary: "Report with only identified_gaps populated.",
 				IdentifiedGaps: []core.GapItem{
@@ -1094,7 +1094,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 			t.Fatalf("CreateBranch failed: %v", err)
 		}
 
-		stubLLM := &stubLLMService{
+		stubLLM := &stubGenerator{
 			gapReport: &core.GapReport{
 				OverallMatchSummary: "Analysis for versionless branch",
 				MissingRequirements: []core.GapItem{
@@ -1117,7 +1117,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		// Reload branch from DB to verify persistence on branch record
 		reloaded, err := env.svc.Branch(ctx, env.defaultUser, created.ID)
 		if err != nil {
-			t.Fatalf("GetBranch failed: %v", err)
+			t.Fatalf("Branch failed: %v", err)
 		}
 		if reloaded.GapReport == nil {
 			t.Fatalf("expected GapReport to be persisted directly on versionless branch")
@@ -1144,14 +1144,14 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		// Update branch with TargetRequirements containing "Go"
 		branchRec, err := env.svc.Branch(ctx, env.defaultUser, env.branchID)
 		if err != nil {
-			t.Fatalf("GetBranch failed: %v", err)
+			t.Fatalf("Branch failed: %v", err)
 		}
 		branchRec.TargetRequirements = "Must know Go, Distributed Systems, and Raft"
 		if _, err := env.svc.UpdateBranch(ctx, branchRec); err != nil {
 			t.Fatalf("UpdateBranch failed: %v", err)
 		}
 
-		stubLLM := &stubLLMService{
+		stubLLM := &stubGenerator{
 			gapReport: &core.GapReport{
 				OverallMatchSummary: "Coverage test",
 				MissingRequirements: []core.GapItem{
@@ -1187,7 +1187,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		prof.Email = "grace.hopper@navy.mil"
 		_ = env.profileRepo.UpsertProfile(ctx, prof)
 
-		stubLLM := &stubLLMService{
+		stubLLM := &stubGenerator{
 			gapReport: &core.GapReport{
 				OverallMatchSummary: realName + " matches compiler design requirements.",
 				StrategicRecommendations: []string{
@@ -1465,7 +1465,7 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 	}
 
 	stubLLM := &stubATSSimulator{
-		stubLLMService: stubLLMService{
+		stubGenerator: stubGenerator{
 			gapReport: &core.GapReport{OverallMatchSummary: "Quota test gap report"},
 		},
 	}
@@ -1582,7 +1582,7 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 }
 
 type stubATSSimulator struct {
-	stubLLMService
+	stubGenerator
 	mu      sync.Mutex
 	atsResp *core.ATSSimulationResponse
 	atsErr  error
@@ -1678,7 +1678,7 @@ func TestService_SimulateATS(t *testing.T) {
 	t.Run("Rejects when version is not completed", func(t *testing.T) {
 		b, err := env.svc.Branch(ctx, env.defaultUser, env.branchID)
 		if err != nil {
-			t.Fatalf("GetBranch failed: %v", err)
+			t.Fatalf("Branch failed: %v", err)
 		}
 		b.TargetRequirements = "Strong Go, Kubernetes, and distributed systems architecture."
 		if _, err := env.svc.UpdateBranch(ctx, b); err != nil {
@@ -1747,7 +1747,7 @@ func TestService_SimulateATS(t *testing.T) {
 		// Verify parent branch has v1's ATS score
 		bAfterV1, err := svc.Branch(ctx, env.defaultUser, env.branchID)
 		if err != nil {
-			t.Fatalf("GetBranch failed: %v", err)
+			t.Fatalf("Branch failed: %v", err)
 		}
 		if bAfterV1.ATSScore == nil || bAfterV1.ATSScore.JobMatchingScore != 87.0 {
 			t.Errorf("expected branch ATSScore 87.0, got %+v", bAfterV1.ATSScore)
@@ -1772,7 +1772,7 @@ func TestService_SimulateATS(t *testing.T) {
 
 		bOnV2, err := svc.Branch(ctx, env.defaultUser, env.branchID)
 		if err != nil {
-			t.Fatalf("GetBranch on v2 failed: %v", err)
+			t.Fatalf("Branch on v2 failed: %v", err)
 		}
 		if bOnV2.ATSScore != nil {
 			t.Errorf("expected branch ATSScore to be nil when newly completed v2 is active, got %+v", bOnV2.ATSScore)
@@ -1799,7 +1799,7 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 	})
 
-	t.Run("Propagates GetSnapshot error to prevent cleartext PII transmission", func(t *testing.T) {
+	t.Run("Propagates Snapshot error to prevent cleartext PII transmission", func(t *testing.T) {
 		vSnap := &core.BranchVersion{
 			ID:               "ver-ats-snap-err",
 			BranchID:         env.branchID,
@@ -1953,7 +1953,7 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 	})
 
-	t.Run("Falls back deterministically when LLMService is nil and formats Projects and Certifications", func(t *testing.T) {
+	t.Run("Falls back deterministically when Generator is nil and formats Projects and Certifications", func(t *testing.T) {
 		vDet := &core.BranchVersion{
 			ID:               "ver-ats-deterministic",
 			BranchID:         env.branchID,

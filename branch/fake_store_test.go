@@ -79,7 +79,7 @@ func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchSt
 	return s
 }
 
-// --- BranchRepository ---
+// --- BranchStore ---
 
 func (s *fakeBranchStore) CreateBranch(_ context.Context, branch *core.Branch) error {
 	s.mu.Lock()
@@ -337,7 +337,7 @@ func (s *fakeBranchStore) FailInterruptedVersions(_ context.Context, reason stri
 	return nil
 }
 
-// --- ProfileRepository ---
+// --- ProfileStore & CareerStore ---
 
 func (s *fakeBranchStore) Profile(_ context.Context, userID string) (*core.Profile, error) {
 	s.mu.Lock()
@@ -629,7 +629,7 @@ func (s *fakeBranchStore) UpdateCertification(_ context.Context, _ *core.Certifi
 }
 func (s *fakeBranchStore) DeleteCertification(_ context.Context, _, _ string) error { return nil }
 
-// --- PresetRepository ---
+// --- PresetStore ---
 
 func (s *fakeBranchStore) Preset(_ context.Context, userID, id string) (*core.Preset, error) {
 	s.mu.Lock()
@@ -685,7 +685,7 @@ func (s *fakeBranchStore) DeletePreset(_ context.Context, _, id string) error {
 	return nil
 }
 
-// --- TemplateRepository ---
+// --- TemplateStore ---
 
 func (s *fakeBranchStore) Template(_ context.Context, userID, id string) (*core.TemplateSet, error) {
 	s.mu.Lock()
@@ -741,7 +741,7 @@ func (s *fakeBranchStore) DeleteTemplate(_ context.Context, _, id string) error 
 	return nil
 }
 
-// --- QuotaRepository ---
+// --- QuotaStore ---
 
 func (s *fakeBranchStore) Quota(_ context.Context, userID string) (*core.TenantQuota, error) {
 	return &core.TenantQuota{

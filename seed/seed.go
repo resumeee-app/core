@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"sync"
 	"time"
 
@@ -370,10 +371,12 @@ func renderDefaultFallback(_ *core.TemplateSet, profile *core.Profile, _ *core.T
 	if profile != nil && profile.Headline != "" {
 		headline = profile.Headline
 	}
-	html := fmt.Sprintf("<!DOCTYPE html><html><head><title>%s - Resume</title></head><body><h1>%s</h1><p>%s</p></body></html>", name, name, headline)
+	escapedName := html.EscapeString(name)
+	escapedHeadline := html.EscapeString(headline)
+	htmlOut := fmt.Sprintf("<!DOCTYPE html><html><head><title>%s - Resume</title></head><body><h1>%s</h1><p>%s</p></body></html>", escapedName, escapedName, escapedHeadline)
 	md := fmt.Sprintf("# %s\n\n%s\n", name, headline)
 	txt := fmt.Sprintf("%s\n%s\n", name, headline)
-	return html, md, txt
+	return htmlOut, md, txt
 }
 
 // DefaultData idempotently populates built-in templates, presets, global skills,

@@ -45,7 +45,7 @@ func (s *Store) Template(_ context.Context, userID, id string) (*core.TemplateSe
 	return clone(tmpl), nil
 }
 
-// CreateTemplate validates and persists a new template set.
+// CreateTemplate persists a new non-nil template set when its ID is not already present.
 func (s *Store) CreateTemplate(_ context.Context, tmpl *core.TemplateSet) error {
 	if tmpl == nil {
 		return fmt.Errorf("%w: template set cannot be nil", core.ErrValidation)

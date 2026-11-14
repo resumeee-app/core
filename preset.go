@@ -84,3 +84,5 @@ type PresetStore interface {
 	UpdatePreset(ctx context.Context, preset *Preset) error
 	DeletePreset(ctx context.Context, userID, id string) error
 }
+
+var _ Normalizable = (*Preset)(nil)

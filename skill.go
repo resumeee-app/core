@@ -180,6 +180,33 @@ func recordStandaloneFactsUsage(usages map[string]SkillUsage, facts []Fact) {
 	}
 }
 
+// recordEntitySkillsAndFactsUsage records direct and effective skill associations for an entity and its child facts.
+func recordEntitySkillsAndFactsUsage(
+	usages map[string]SkillUsage,
+	entityID string,
+	skills []Skill,
+	facts []Fact,
+	applyDirect func(u *SkillUsage, id string),
+	applyEffective func(u *SkillUsage, id string),
+) {
+	for _, sk := range skills {
+		if u, exists := usages[sk.ID]; exists {
+			applyDirect(&u, entityID)
+			applyEffective(&u, entityID)
+			usages[sk.ID] = u
+		}
+	}
+	for _, f := range facts {
+		for _, sk := range f.Skills {
+			if u, exists := usages[sk.ID]; exists {
+				u.DirectInFacts = appendUniqueID(u.DirectInFacts, f.ID)
+				applyEffective(&u, entityID)
+				usages[sk.ID] = u
+			}
+		}
+	}
+}
+
 // SkillUsages computes bidirectional associations between each unique skill in the snapshot
 // and the entities (experiences, projects, facts) that reference it.
 func (s *MainProfileSnapshot) SkillUsages() map[string]SkillUsage {
@@ -199,42 +226,18 @@ func (s *MainProfileSnapshot) SkillUsages() map[string]SkillUsage {
 		}
 	}
 
+	addDirectExp := func(u *SkillUsage, id string) { u.DirectInExperiences = appendUniqueID(u.DirectInExperiences, id) }
+	addEffExp := func(u *SkillUsage, id string) {
+		u.EffectiveInExperiences = appendUniqueID(u.EffectiveInExperiences, id)
+	}
 	for _, exp := range s.Experiences {
-		for _, sk := range exp.Skills {
-			if u, exists := usages[sk.ID]; exists {
-				u.DirectInExperiences = appendUniqueID(u.DirectInExperiences, exp.ID)
-				u.EffectiveInExperiences = appendUniqueID(u.EffectiveInExperiences, exp.ID)
-				usages[sk.ID] = u
-			}
-		}
-		for _, f := range exp.Facts {
-			for _, sk := range f.Skills {
-				if u, exists := usages[sk.ID]; exists {
-					u.DirectInFacts = appendUniqueID(u.DirectInFacts, f.ID)
-					u.EffectiveInExperiences = appendUniqueID(u.EffectiveInExperiences, exp.ID)
-					usages[sk.ID] = u
-				}
-			}
-		}
+		recordEntitySkillsAndFactsUsage(usages, exp.ID, exp.Skills, exp.Facts, addDirectExp, addEffExp)
 	}
 
+	addDirectProj := func(u *SkillUsage, id string) { u.DirectInProjects = appendUniqueID(u.DirectInProjects, id) }
+	addEffProj := func(u *SkillUsage, id string) { u.EffectiveInProjects = appendUniqueID(u.EffectiveInProjects, id) }
 	for _, proj := range s.Projects {
-		for _, sk := range proj.Skills {
-			if u, exists := usages[sk.ID]; exists {
-				u.DirectInProjects = appendUniqueID(u.DirectInProjects, proj.ID)
-				u.EffectiveInProjects = appendUniqueID(u.EffectiveInProjects, proj.ID)
-				usages[sk.ID] = u
-			}
-		}
-		for _, f := range proj.Facts {
-			for _, sk := range f.Skills {
-				if u, exists := usages[sk.ID]; exists {
-					u.DirectInFacts = appendUniqueID(u.DirectInFacts, f.ID)
-					u.EffectiveInProjects = appendUniqueID(u.EffectiveInProjects, proj.ID)
-					usages[sk.ID] = u
-				}
-			}
-		}
+		recordEntitySkillsAndFactsUsage(usages, proj.ID, proj.Skills, proj.Facts, addDirectProj, addEffProj)
 	}
 
 	for _, edu := range s.Education {

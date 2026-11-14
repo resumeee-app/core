@@ -163,7 +163,8 @@ func (s *Schema) Clone() *Schema {
 		PrefixItems: cloneSchemaSlice(s.PrefixItems),
 	}
 	if s.Required != nil {
-		out.Required = slices.Clone(s.Required)
+		out.Required = make([]string, len(s.Required))
+		copy(out.Required, s.Required)
 	}
 	if s.AdditionalProperties != nil {
 		ap := *s.AdditionalProperties
@@ -208,7 +209,8 @@ func (s *Schema) Strict() *Schema {
 		PrefixItems: strictSchemaSlice(s.PrefixItems),
 	}
 	if s.Required != nil {
-		out.Required = slices.Clone(s.Required)
+		out.Required = make([]string, len(s.Required))
+		copy(out.Required, s.Required)
 	}
 	if s.AdditionalProperties != nil {
 		ap := *s.AdditionalProperties

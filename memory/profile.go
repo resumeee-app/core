@@ -221,25 +221,32 @@ func (s *Store) insertCareerGraphLocked(userID string, snapshot *core.MainProfil
 	}
 	for _, exp := range snapshot.Experiences {
 		exp.UserID = userID
-		s.experiences[exp.ID] = clone(&exp)
 		s.storeOwnerFactsLocked(userID, exp.ID, core.OwnerTypeWorkExperience, exp.Facts)
+		exp.Facts = nil
+		s.experiences[exp.ID] = clone(&exp)
 	}
 	for _, proj := range snapshot.Projects {
 		proj.UserID = userID
-		s.projects[proj.ID] = clone(&proj)
 		s.storeOwnerFactsLocked(userID, proj.ID, core.OwnerTypeProject, proj.Facts)
+		proj.Facts = nil
+		s.projects[proj.ID] = clone(&proj)
 	}
 	for _, edu := range snapshot.Education {
 		edu.UserID = userID
-		s.education[edu.ID] = clone(&edu)
 		s.storeOwnerFactsLocked(userID, edu.ID, core.OwnerTypeEducation, edu.Facts)
+		edu.Facts = nil
+		s.education[edu.ID] = clone(&edu)
 	}
 	for _, cert := range snapshot.Certifications {
 		cert.UserID = userID
 		s.certifications[cert.ID] = clone(&cert)
 	}
 	for _, f := range snapshot.Facts {
+		if f.ID == "" {
+			f.ID = core.GenerateID("fact")
+		}
 		f.UserID = userID
+		f.Skills = s.registerSkillsLocked(userID, f.Skills)
 		s.facts[f.ID] = clone(&f)
 	}
 
@@ -256,9 +263,31 @@ func (s *Store) insertCareerGraphLocked(userID string, snapshot *core.MainProfil
 // storeOwnerFactsLocked writes child facts bound to a parent career entity.
 func (s *Store) storeOwnerFactsLocked(userID, ownerID string, ownerType core.OwnerType, facts []core.Fact) {
 	for _, f := range facts {
+		if f.ID == "" {
+			f.ID = core.GenerateID("fact")
+		}
 		f.UserID = userID
 		f.OwnerID = ownerID
 		f.OwnerType = ownerType
+		f.Skills = s.registerSkillsLocked(userID, f.Skills)
 		s.facts[f.ID] = clone(&f)
 	}
+}
+
+// deleteOwnerFactsLocked removes all facts bound to a deleted parent career entity.
+func (s *Store) deleteOwnerFactsLocked(userID, ownerID string, ownerType core.OwnerType) {
+	for id, f := range s.facts {
+		if f.UserID == userID && f.OwnerID == ownerID && f.OwnerType == ownerType {
+			delete(s.facts, id)
+		}
+	}
+}
+
+// replaceOwnerFactsIfProvidedLocked replaces child facts when an explicit non-nil slice is supplied on update.
+func (s *Store) replaceOwnerFactsIfProvidedLocked(userID, ownerID string, ownerType core.OwnerType, facts []core.Fact) {
+	if facts == nil {
+		return
+	}
+	s.deleteOwnerFactsLocked(userID, ownerID, ownerType)
+	s.storeOwnerFactsLocked(userID, ownerID, ownerType, facts)
 }

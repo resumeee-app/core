@@ -233,3 +233,5 @@ func (d Date) BeforeDate(other Date) bool {
 func (d Date) AfterDate(other Date) bool {
 	return d.After(other.Time)
 }
+
+var _ driver.Valuer = Date{}

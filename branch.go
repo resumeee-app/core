@@ -200,3 +200,8 @@ type BranchStore interface {
 	UpdateVersionATSScore(ctx context.Context, versionID string, atsScore *ATSScore) error
 	FailInterruptedVersions(ctx context.Context, reason string) error
 }
+
+var (
+	_ Normalizable = (*Branch)(nil)
+	_ Normalizable = (*BranchVersion)(nil)
+)

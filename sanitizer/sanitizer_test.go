@@ -914,3 +914,27 @@ func TestSession_URLValidation_ValidAndInvalidBoundaries(t *testing.T) {
 		t.Errorf("bare domain URL failed deobfuscation: got %q", deobf)
 	}
 }
+
+func TestSession_BlankProfileWebsiteFallsBackToMetadata(t *testing.T) {
+	prof := &core.Profile{
+		FullName: "Fallback Candidate",
+		Profiles: []core.SocialLink{
+			{Network: "website", URL: "   "},
+			{Network: "portfolio", URL: ""},
+		},
+		Metadata: map[string]any{
+			"website": "https://fallback-candidate.dev",
+		},
+	}
+
+	session := sanitizer.NewSession(prof)
+	input := "Portfolio hosted at https://fallback-candidate.dev/work."
+	obf := session.ObfuscateString(input)
+	wantObf := "Portfolio hosted at " + sanitizer.PlaceholderWebsite + "/work."
+	if obf != wantObf {
+		t.Fatalf("expected metadata website fallback obfuscation %q, got %q", wantObf, obf)
+	}
+	if deobf := session.DeobfuscateString(obf); deobf != input {
+		t.Errorf("expected round-trip deobfuscation %q, got %q", input, deobf)
+	}
+}

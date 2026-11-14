@@ -11,17 +11,11 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// TestDomainPurity_ZeroGORMImports verifies that internal/domain contains zero imports of gorm.io/gorm.
+// TestDomainPurity_ZeroGORMImports verifies that root package core contains zero imports of gorm.io/gorm.
 func TestDomainPurity_ZeroGORMImports(t *testing.T) {
-	wd, err := os.Getwd()
+	domainDir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("failed to get current working directory: %v", err)
-	}
-
-	// Find core root dir (or internal/domain in monorepo)
-	domainDir := wd
-	if _, err := os.Stat(filepath.Join(domainDir, "core.go")); err != nil && filepath.Base(domainDir) != "domain" {
-		domainDir = filepath.Join(wd, "internal", "domain")
 	}
 
 	entries, err := os.ReadDir(domainDir)
@@ -60,8 +54,8 @@ func TestNormalizableInterface(_ *testing.T) {
 	)
 }
 
-// TestTailoringStrategy_Normalize verifies pure Go normalization for TailoringStrategy.
-func TestTailoringStrategy_Normalize(t *testing.T) {
+// TestPreset_Normalize verifies pure Go normalization for Preset.
+func TestPreset_Normalize(t *testing.T) {
 	theme := "theme-1"
 	preset := &core.Preset{
 		Language:         "",
@@ -91,8 +85,8 @@ func TestTailoringStrategy_Normalize(t *testing.T) {
 	}
 }
 
-// TestTargetResume_Normalize verifies pure Go normalization for TargetResume.
-func TestTargetResume_Normalize(t *testing.T) {
+// TestBranch_Normalize verifies pure Go normalization for Branch.
+func TestBranch_Normalize(t *testing.T) {
 	presetID := "preset-1"
 	resume := &core.Branch{
 		PresetID:           &presetID,
@@ -127,8 +121,8 @@ func TestTargetResume_Normalize(t *testing.T) {
 	}
 }
 
-// TestResumeVersion_Normalize verifies pure Go normalization for ResumeVersion.
-func TestResumeVersion_Normalize(t *testing.T) {
+// TestBranchVersion_Normalize verifies pure Go normalization for BranchVersion.
+func TestBranchVersion_Normalize(t *testing.T) {
 	ver := &core.BranchVersion{
 		BranchID: "branch-1",
 	}

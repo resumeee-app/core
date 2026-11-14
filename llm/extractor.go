@@ -10,11 +10,22 @@ import (
 	"github.com/resumeee-app/resumeee-core/worker"
 )
 
+// CompletionRequest bundles the parameters for a capability-aware Completer invocation.
+type CompletionRequest struct {
+	Operation    string
+	SystemPrompt string
+	UserPrompt   string
+	Provider     string
+	Model        string
+	SchemaName   string
+	Schema       *Schema
+}
+
 // Completer abstracts model catalog discovery and capability-aware completion for resume extraction.
 type Completer interface {
 	AvailableModels() []core.ModelOption
 	SupportsStructuredCompletion(provider, model string) bool
-	Complete(ctx context.Context, operation, systemPrompt, userPrompt, provider, model, schemaName string, schema *Schema) (string, core.TokenUsage, error)
+	Complete(ctx context.Context, req CompletionRequest) (string, core.TokenUsage, error)
 }
 
 // CompleterFunc adapts a simple text completion function to satisfy Completer.
@@ -31,11 +42,11 @@ func (f CompleterFunc) SupportsStructuredCompletion(_, _ string) bool {
 }
 
 // Complete invokes the wrapped function and returns zero reported token usage.
-func (f CompleterFunc) Complete(ctx context.Context, _, systemPrompt, userPrompt, provider, model, _ string, _ *Schema) (string, core.TokenUsage, error) {
+func (f CompleterFunc) Complete(ctx context.Context, req CompletionRequest) (string, core.TokenUsage, error) {
 	if f == nil {
 		return "", core.TokenUsage{}, fmt.Errorf("%w: no completer configured", core.ErrValidation)
 	}
-	text, err := f(ctx, systemPrompt, userPrompt, provider, model)
+	text, err := f(ctx, req.SystemPrompt, req.UserPrompt, req.Provider, req.Model)
 	return text, core.TokenUsage{}, err
 }
 
@@ -107,7 +118,15 @@ func (e *Extractor) ExtractResume(ctx context.Context, text, provider, model str
 		schemaName = "resume_extract_response"
 	}
 
-	rawResponse, usage, err := e.completer.Complete(ctx, "ExtractResume", prompts.SystemPrompt, prompts.UserPrompt, provider, model, schemaName, schema)
+	rawResponse, usage, err := e.completer.Complete(ctx, CompletionRequest{
+		Operation:    "ExtractResume",
+		SystemPrompt: prompts.SystemPrompt,
+		UserPrompt:   prompts.UserPrompt,
+		Provider:     provider,
+		Model:        model,
+		SchemaName:   schemaName,
+		Schema:       schema,
+	})
 	if err != nil {
 		return nil, core.TokenUsage{}, err
 	}
@@ -166,17 +185,17 @@ func (rc *RegistryCompleter) SupportsStructuredCompletion(provider, model string
 }
 
 // Complete resolves the target client and dispatches a capability-aware completion request.
-func (rc *RegistryCompleter) Complete(ctx context.Context, operation, systemPrompt, userPrompt, provider, model, schemaName string, schema *Schema) (string, core.TokenUsage, error) {
-	client, targetModel, err := rc.resolveClientAndModel(provider, model)
+func (rc *RegistryCompleter) Complete(ctx context.Context, req CompletionRequest) (string, core.TokenUsage, error) {
+	client, targetModel, err := rc.resolveClientAndModel(req.Provider, req.Model)
 	if err != nil {
 		return "", core.TokenUsage{}, err
 	}
-	return rc.registry.CompleteStructured(ctx, client, operation, Request{
+	return rc.registry.CompleteStructured(ctx, client, req.Operation, Request{
 		Model:          targetModel,
-		SystemPrompt:   systemPrompt,
-		UserPrompt:     userPrompt,
-		ResponseSchema: schema,
-		SchemaName:     schemaName,
+		SystemPrompt:   req.SystemPrompt,
+		UserPrompt:     req.UserPrompt,
+		ResponseSchema: req.Schema,
+		SchemaName:     req.SchemaName,
 	})
 }
 

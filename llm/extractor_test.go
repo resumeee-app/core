@@ -202,7 +202,7 @@ func (s *stubUsageCompleter) SupportsStructuredCompletion(_, _ string) bool {
 	return false
 }
 
-func (s *stubUsageCompleter) Complete(_ context.Context, _, _, _, _, _, _ string, _ *llm.Schema) (string, core.TokenUsage, error) {
+func (s *stubUsageCompleter) Complete(_ context.Context, _ llm.CompletionRequest) (string, core.TokenUsage, error) {
 	return s.response, s.usage, nil
 }
 
@@ -351,7 +351,13 @@ func TestRegistryExtractor_StructuredVsFallbackRegistryProviders(t *testing.T) {
 			t.Errorf("expected 1 catalog model from RegistryCompleter, got %+v", catModels)
 		}
 		regComp := llm.NewRegistryCompleter(reg)
-		txt, _, err := regComp.Complete(context.Background(), "CompleteText", "sys", "usr", llm.ProviderOpenAI, "gpt-4o", "", nil)
+		txt, _, err := regComp.Complete(context.Background(), llm.CompletionRequest{
+			Operation:    "CompleteText",
+			SystemPrompt: "sys",
+			UserPrompt:   "usr",
+			Provider:     llm.ProviderOpenAI,
+			Model:        "gpt-4o",
+		})
 		if err != nil || txt != resumeJSON {
 			t.Errorf("unexpected regComp.Complete result %q, err=%v", txt, err)
 		}
@@ -402,8 +408,8 @@ func (c *unstructuredCatalogCompleter) AvailableModels() []core.ModelOption {
 	return []core.ModelOption{{Provider: "custom", Model: "custom-m1", DisplayName: "Custom M1", IsDefault: true}}
 }
 
-func (c *unstructuredCatalogCompleter) Complete(_ context.Context, _, sys, _, _, _, _ string, schema *llm.Schema) (string, core.TokenUsage, error) {
-	c.lastSysPrompt = sys
-	c.lastSchema = schema
+func (c *unstructuredCatalogCompleter) Complete(_ context.Context, req llm.CompletionRequest) (string, core.TokenUsage, error) {
+	c.lastSysPrompt = req.SystemPrompt
+	c.lastSchema = req.Schema
 	return c.response, core.TokenUsage{PromptTokens: 12, CompletionTokens: 7, TotalTokens: 19}, nil
 }

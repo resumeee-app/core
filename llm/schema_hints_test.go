@@ -409,8 +409,27 @@ func TestSchemaStrict_CombinatorsEmptyObjectAndIdempotency(t *testing.T) {
 		t.Errorf("expected nested anyOf object branch to set additionalProperties=false")
 	}
 
-	// Empty object in strict mode must serialize `"required":[]`.
+	// Empty object in strict mode must serialize `"required":[]`, including after Clone().
 	if !strings.Contains(string(onceBytes), `"required":[]`) {
 		t.Errorf("expected empty strict object to marshal \"required\":[], got %s", string(onceBytes))
+	}
+	clonedStrictBytes, err := json.Marshal(once.Clone())
+	if err != nil {
+		t.Fatalf("failed to marshal cloned strict schema: %v", err)
+	}
+	if string(onceBytes) != string(clonedStrictBytes) {
+		t.Errorf("expected Clone() to preserve non-nil empty Required slice:\nonce:   %s\ncloned: %s", string(onceBytes), string(clonedStrictBytes))
+	}
+
+	explicitEmptyReq := (&llm.Schema{
+		Type:     llm.SchemaTypes{llm.TypeObject},
+		Required: []string{},
+	}).Clone()
+	explicitBytes, err := json.Marshal(explicitEmptyReq)
+	if err != nil {
+		t.Fatalf("failed to marshal explicit empty Required clone: %v", err)
+	}
+	if !strings.Contains(string(explicitBytes), `"required":[]`) {
+		t.Errorf("expected cloned empty Required slice to marshal \"required\":[], got %s", string(explicitBytes))
 	}
 }

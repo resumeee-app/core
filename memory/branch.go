@@ -71,7 +71,7 @@ func (s *Store) CreateBranch(_ context.Context, branch *core.Branch) error {
 	return nil
 }
 
-// UpdateBranch replaces an existing resume branch record.
+// UpdateBranch replaces a user-owned resume branch record.
 func (s *Store) UpdateBranch(_ context.Context, branch *core.Branch) error {
 	if branch == nil {
 		return core.ErrValidation
@@ -80,7 +80,8 @@ func (s *Store) UpdateBranch(_ context.Context, branch *core.Branch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.branches[branch.ID]; !exists {
+	existing, exists := s.branches[branch.ID]
+	if !exists || existing.UserID != branch.UserID {
 		return core.ErrNotFound
 	}
 	branch.UpdatedAt = time.Now().UTC()
@@ -152,7 +153,7 @@ func (s *Store) Version(_ context.Context, branchID, versionID string) (*core.Br
 	}
 
 	copyV := clone(v)
-	syncVersionIDs(copyV)
+	_ = copyV.Normalize()
 	return copyV, nil
 }
 
@@ -164,7 +165,7 @@ func (s *Store) VersionByNumber(_ context.Context, branchID string, versionNumbe
 	for _, v := range s.versions {
 		if versionMatchesBranch(v, branchID) && v.VersionNumber == versionNumber {
 			copyV := clone(v)
-			syncVersionIDs(copyV)
+			_ = copyV.Normalize()
 			return copyV, nil
 		}
 	}
@@ -180,7 +181,7 @@ func (s *Store) VersionsByIDs(_ context.Context, versionIDs []string) ([]core.Br
 	for _, id := range versionIDs {
 		if v, ok := s.versions[id]; ok {
 			copyV := clone(v)
-			syncVersionIDs(copyV)
+			_ = copyV.Normalize()
 			result = append(result, *copyV)
 		}
 	}
@@ -196,7 +197,7 @@ func (s *Store) ListVersions(_ context.Context, branchID string) ([]core.BranchV
 	for _, v := range s.versions {
 		if versionMatchesBranch(v, branchID) {
 			copyV := clone(v)
-			syncVersionIDs(copyV)
+			_ = copyV.Normalize()
 			list = append(list, *copyV)
 		}
 	}
@@ -293,19 +294,6 @@ func (s *Store) currentMainRevisionLocked(userID string) int64 {
 		return prof.MainRevision
 	}
 	return 0
-}
-
-// syncVersionIDs mirrors non-empty ResumeID/BranchID aliases on a copied BranchVersion.
-func syncVersionIDs(v *core.BranchVersion) {
-	if v == nil {
-		return
-	}
-	if v.ResumeID == "" && v.BranchID != "" {
-		v.ResumeID = v.BranchID
-	}
-	if v.BranchID == "" && v.ResumeID != "" {
-		v.BranchID = v.ResumeID
-	}
 }
 
 // resolveVersionBranchID canonicalizes ResumeID and BranchID on version and returns the branch ID.

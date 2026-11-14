@@ -153,28 +153,24 @@ func (s *Store) findMatchingSkillLocked(userID string, sk core.Skill) *core.Skil
 	return nil
 }
 
-// ListExperiences returns all work experiences owned by userID.
+// ListExperiences returns all work experiences owned by userID with preloaded facts.
 func (s *Store) ListExperiences(_ context.Context, userID string) ([]core.WorkExperience, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []core.WorkExperience
-	for _, exp := range s.experiences {
-		if exp.UserID == userID {
-			list = append(list, *clone(exp))
-		}
-	}
-	return list, nil
+	return s.collectExperiencesLocked(userID), nil
 }
 
-// Experience fetches a user-owned work experience matching ID or ShortID.
+// Experience fetches a user-owned work experience matching ID or ShortID with preloaded facts.
 func (s *Store) Experience(_ context.Context, userID, id string) (*core.WorkExperience, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, exp := range s.experiences {
 		if exp.UserID == userID && matchesEntityID(exp.ID, exp.ShortID, id) {
-			return clone(exp), nil
+			expCopy := clone(exp)
+			expCopy.Facts = s.collectOwnerFactsLocked(userID, exp.ID, core.OwnerTypeWorkExperience)
+			return expCopy, nil
 		}
 	}
 	return nil, core.ErrNotFound
@@ -193,7 +189,10 @@ func (s *Store) CreateExperience(_ context.Context, exp *core.WorkExperience) er
 		return core.ErrConflict
 	}
 	exp.Skills = s.registerSkillsLocked(exp.UserID, exp.Skills)
-	s.experiences[exp.ID] = clone(exp)
+	s.storeOwnerFactsLocked(exp.UserID, exp.ID, core.OwnerTypeWorkExperience, exp.Facts)
+	stored := clone(exp)
+	stored.Facts = nil
+	s.experiences[exp.ID] = stored
 	s.incrementRevisionLocked(exp.UserID)
 	return nil
 }
@@ -212,7 +211,10 @@ func (s *Store) UpdateExperience(_ context.Context, exp *core.WorkExperience) er
 		return core.ErrNotFound
 	}
 	exp.Skills = s.registerSkillsLocked(exp.UserID, exp.Skills)
-	s.experiences[exp.ID] = clone(exp)
+	s.replaceOwnerFactsIfProvidedLocked(exp.UserID, exp.ID, core.OwnerTypeWorkExperience, exp.Facts)
+	stored := clone(exp)
+	stored.Facts = nil
+	s.experiences[exp.ID] = stored
 	s.incrementRevisionLocked(exp.UserID)
 	return nil
 }
@@ -227,32 +229,29 @@ func (s *Store) DeleteExperience(_ context.Context, userID, id string) error {
 		return core.ErrNotFound
 	}
 	delete(s.experiences, id)
+	s.deleteOwnerFactsLocked(userID, id, core.OwnerTypeWorkExperience)
 	s.incrementRevisionLocked(userID)
 	return nil
 }
 
-// ListProjects returns all projects owned by userID.
+// ListProjects returns all projects owned by userID with preloaded facts.
 func (s *Store) ListProjects(_ context.Context, userID string) ([]core.Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []core.Project
-	for _, proj := range s.projects {
-		if proj.UserID == userID {
-			list = append(list, *clone(proj))
-		}
-	}
-	return list, nil
+	return s.collectProjectsLocked(userID), nil
 }
 
-// Project fetches a user-owned project matching ID or ShortID.
+// Project fetches a user-owned project matching ID or ShortID with preloaded facts.
 func (s *Store) Project(_ context.Context, userID, id string) (*core.Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, proj := range s.projects {
 		if proj.UserID == userID && matchesEntityID(proj.ID, proj.ShortID, id) {
-			return clone(proj), nil
+			projCopy := clone(proj)
+			projCopy.Facts = s.collectOwnerFactsLocked(userID, proj.ID, core.OwnerTypeProject)
+			return projCopy, nil
 		}
 	}
 	return nil, core.ErrNotFound
@@ -271,7 +270,10 @@ func (s *Store) CreateProject(_ context.Context, proj *core.Project) error {
 		return core.ErrConflict
 	}
 	proj.Skills = s.registerSkillsLocked(proj.UserID, proj.Skills)
-	s.projects[proj.ID] = clone(proj)
+	s.storeOwnerFactsLocked(proj.UserID, proj.ID, core.OwnerTypeProject, proj.Facts)
+	stored := clone(proj)
+	stored.Facts = nil
+	s.projects[proj.ID] = stored
 	s.incrementRevisionLocked(proj.UserID)
 	return nil
 }
@@ -290,7 +292,10 @@ func (s *Store) UpdateProject(_ context.Context, proj *core.Project) error {
 		return core.ErrNotFound
 	}
 	proj.Skills = s.registerSkillsLocked(proj.UserID, proj.Skills)
-	s.projects[proj.ID] = clone(proj)
+	s.replaceOwnerFactsIfProvidedLocked(proj.UserID, proj.ID, core.OwnerTypeProject, proj.Facts)
+	stored := clone(proj)
+	stored.Facts = nil
+	s.projects[proj.ID] = stored
 	s.incrementRevisionLocked(proj.UserID)
 	return nil
 }
@@ -305,32 +310,29 @@ func (s *Store) DeleteProject(_ context.Context, userID, id string) error {
 		return core.ErrNotFound
 	}
 	delete(s.projects, id)
+	s.deleteOwnerFactsLocked(userID, id, core.OwnerTypeProject)
 	s.incrementRevisionLocked(userID)
 	return nil
 }
 
-// ListEducation returns all education records owned by userID.
+// ListEducation returns all education records owned by userID with preloaded facts.
 func (s *Store) ListEducation(_ context.Context, userID string) ([]core.Education, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var list []core.Education
-	for _, edu := range s.education {
-		if edu.UserID == userID {
-			list = append(list, *clone(edu))
-		}
-	}
-	return list, nil
+	return s.collectEducationLocked(userID), nil
 }
 
-// Education fetches a user-owned education entry matching ID or ShortID.
+// Education fetches a user-owned education entry matching ID or ShortID with preloaded facts.
 func (s *Store) Education(_ context.Context, userID, id string) (*core.Education, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, edu := range s.education {
 		if edu.UserID == userID && matchesEntityID(edu.ID, edu.ShortID, id) {
-			return clone(edu), nil
+			eduCopy := clone(edu)
+			eduCopy.Facts = s.collectOwnerFactsLocked(userID, edu.ID, core.OwnerTypeEducation)
+			return eduCopy, nil
 		}
 	}
 	return nil, core.ErrNotFound
@@ -348,7 +350,10 @@ func (s *Store) CreateEducation(_ context.Context, edu *core.Education) error {
 	if _, exists := s.education[edu.ID]; exists {
 		return core.ErrConflict
 	}
-	s.education[edu.ID] = clone(edu)
+	s.storeOwnerFactsLocked(edu.UserID, edu.ID, core.OwnerTypeEducation, edu.Facts)
+	stored := clone(edu)
+	stored.Facts = nil
+	s.education[edu.ID] = stored
 	s.incrementRevisionLocked(edu.UserID)
 	return nil
 }
@@ -366,7 +371,10 @@ func (s *Store) UpdateEducation(_ context.Context, edu *core.Education) error {
 	if !exists || existing.UserID != edu.UserID {
 		return core.ErrNotFound
 	}
-	s.education[edu.ID] = clone(edu)
+	s.replaceOwnerFactsIfProvidedLocked(edu.UserID, edu.ID, core.OwnerTypeEducation, edu.Facts)
+	stored := clone(edu)
+	stored.Facts = nil
+	s.education[edu.ID] = stored
 	s.incrementRevisionLocked(edu.UserID)
 	return nil
 }
@@ -381,6 +389,7 @@ func (s *Store) DeleteEducation(_ context.Context, userID, id string) error {
 		return core.ErrNotFound
 	}
 	delete(s.education, id)
+	s.deleteOwnerFactsLocked(userID, id, core.OwnerTypeEducation)
 	s.incrementRevisionLocked(userID)
 	return nil
 }

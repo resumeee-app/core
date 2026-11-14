@@ -43,8 +43,8 @@ func TestMemoryStore_Interfaces(t *testing.T) {
 	}
 }
 
-// TestProfileRepository_MainRevisionIncrements asserts that profile mutations increment main revision.
-func TestProfileRepository_MainRevisionIncrements(t *testing.T) {
+// TestProfileStore_MainRevisionIncrements asserts that profile mutations increment main revision.
+func TestProfileStore_MainRevisionIncrements(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-rev-test"
@@ -89,8 +89,8 @@ func TestProfileRepository_MainRevisionIncrements(t *testing.T) {
 	}
 }
 
-// TestProfileRepository_FactsAndSnapshot verifies facts association and snapshot generation.
-func TestProfileRepository_FactsAndSnapshot(t *testing.T) {
+// TestProfileStore_FactsAndSnapshot verifies facts association and snapshot generation.
+func TestProfileStore_FactsAndSnapshot(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-facts-test"
@@ -152,8 +152,8 @@ func TestProfileRepository_FactsAndSnapshot(t *testing.T) {
 	}
 }
 
-// TestProfileRepository_ReplaceCareerGraph verifies atomic replacement of career records.
-func TestProfileRepository_ReplaceCareerGraph(t *testing.T) {
+// TestProfileStore_ReplaceCareerGraph verifies atomic replacement of career records.
+func TestProfileStore_ReplaceCareerGraph(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-replace-test"
@@ -215,8 +215,8 @@ func TestProfileRepository_ReplaceCareerGraph(t *testing.T) {
 	}
 }
 
-// TestPresetRepository_Immutability verifies built-in preset protection.
-func TestPresetRepository_Immutability(t *testing.T) {
+// TestPresetStore_Immutability verifies built-in preset protection.
+func TestPresetStore_Immutability(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-preset-test"
@@ -260,8 +260,8 @@ func TestPresetRepository_Immutability(t *testing.T) {
 	}
 }
 
-// TestPresetRepository_LanguageDefaulting verifies that empty language strings default to DefaultLanguage on Create and Update.
-func TestPresetRepository_LanguageDefaulting(t *testing.T) {
+// TestPresetStore_LanguageDefaulting verifies that empty language strings default to DefaultLanguage on Create and Update.
+func TestPresetStore_LanguageDefaulting(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-lang-test"
@@ -312,8 +312,8 @@ func TestPresetRepository_LanguageDefaulting(t *testing.T) {
 	}
 }
 
-// TestTemplateRepository_Validation verifies template validation on persistence.
-func TestTemplateRepository_Validation(t *testing.T) {
+// TestTemplateStore_Validation verifies template validation on persistence.
+func TestTemplateStore_Validation(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-tmpl-test"
@@ -356,8 +356,8 @@ func TestTemplateRepository_Validation(t *testing.T) {
 	}
 }
 
-// TestBranchRepository_LifecycleAndVersions verifies version sequencing and completion logic.
-func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
+// TestBranchStore_LifecycleAndVersions verifies version sequencing and completion logic.
+func TestBranchStore_LifecycleAndVersions(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-branch-test"
@@ -446,8 +446,8 @@ func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
 	}
 }
 
-// TestPDFParseJobRepository_Lifecycle verifies PDF parse job status updates and crash recovery.
-func TestPDFParseJobRepository_Lifecycle(t *testing.T) {
+// TestPDFJobStore_Lifecycle verifies PDF parse job status updates and crash recovery.
+func TestPDFJobStore_Lifecycle(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-pdf-test"
@@ -778,7 +778,7 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	ctx := context.Background()
 	userID := "quota-user-1"
 
-	// 1. Initial GetQuota creates default quota
+	// 1. Initial Quota creates default quota
 	q, err := store.Quota(ctx, userID)
 	if err != nil {
 		t.Fatalf("failed to get quota: %v", err)
@@ -1031,7 +1031,7 @@ func TestMemoryStore_TemplateImmutability(t *testing.T) {
 	})
 }
 
-func TestMemoryStore_UserRepository(t *testing.T) {
+func TestMemoryStore_UserStore(t *testing.T) {
 	ctx := context.Background()
 	store := setupTestStore(t)
 
@@ -1044,7 +1044,7 @@ func TestMemoryStore_UserRepository(t *testing.T) {
 		}
 	})
 
-	t.Run("GetUser not found returns ErrNotFound", func(t *testing.T) {
+	t.Run("User not found returns ErrNotFound", func(t *testing.T) {
 		_, err := store.User(ctx, "non-existent")
 		if !errors.Is(err, core.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
@@ -1291,4 +1291,157 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
+}
+
+// TestBranchStore_UpdateBranchRejectsForeignUser verifies store-level tenant ownership enforcement on UpdateBranch.
+func TestBranchStore_UpdateBranchRejectsForeignUser(t *testing.T) {
+	ctx := context.Background()
+	store := setupTestStore(t)
+
+	br := &core.Branch{
+		ID:            "br-owner-only",
+		UserID:        "owner-1",
+		Name:          "Original Branch Name",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
+	if err := store.CreateBranch(ctx, br); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+
+	err := store.UpdateBranch(ctx, &core.Branch{
+		ID:            br.ID,
+		UserID:        "attacker-2",
+		Name:          "Hijacked Name",
+		TemplateSetID: core.TemplateStandardCleanID,
+	})
+	if !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when foreign tenant updates branch, got %v", err)
+	}
+
+	fetched, err := store.Branch(ctx, "owner-1", br.ID)
+	if err != nil {
+		t.Fatalf("fetch owner branch: %v", err)
+	}
+	if fetched.Name != "Original Branch Name" {
+		t.Errorf("expected original branch name to be preserved, got %q", fetched.Name)
+	}
+}
+
+// TestCareerStore_InlineFactsSingleSourceOfTruth verifies inline entity facts stay synchronized with s.facts across reads, updates, and deletes.
+func TestCareerStore_InlineFactsSingleSourceOfTruth(t *testing.T) {
+	ctx := context.Background()
+	store := setupTestStore(t)
+	userID := "user-inline-facts"
+
+	if err := store.UpsertProfile(ctx, &core.Profile{ID: "prof-if", UserID: userID, FullName: "Inline Engineer"}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+
+	exp := &core.WorkExperience{
+		ID:        "exp-inline-1",
+		UserID:    userID,
+		Company:   "FactCo",
+		RoleTitle: "Principal Engineer",
+		StartDate: core.NewDate(2023, 1, 1),
+		Facts: []core.Fact{
+			{ID: "fact-inline-1", Statement: "Built zero-downtime migration engine"},
+			{ID: "fact-inline-2", Statement: "Cut p99 latency by 45%"},
+		},
+	}
+	if err := store.CreateExperience(ctx, exp); err != nil {
+		t.Fatalf("create experience with inline facts: %v", err)
+	}
+
+	proj := &core.Project{
+		ID:     "proj-inline-1",
+		UserID: userID,
+		Name:   "OpenRouter",
+		Facts:  []core.Fact{{ID: "fact-proj-1", Statement: "Shipped deterministic routing SDK"}},
+	}
+	if err := store.CreateProject(ctx, proj); err != nil {
+		t.Fatalf("create project with inline facts: %v", err)
+	}
+
+	edu := &core.Education{
+		ID:          "edu-inline-1",
+		UserID:      userID,
+		Institution: "State Tech",
+		Degree:      "B.S. CS",
+		Facts:       []core.Fact{{ID: "fact-edu-1", Statement: "Summa Cum Laude"}},
+	}
+	if err := store.CreateEducation(ctx, edu); err != nil {
+		t.Fatalf("create education with inline facts: %v", err)
+	}
+
+	// Single-entity getters, list getters, and Snapshot must hydrate inline facts from s.facts.
+	fetchedExp, err := store.Experience(ctx, userID, exp.ID)
+	if err != nil {
+		t.Fatalf("get experience: %v", err)
+	}
+	if len(fetchedExp.Facts) != 2 {
+		t.Fatalf("expected 2 hydrated experience facts, got %d", len(fetchedExp.Facts))
+	}
+
+	fetchedProj, err := store.Project(ctx, userID, proj.ID)
+	if err != nil || len(fetchedProj.Facts) != 1 {
+		t.Fatalf("expected 1 hydrated project fact, got err=%v facts=%+v", err, fetchedProj)
+	}
+
+	fetchedEdu, err := store.Education(ctx, userID, edu.ID)
+	if err != nil || len(fetchedEdu.Facts) != 1 {
+		t.Fatalf("expected 1 hydrated education fact, got err=%v facts=%+v", err, fetchedEdu)
+	}
+
+	// Mutating and deleting facts via Fact CRUD must reflect immediately in Experience, ListExperiences, and Snapshot.
+	if err := store.UpdateFact(ctx, &core.Fact{
+		ID:        "fact-inline-1",
+		UserID:    userID,
+		OwnerID:   exp.ID,
+		OwnerType: core.OwnerTypeWorkExperience,
+		Statement: "Built multi-region zero-downtime migration engine",
+	}); err != nil {
+		t.Fatalf("update fact: %v", err)
+	}
+	if err := store.DeleteFact(ctx, userID, "fact-inline-2"); err != nil {
+		t.Fatalf("delete fact: %v", err)
+	}
+
+	// Updating parent experience metadata with nil Facts must preserve remaining facts in s.facts.
+	if err := store.UpdateExperience(ctx, &core.WorkExperience{
+		ID:        exp.ID,
+		UserID:    userID,
+		Company:   "FactCo Global",
+		RoleTitle: "Distinguished Engineer",
+		StartDate: exp.StartDate,
+	}); err != nil {
+		t.Fatalf("update experience metadata: %v", err)
+	}
+
+	exps, err := store.ListExperiences(ctx, userID)
+	if err != nil {
+		t.Fatalf("list experiences: %v", err)
+	}
+	if len(exps) != 1 || len(exps[0].Facts) != 1 || exps[0].Facts[0].Statement != "Built multi-region zero-downtime migration engine" {
+		t.Fatalf("expected updated single fact on listed experience, got %+v", exps)
+	}
+
+	snap, err := store.Snapshot(ctx, userID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(snap.Experiences) != 1 || len(snap.Experiences[0].Facts) != 1 {
+		t.Fatalf("expected 1 fact on snapshot experience, got %+v", snap.Experiences)
+	}
+
+	// Deleting parent experience must clean up its child facts.
+	if err := store.DeleteExperience(ctx, userID, exp.ID); err != nil {
+		t.Fatalf("delete experience: %v", err)
+	}
+	remainingExpFacts, err := store.ListFactsByOwner(ctx, userID, string(core.OwnerTypeWorkExperience), exp.ID)
+	if err != nil {
+		t.Fatalf("list facts by owner: %v", err)
+	}
+	if len(remainingExpFacts) != 0 {
+		t.Errorf("expected 0 experience facts after parent deletion, got %+v", remainingExpFacts)
+	}
 }

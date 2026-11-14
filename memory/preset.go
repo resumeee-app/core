@@ -2,20 +2,14 @@ package memory
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// isBuiltInPreset reports whether p represents an immutable system preset.
-func isBuiltInPreset(p *core.Preset) bool {
-	return p.IsBuiltIn() || strings.HasPrefix(p.ID, "builtin-")
-}
-
 // presetVisibleToUser reports whether p is owned by userID or is a shared built-in preset.
 func presetVisibleToUser(p *core.Preset, userID string) bool {
-	return p.UserID == userID || p.UserID == core.SystemUserID || isBuiltInPreset(p)
+	return p.UserID == userID || p.IsBuiltIn()
 }
 
 // ListPresets returns user-owned and shared built-in presets.
@@ -75,14 +69,14 @@ func (s *Store) UpdatePreset(_ context.Context, preset *core.Preset) error {
 	if preset == nil {
 		return core.ErrValidation
 	}
-	if isBuiltInPreset(preset) {
+	if preset.IsBuiltIn() {
 		return core.ErrStrategyImmutable
 	}
 	existing, exists := s.presets[preset.ID]
 	if !exists || existing.UserID != preset.UserID {
 		return core.ErrNotFound
 	}
-	if isBuiltInPreset(existing) {
+	if existing.IsBuiltIn() {
 		return core.ErrStrategyImmutable
 	}
 	if preset.Language == "" {
@@ -98,14 +92,14 @@ func (s *Store) DeletePreset(_ context.Context, userID, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if strings.HasPrefix(id, "builtin-") || userID == core.SystemUserID {
+	if (core.Preset{ID: id, UserID: userID}).IsBuiltIn() {
 		return core.ErrStrategyImmutable
 	}
 	existing, exists := s.presets[id]
 	if !exists || existing.UserID != userID {
 		return core.ErrNotFound
 	}
-	if isBuiltInPreset(existing) {
+	if existing.IsBuiltIn() {
 		return core.ErrStrategyImmutable
 	}
 	delete(s.presets, id)

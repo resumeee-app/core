@@ -73,7 +73,13 @@ func TestNilGuards_RegistryCompleter(t *testing.T) {
 			if rc.SupportsStructuredCompletion("p", "m") {
 				t.Error("expected SupportsStructuredCompletion=false")
 			}
-			if _, _, err := rc.Complete(context.Background(), "op", "sys", "usr", "p", "m", "", nil); !errors.Is(err, ErrNoProviders) {
+			if _, _, err := rc.Complete(context.Background(), CompletionRequest{
+				Operation:    "op",
+				SystemPrompt: "sys",
+				UserPrompt:   "usr",
+				Provider:     "p",
+				Model:        "m",
+			}); !errors.Is(err, ErrNoProviders) {
 				t.Errorf("expected ErrNoProviders, got %v", err)
 			}
 		})
@@ -101,7 +107,13 @@ func TestNilGuards_ResumeExtraction(t *testing.T) {
 	})
 
 	t.Run("nil CompleterFunc returns ErrValidation", func(t *testing.T) {
-		if _, _, err := CompleterFunc(nil).Complete(ctx, "op", "sys", "usr", "p", "m", "", nil); !errors.Is(err, core.ErrValidation) {
+		if _, _, err := CompleterFunc(nil).Complete(ctx, CompletionRequest{
+			Operation:    "op",
+			SystemPrompt: "sys",
+			UserPrompt:   "usr",
+			Provider:     "p",
+			Model:        "m",
+		}); !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation, got %v", err)
 		}
 	})

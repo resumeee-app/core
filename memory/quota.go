@@ -63,7 +63,7 @@ func (s *Store) ReserveQuota(
 	quota.UpdatedAt = now
 
 	record := &core.LLMUsageRecord{
-		ID:              fmt.Sprintf("usage-%d", time.Now().UnixNano()),
+		ID:              core.GenerateID("usage"),
 		UserID:          userID,
 		Operation:       op,
 		EstimatedTokens: estimatedTokens,

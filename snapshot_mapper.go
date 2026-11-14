@@ -2,30 +2,12 @@ package core
 
 import "strings"
 
-// cloneDate returns a defensive copy of a Date pointer.
-func cloneDate(d *Date) *Date {
-	if d == nil {
+// clonePtr returns a defensive shallow copy of p when non-nil so callers never alias snapshot pointers.
+func clonePtr[T any](p *T) *T {
+	if p == nil {
 		return nil
 	}
-	cp := *d
-	return &cp
-}
-
-// cloneContactDetail returns a defensive copy of a ContactDetail pointer.
-func cloneContactDetail(c *ContactDetail) *ContactDetail {
-	if c == nil {
-		return nil
-	}
-	cp := *c
-	return &cp
-}
-
-// cloneInt returns a defensive copy of an int pointer.
-func cloneInt(i *int) *int {
-	if i == nil {
-		return nil
-	}
-	cp := *i
+	cp := *p
 	return &cp
 }
 
@@ -142,12 +124,12 @@ func mapExperiencesToTailored(exps []WorkExperience, factsByOwner map[string][]F
 			RoleTitle:         exp.RoleTitle,
 			EmploymentType:    exp.EmploymentType,
 			StartDate:         exp.StartDate,
-			EndDate:           cloneDate(exp.EndDate),
+			EndDate:           clonePtr(exp.EndDate),
 			IsCurrent:         exp.IsCurrent,
 			Location:          exp.Location,
 			CompanyLocation:   exp.CompanyLocation,
-			CompanyContact:    cloneContactDetail(exp.CompanyContact),
-			HoursPerWeek:      cloneInt(exp.HoursPerWeek),
+			CompanyContact:    clonePtr(exp.CompanyContact),
+			HoursPerWeek:      clonePtr(exp.HoursPerWeek),
 			SupervisorName:    exp.SupervisorName,
 			SupervisorContact: exp.SupervisorContact,
 			DutiesSummary:     exp.DutiesSummary,
@@ -168,8 +150,8 @@ func mapProjectsToTailored(projs []Project, factsByOwner map[string][]Fact) []Ta
 			Name:           proj.Name,
 			Role:           proj.Role,
 			URL:            proj.URL,
-			StartDate:      cloneDate(proj.StartDate),
-			EndDate:        cloneDate(proj.EndDate),
+			StartDate:      clonePtr(proj.StartDate),
+			EndDate:        clonePtr(proj.EndDate),
 			Summary:        proj.Summary,
 			Bullets:        mapFactsToBullets(facts),
 			Metadata:       CloneMetadata(proj.Metadata),
@@ -188,8 +170,8 @@ func mapEducationToTailored(edus []Education, factsByOwner map[string][]Fact) []
 			Institution:    edu.Institution,
 			Degree:         edu.Degree,
 			Field:          edu.Field,
-			StartDate:      cloneDate(edu.StartDate),
-			EndDate:        cloneDate(edu.EndDate),
+			StartDate:      clonePtr(edu.StartDate),
+			EndDate:        clonePtr(edu.EndDate),
 			Location:       edu.Location,
 			Score:          edu.Score,
 			Bullets:        mapFactsToBullets(facts),
@@ -207,7 +189,7 @@ func mapCertsToTailored(certs []Certification) []TailoredCert {
 			SourceEntityID: cert.ID,
 			Name:           cert.Name,
 			Issuer:         cert.Issuer,
-			Date:           cloneDate(cert.Date),
+			Date:           clonePtr(cert.Date),
 			URL:            cert.URL,
 			Summary:        cert.Summary,
 			Metadata:       CloneMetadata(cert.Metadata),

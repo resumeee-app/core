@@ -167,7 +167,9 @@ func (b *mappingBuilder) addPhoneRule(phone string) {
 func extractRealWebsite(profile core.Profile) string {
 	for _, p := range profile.Profiles {
 		if strings.EqualFold(p.Network, "website") || strings.EqualFold(p.Network, "portfolio") {
-			return strings.TrimSpace(p.URL)
+			if trimmed := strings.TrimSpace(p.URL); trimmed != "" {
+				return trimmed
+			}
 		}
 	}
 	if profile.Metadata != nil {

@@ -8,7 +8,7 @@ Pure Go domain core for **Resumeee** (`github.com/resumeee-app/resumeee-core`), 
 - `seed/` — Database-agnostic seed data, lazy tenant provisioning, and embedded built-in resume `.tmpl` templates (`SeedDefaultData`, `EnsureTenantProvisioned`, `DefaultTemplateSets`, `DefaultPresets`).
 - `llm/` — Prompt templates, prompt compiler (`BuildPrompt`), structured JSON schemas, PII-aware `ServiceAdapter`, `ResumeExtractor`, `ClientProvider` (adapting pure transport `core.LLMClient` implementations), and `Registry`.
 - `validator/` — Anti-hallucination provenance validator verifying all tailored bullets and skills cite verified Main Profile entities.
-- `sanitizer/` — Deterministic PII obfuscation and deobfuscation across LLM prompt/response boundaries.
+- `privacy/` — Deterministic PII obfuscation and deobfuscation across LLM prompt/response boundaries.
 - `services/profile/` — Career profile management, revision tracking, and JSON Resume import/export.
 - `services/branch/` — Targeted resume branch & version lifecycle orchestration.
 - `services/renderer/` — Multi-format resume rendering (Markdown, HTML, Plain Text, LaTeX).

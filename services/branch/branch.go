@@ -1160,7 +1160,7 @@ func (s *service) SimulateATS(ctx context.Context, userID, branchID string, opts
 	if s.profileRepo != nil {
 		snap, snapErr := s.profileRepo.GetSnapshot(ctx, userID)
 		if snapErr != nil {
-			return nil, fmt.Errorf("failed to load profile snapshot for ATS sanitizer session: %w", snapErr)
+			return nil, fmt.Errorf("failed to load profile snapshot for ATS privacy session: %w", snapErr)
 		}
 		snapshot = snap
 	}

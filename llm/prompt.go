@@ -9,7 +9,7 @@ import (
 	"text/template"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/sanitizer"
+	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
 //go:embed templates/*
@@ -119,7 +119,7 @@ func recordFacts(idMap map[string]string, facts []core.Fact) {
 //   - PromptPayload with populated SystemPrompt and UserPrompt strings, or an error if generation fails.
 func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 	// Obfuscate candidate contact PII before compiling prompts
-	session := sanitizer.NewSessionFromRequest(req)
+	session := privacy.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
 
 	// 1. Build idMap for projecting snapshot, pinned/excluded entities, and prior version
@@ -205,7 +205,7 @@ func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 // candidate qualifications against target job requirements, avoiding full resume generation overhead.
 func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 	// Obfuscate candidate contact PII before compiling prompts
-	session := sanitizer.NewSessionFromRequest(req)
+	session := privacy.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
 
 	idMap := buildShortIDMap(obfReq.MainProfile)
@@ -303,13 +303,13 @@ func sanitizeATSPromptValue(content string, stripOuterTag string) string {
 
 // BuildATSExtractionPrompt compiles the Stage 1 ATS extraction system and user prompts,
 // obfuscating any candidate contact PII in the rendered resume text prior to LLM transmission.
-func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *sanitizer.Session, error) {
+func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *privacy.Session, error) {
 	formatUsed, err := core.NormalizeATSFormat(req.FormatUsed)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	session := sanitizer.NewSessionFromSnapshot(req.MainProfile)
+	session := privacy.NewSessionFromSnapshot(req.MainProfile)
 	obfResumeText := sanitizeATSPromptValue(session.ObfuscateString(strings.TrimSpace(req.ResumeText)), "resume_document")
 
 	var sysBuilder strings.Builder
@@ -337,7 +337,7 @@ func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *s
 
 // BuildATSMatchingPrompt compiles the Stage 2 ATS job matching system and user prompts
 // using exclusively the extracted candidate representation from Stage 1 and the target job description.
-func BuildATSMatchingPrompt(branch core.Branch, extracted *core.ATSExtractedCandidate, session *sanitizer.Session) (*PromptPayload, error) {
+func BuildATSMatchingPrompt(branch core.Branch, extracted *core.ATSExtractedCandidate, session *privacy.Session) (*PromptPayload, error) {
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(1024)
 	if err := atsMatchSystemTmpl.Execute(&sysBuilder, nil); err != nil {

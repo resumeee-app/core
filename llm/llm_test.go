@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/sanitizer"
+	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
 var sampleResponse = core.GenerationResponse{
@@ -176,9 +176,9 @@ func TestPromptBuilder_Composition(t *testing.T) {
 		t.Error("expected user prompt to include prior version content")
 	}
 
-	session := sanitizer.NewSessionFromRequest(req)
+	session := privacy.NewSessionFromRequest(req)
 	if session == nil {
-		t.Fatal("expected non-nil sanitizer session")
+		t.Fatal("expected non-nil privacy session")
 	}
 }
 

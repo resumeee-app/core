@@ -13,7 +13,7 @@ import (
 var allowedCoreSubpackages = []string{
 	"seed",
 	"validator",
-	"sanitizer",
+	"privacy",
 	"branch",
 	"profile",
 	"renderer",
@@ -51,12 +51,12 @@ func TestCorePackageSet_ImportBoundaries(t *testing.T) {
 			}
 		}
 	} else if _, err := os.Stat(filepath.Join(repoRoot, "core.go")); err == nil {
-		// Extracted core repo layout: root (.), validator, sanitizer, services/branch, services/profile, services/renderer
+		// Extracted core repo layout: root (.), validator, privacy, services/branch, services/profile, services/renderer
 		extractedSubdirs := []string{
 			".",
 			"seed",
 			"validator",
-			"sanitizer",
+			"privacy",
 			filepath.Join("services", "branch"),
 			filepath.Join("services", "profile"),
 			filepath.Join("services", "renderer"),

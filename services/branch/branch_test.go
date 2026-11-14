@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/sanitizer"
+	"github.com/resumeee-app/resumeee-core/privacy"
 	"github.com/resumeee-app/resumeee-core/services/branch"
 	"github.com/resumeee-app/resumeee-core/services/renderer"
 	"github.com/resumeee-app/resumeee-core/validator"
@@ -1230,14 +1230,14 @@ func TestService_GetPromptPreview_ContactPrivacy(t *testing.T) {
 	assertNoPII(t, "SystemPrompt", preview.SystemPrompt)
 	assertNoPII(t, "UserPrompt", preview.UserPrompt)
 
-	if !strings.Contains(preview.UserPrompt, sanitizer.PlaceholderFullName) {
-		t.Errorf("UserPrompt missing PlaceholderFullName %q", sanitizer.PlaceholderFullName)
+	if !strings.Contains(preview.UserPrompt, privacy.PlaceholderFullName) {
+		t.Errorf("UserPrompt missing PlaceholderFullName %q", privacy.PlaceholderFullName)
 	}
-	if strings.Contains(preview.UserPrompt, sanitizer.PlaceholderEmail) {
-		t.Errorf("UserPrompt should not contain stripped PlaceholderEmail %q", sanitizer.PlaceholderEmail)
+	if strings.Contains(preview.UserPrompt, privacy.PlaceholderEmail) {
+		t.Errorf("UserPrompt should not contain stripped PlaceholderEmail %q", privacy.PlaceholderEmail)
 	}
-	if strings.Contains(preview.UserPrompt, sanitizer.PlaceholderPhone) {
-		t.Errorf("UserPrompt should not contain stripped PlaceholderPhone %q", sanitizer.PlaceholderPhone)
+	if strings.Contains(preview.UserPrompt, privacy.PlaceholderPhone) {
+		t.Errorf("UserPrompt should not contain stripped PlaceholderPhone %q", privacy.PlaceholderPhone)
 	}
 }
 

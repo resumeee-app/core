@@ -7,7 +7,7 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/sanitizer"
+	"github.com/resumeee-app/resumeee-core/privacy"
 )
 
 type mockPrivacyProvider struct {
@@ -52,19 +52,19 @@ func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 		defaultModel: "gpt-4o",
 		tailoredResp: &core.GenerationResponse{
 			TailoredContent: core.TailoredContent{
-				Summary: "Results-driven engineer " + sanitizer.PlaceholderFullName + " reachable at " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". Portfolio: " + sanitizer.PlaceholderWebsite + ". Handle: candidate-social-1.",
+				Summary: "Results-driven engineer " + privacy.PlaceholderFullName + " reachable at " + privacy.PlaceholderEmail + " or " + privacy.PlaceholderPhone + ". Portfolio: " + privacy.PlaceholderWebsite + ". Handle: candidate-social-1.",
 				Experiences: []core.TailoredExperience{
 					{
 						Company:       "Acme",
-						DutiesSummary: sanitizer.PlaceholderFullName + " led distributed infrastructure.",
+						DutiesSummary: privacy.PlaceholderFullName + " led distributed infrastructure.",
 						Bullets: []core.TailoredBullet{
-							{Text: sanitizer.PlaceholderFullName + " scaled throughput by 300%."},
+							{Text: privacy.PlaceholderFullName + " scaled throughput by 300%."},
 						},
 					},
 				},
 			},
 			GapReport: core.GapReport{
-				OverallMatchSummary: sanitizer.PlaceholderFullName + " satisfies all requirements.",
+				OverallMatchSummary: privacy.PlaceholderFullName + " satisfies all requirements.",
 			},
 		},
 	}
@@ -99,7 +99,7 @@ func TestServiceAdapter_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 	}
 
 	// Verify placeholders were restored to authentic candidate details
-	if strings.Contains(resp.TailoredContent.Summary, sanitizer.PlaceholderFullName) {
+	if strings.Contains(resp.TailoredContent.Summary, privacy.PlaceholderFullName) {
 		t.Errorf("summary contains PlaceholderFullName: %s", resp.TailoredContent.Summary)
 	}
 	if !strings.Contains(resp.TailoredContent.Summary, "Alice Walker") {
@@ -133,7 +133,7 @@ func TestServiceAdapter_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 	mockProv := &mockPrivacyProvider{
 		name:         "openai",
 		defaultModel: "gpt-4o",
-		completeText: `{"gap_report":{"overall_match_summary":"` + sanitizer.PlaceholderFullName + ` demonstrates strong capability.","missing_requirements":[{"requirement":"Kubernetes","missing_area":"Cloud","clarifying_prompt":"Does ` + sanitizer.PlaceholderFullName + ` have experience?","recommended_action":"Review ` + sanitizer.PlaceholderFullName + `'s GitHub candidate-social-1"}]}}`,
+		completeText: `{"gap_report":{"overall_match_summary":"` + privacy.PlaceholderFullName + ` demonstrates strong capability.","missing_requirements":[{"requirement":"Kubernetes","missing_area":"Cloud","clarifying_prompt":"Does ` + privacy.PlaceholderFullName + ` have experience?","recommended_action":"Review ` + privacy.PlaceholderFullName + `'s GitHub candidate-social-1"}]}}`,
 	}
 
 	reg := llm.NewRegistry(nil)
@@ -163,7 +163,7 @@ func TestServiceAdapter_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if strings.Contains(report.OverallMatchSummary, sanitizer.PlaceholderFullName) {
+	if strings.Contains(report.OverallMatchSummary, privacy.PlaceholderFullName) {
 		t.Errorf("gap report overall summary contains placeholder: %s", report.OverallMatchSummary)
 	}
 	if !strings.Contains(report.OverallMatchSummary, "Alice Walker demonstrates") {

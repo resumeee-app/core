@@ -29,12 +29,11 @@ type ModelCatalogProvider interface {
 }
 
 // ClientProvider wraps a pure transport core.LLMClient with prompt compilation,
-// JSON schema attachment, structured observability logging, prompt debugging, and domain response unmarshaling.
+// JSON schema attachment, structured observability logging, and domain response unmarshaling.
 type ClientProvider struct {
-	client         core.LLMClient
-	defaultModel   string
-	logger         *slog.Logger
-	promptDebugger PromptDebugger
+	client       core.LLMClient
+	defaultModel string
+	logger       *slog.Logger
 }
 
 // NewClientProvider wraps a transport-only core.LLMClient into a full core.LLMProvider and RawUsageCompleter.
@@ -45,10 +44,9 @@ func NewClientProvider(client core.LLMClient, opts ...Option) *ClientProvider {
 	}
 	cfg := applyOptions(opts, "", fallbackModel)
 	return &ClientProvider{
-		client:         client,
-		defaultModel:   cfg.defaultModel,
-		logger:         cfg.logger,
-		promptDebugger: cfg.promptDebugger,
+		client:       client,
+		defaultModel: cfg.defaultModel,
+		logger:       cfg.logger,
 	}
 }
 
@@ -99,12 +97,11 @@ func (p *ClientProvider) GenerateTailoredResume(ctx context.Context, req core.Ge
 		model = p.DefaultModel()
 	}
 
-	trace := logLLMRequest(ctx, p.logger, p.promptDebugger, p.Name(), model, "GenerateTailoredResume", prompts.SystemPrompt, prompts.UserPrompt)
+	trace := logLLMRequest(ctx, p.logger, p.Name(), model, "GenerateTailoredResume")
 
 	var statusCode int
-	var rawResp string
 	defer func() {
-		logLLMResponse(ctx, p.logger, trace, statusCode, rawResp, retErr)
+		logLLMResponse(ctx, p.logger, trace, statusCode, retErr)
 	}()
 
 	compResp, err := p.client.Complete(ctx, core.LLMCompletionRequest{
@@ -116,10 +113,6 @@ func (p *ClientProvider) GenerateTailoredResume(ctx context.Context, req core.Ge
 	})
 	if compResp != nil {
 		statusCode = compResp.StatusCode
-		rawResp = compResp.RawBody
-		if rawResp == "" {
-			rawResp = compResp.Text
-		}
 	}
 	if err != nil {
 		retErr = err
@@ -166,12 +159,11 @@ func (p *ClientProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt
 		model = p.DefaultModel()
 	}
 
-	trace := logLLMRequest(ctx, p.logger, p.promptDebugger, p.Name(), model, "CompleteText", systemPrompt, userPrompt)
+	trace := logLLMRequest(ctx, p.logger, p.Name(), model, "CompleteText")
 
 	var statusCode int
-	var rawResp string
 	defer func() {
-		logLLMResponse(ctx, p.logger, trace, statusCode, rawResp, retErr)
+		logLLMResponse(ctx, p.logger, trace, statusCode, retErr)
 	}()
 
 	compResp, err := p.client.Complete(ctx, core.LLMCompletionRequest{
@@ -181,10 +173,6 @@ func (p *ClientProvider) CompleteTextWithUsage(ctx context.Context, systemPrompt
 	})
 	if compResp != nil {
 		statusCode = compResp.StatusCode
-		rawResp = compResp.RawBody
-		if rawResp == "" {
-			rawResp = compResp.Text
-		}
 	}
 	if err != nil {
 		retErr = err

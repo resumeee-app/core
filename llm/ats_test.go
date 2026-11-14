@@ -342,3 +342,89 @@ func TestServiceAdapter_SimulateATS_ErrorPaths(t *testing.T) {
 		}
 	})
 }
+
+type transportStubClient struct {
+	name       string
+	structured bool
+	responses  []string
+	reqs       []core.LLMCompletionRequest
+}
+
+func (c *transportStubClient) Name() string                         { return c.name }
+func (c *transportStubClient) DefaultModel() string                 { return "stub-model" }
+func (c *transportStubClient) Models() []core.ModelOption           { return nil }
+func (c *transportStubClient) SupportsStructuredOutput(string) bool { return c.structured }
+func (c *transportStubClient) Complete(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+	idx := len(c.reqs)
+	c.reqs = append(c.reqs, req)
+	text := "{}"
+	if idx < len(c.responses) {
+		text = c.responses[idx]
+	}
+	return &core.LLMCompletionResponse{
+		Text:       text,
+		RawBody:    text,
+		StatusCode: 200,
+		Usage:      core.TokenUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+	}, nil
+}
+
+func TestServiceAdapter_SimulateATS_StructuredVsFallbackTransport(t *testing.T) {
+	stageResponses := []string{
+		`{"extraction_confidence_score":0.95,"extraction_summary":"Clean","extracted_candidate":{"summary":"Go dev","skills":["Go"],"experiences":[],"educations":[]}}`,
+		`{"job_matching_score":0.90,"matching_summary":"Great match"}`,
+	}
+
+	for _, structured := range []bool{true, false} {
+		name := "structured_provider"
+		if !structured {
+			name = "fallback_provider"
+		}
+		t.Run(name, func(t *testing.T) {
+			stub := &transportStubClient{
+				name:       name,
+				structured: structured,
+				responses:  stageResponses,
+			}
+			reg := llm.NewRegistry()
+			reg.RegisterClient(stub)
+			adapter := llm.NewServiceAdapter(reg)
+
+			resp, err := adapter.SimulateATS(context.Background(), core.ATSSimulationRequest{
+				ResumeText: "# Jane Doe\nGo Engineer",
+				FormatUsed: "markdown",
+				BranchContext: core.Branch{
+					ProviderOverride:   name,
+					TargetRequirements: "Go",
+				},
+			})
+			if err != nil {
+				t.Fatalf("SimulateATS failed: %v", err)
+			}
+			if resp.Usage.TotalTokens != 60 {
+				t.Errorf("expected cumulative 60 tokens, got %d", resp.Usage.TotalTokens)
+			}
+			if len(stub.reqs) != 2 {
+				t.Fatalf("expected 2 stage calls, got %d", len(stub.reqs))
+			}
+			for i, r := range stub.reqs {
+				hasSysSchema := strings.Contains(r.SystemPrompt, "<response_schema>")
+				if structured {
+					if hasSysSchema {
+						t.Errorf("stage %d: expected <response_schema> omitted for structured provider", i+1)
+					}
+					if r.ResponseSchema == nil {
+						t.Errorf("stage %d: expected ResponseSchema attached for structured provider", i+1)
+					}
+				} else {
+					if !hasSysSchema || strings.Count(r.SystemPrompt, "<response_schema>") != 1 {
+						t.Errorf("stage %d: expected single <response_schema> in system prompt for fallback provider", i+1)
+					}
+					if r.ResponseSchema != nil {
+						t.Errorf("stage %d: expected nil ResponseSchema on transport for fallback provider", i+1)
+					}
+				}
+			}
+		})
+	}
+}

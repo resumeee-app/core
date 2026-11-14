@@ -43,17 +43,65 @@ type PromptPayload struct {
 	UserPrompt   string
 }
 
-// PromptCompiler implements core.PromptCompiler using BuildPrompt.
-type PromptCompiler struct{}
+// PromptOptions configures whether compiled prompts rely on provider-native structured output
+// enforcement or append an inline <response_schema> fallback block to the system prompt.
+type PromptOptions struct {
+	NativeStructuredOutput bool
+}
 
-// NewPromptCompiler constructs a new PromptCompiler.
-func NewPromptCompiler() *PromptCompiler {
-	return &PromptCompiler{}
+// PromptCompilerOption configures a PromptCompiler instance.
+type PromptCompilerOption func(*PromptCompiler)
+
+// WithPromptRegistry binds a provider Registry to PromptCompiler so CompilePrompt dynamically
+// omits or appends <response_schema> according to the resolved provider and model capabilities.
+func WithPromptRegistry(reg *Registry) PromptCompilerOption {
+	return func(c *PromptCompiler) {
+		c.registry = reg
+	}
+}
+
+// WithNativeStructuredOutput sets the default structured output capability assumed by PromptCompiler
+// when no Registry is attached.
+func WithNativeStructuredOutput(enabled bool) PromptCompilerOption {
+	return func(c *PromptCompiler) {
+		c.nativeStructuredOutput = enabled
+	}
+}
+
+// PromptCompiler implements core.PromptCompiler using BuildPromptWithOptions.
+type PromptCompiler struct {
+	registry               *Registry
+	nativeStructuredOutput bool
+}
+
+// NewPromptCompiler constructs a new PromptCompiler with optional capability configuration.
+func NewPromptCompiler(opts ...PromptCompilerOption) *PromptCompiler {
+	c := &PromptCompiler{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(c)
+		}
+	}
+	return c
 }
 
 // CompilePrompt builds the prompt payload and returns a core.PromptPreview.
 func (c *PromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.PromptPreview, error) {
-	payload, err := BuildPrompt(req)
+	native := c != nil && c.nativeStructuredOutput
+	if c != nil && c.registry != nil {
+		var profile *core.Profile
+		if req.MainProfile != nil {
+			profile = &req.MainProfile.Profile
+		}
+		provider, model, err := c.registry.Resolve(req, req.Preset, profile)
+		if err == nil {
+			native = core.SupportsStructuredOutput(provider, model)
+		} else {
+			native = false
+		}
+	}
+
+	payload, err := BuildPromptWithOptions(req, PromptOptions{NativeStructuredOutput: native})
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +109,46 @@ func (c *PromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.Prompt
 		SystemPrompt: payload.SystemPrompt,
 		UserPrompt:   payload.UserPrompt,
 	}, nil
+}
+
+func appendResponseSchemaIfNeeded(baseSystemPrompt string, opts PromptOptions, schemaJSONFn func() (string, error)) (string, error) {
+	trimmed := strings.TrimRight(baseSystemPrompt, "\n")
+	if opts.NativeStructuredOutput {
+		return trimmed, nil
+	}
+	schemaJSON, err := schemaJSONFn()
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize fallback response schema: %w", err)
+	}
+	return appendRawSchemaBlock(trimmed, schemaJSON), nil
+}
+
+func containsResponseSchemaDirective(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	return strings.Contains(lower, "<response_schema>") || strings.Contains(lower, "<json_output_schema>")
+}
+
+func appendRawSchemaBlock(systemPrompt, schemaJSON string) string {
+	trimmed := strings.TrimRight(systemPrompt, "\n")
+	block := fmt.Sprintf(
+		"<response_schema>\nThe expected response must be a valid JSON object conforming strictly to the following JSON Schema:\n```json\n%s\n```\n</response_schema>",
+		schemaJSON,
+	)
+	if trimmed == "" {
+		return block
+	}
+	return trimmed + "\n\n" + block
+}
+
+func appendFallbackSchemaIfNeeded(systemPrompt string, schema map[string]any) (string, error) {
+	if schema == nil || containsResponseSchemaDirective(systemPrompt) {
+		return systemPrompt, nil
+	}
+	schemaBytes, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal fallback response schema: %w", err)
+	}
+	return appendRawSchemaBlock(systemPrompt, string(schemaBytes)), nil
 }
 
 type tailorPromptContext struct {
@@ -118,6 +206,12 @@ func recordFacts(idMap map[string]string, facts []core.Fact) {
 // Returns:
 //   - PromptPayload with populated SystemPrompt and UserPrompt strings, or an error if generation fails.
 func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
+	return BuildPromptWithOptions(req, PromptOptions{NativeStructuredOutput: false})
+}
+
+// BuildPromptWithOptions constructs a tailoring prompt payload and omits the inline <response_schema>
+// block when opts.NativeStructuredOutput is true.
+func BuildPromptWithOptions(req core.GenerationRequest, opts PromptOptions) (*PromptPayload, error) {
 	// Obfuscate candidate contact PII before compiling prompts
 	session := sanitizer.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
@@ -130,6 +224,10 @@ func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 	sysBuilder.Grow(2048)
 	if err := tailorSystemTmpl.Execute(&sysBuilder, nil); err != nil {
 		return nil, fmt.Errorf("failed to render tailor system prompt template: %w", err)
+	}
+	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, GenerationResponseSchemaJSON)
+	if err != nil {
+		return nil, err
 	}
 
 	// 3. Prepare data and render User Prompt from template
@@ -196,7 +294,7 @@ func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 	}
 
 	return &PromptPayload{
-		SystemPrompt: sysBuilder.String(),
+		SystemPrompt: systemPrompt,
 		UserPrompt:   userBuilder.String(),
 	}, nil
 }
@@ -204,6 +302,12 @@ func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 // BuildGapAnalysisPrompt constructs a targeted prompt payload designed exclusively for evaluating
 // candidate qualifications against target job requirements, avoiding full resume generation overhead.
 func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) {
+	return BuildGapAnalysisPromptWithOptions(req, PromptOptions{NativeStructuredOutput: false})
+}
+
+// BuildGapAnalysisPromptWithOptions constructs a targeted gap-analysis prompt payload and omits
+// the inline <response_schema> block when opts.NativeStructuredOutput is true.
+func BuildGapAnalysisPromptWithOptions(req core.GenerationRequest, opts PromptOptions) (*PromptPayload, error) {
 	// Obfuscate only the snapshot and branch fields projected into the gap analysis prompt
 	session := sanitizer.NewSessionFromSnapshot(req.MainProfile)
 	obfProfile := session.ObfuscateSnapshot(req.MainProfile)
@@ -214,6 +318,10 @@ func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) 
 	sysBuilder.Grow(1024)
 	if err := gapAnalysisSystemTmpl.Execute(&sysBuilder, nil); err != nil {
 		return nil, fmt.Errorf("failed to render gap analysis system prompt template: %w", err)
+	}
+	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, GapAnalysisResponseSchemaJSON)
+	if err != nil {
+		return nil, err
 	}
 
 	profileJSONStr, err := serializeProjectedMainProfile(obfProfile, idMap)
@@ -236,7 +344,7 @@ func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) 
 	}
 
 	return &PromptPayload{
-		SystemPrompt: sysBuilder.String(),
+		SystemPrompt: systemPrompt,
 		UserPrompt:   userBuilder.String(),
 	}, nil
 }
@@ -248,10 +356,20 @@ type resumeExtractPromptContext struct {
 // BuildResumeExtractPrompt constructs structured system and user prompts for extracting unstructured resume text
 // into standard JSON Resume format, rendering prompts from embedded template files.
 func BuildResumeExtractPrompt(rawText string) (*PromptPayload, error) {
+	return BuildResumeExtractPromptWithOptions(rawText, PromptOptions{NativeStructuredOutput: false})
+}
+
+// BuildResumeExtractPromptWithOptions constructs structured resume-extraction prompts and omits
+// the inline <response_schema> block when opts.NativeStructuredOutput is true.
+func BuildResumeExtractPromptWithOptions(rawText string, opts PromptOptions) (*PromptPayload, error) {
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(1024)
 	if err := resumeExtractSystemTmpl.Execute(&sysBuilder, nil); err != nil {
 		return nil, fmt.Errorf("failed to render resume extract system prompt template: %w", err)
+	}
+	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, ResumeExtractResponseSchemaJSON)
+	if err != nil {
+		return nil, err
 	}
 
 	ctx := resumeExtractPromptContext{
@@ -265,7 +383,7 @@ func BuildResumeExtractPrompt(rawText string) (*PromptPayload, error) {
 	}
 
 	return &PromptPayload{
-		SystemPrompt: sysBuilder.String(),
+		SystemPrompt: systemPrompt,
 		UserPrompt:   userBuilder.String(),
 	}, nil
 }
@@ -304,6 +422,12 @@ func sanitizeATSPromptValue(content string, stripOuterTag string) string {
 // BuildATSExtractionPrompt compiles the Stage 1 ATS extraction system and user prompts,
 // obfuscating any candidate contact PII in the rendered resume text prior to LLM transmission.
 func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *sanitizer.Session, error) {
+	return BuildATSExtractionPromptWithOptions(req, PromptOptions{NativeStructuredOutput: false})
+}
+
+// BuildATSExtractionPromptWithOptions compiles Stage 1 ATS extraction prompts and omits the inline
+// <response_schema> block when opts.NativeStructuredOutput is true.
+func BuildATSExtractionPromptWithOptions(req core.ATSSimulationRequest, opts PromptOptions) (*PromptPayload, *sanitizer.Session, error) {
 	formatUsed, err := core.NormalizeATSFormat(req.FormatUsed)
 	if err != nil {
 		return nil, nil, err
@@ -316,6 +440,10 @@ func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *s
 	sysBuilder.Grow(2048)
 	if err := atsExtractSystemTmpl.Execute(&sysBuilder, nil); err != nil {
 		return nil, nil, fmt.Errorf("failed to render ats extract system prompt template: %w", err)
+	}
+	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, ATSExtractionResponseSchemaJSON)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	ctx := atsExtractPromptContext{
@@ -330,7 +458,7 @@ func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *s
 	}
 
 	return &PromptPayload{
-		SystemPrompt: sysBuilder.String(),
+		SystemPrompt: systemPrompt,
 		UserPrompt:   userBuilder.String(),
 	}, session, nil
 }
@@ -338,10 +466,20 @@ func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *s
 // BuildATSMatchingPrompt compiles the Stage 2 ATS job matching system and user prompts
 // using exclusively the extracted candidate representation from Stage 1 and the target job description.
 func BuildATSMatchingPrompt(branch core.Branch, extracted *core.ATSExtractedCandidate, session *sanitizer.Session) (*PromptPayload, error) {
+	return BuildATSMatchingPromptWithOptions(branch, extracted, session, PromptOptions{NativeStructuredOutput: false})
+}
+
+// BuildATSMatchingPromptWithOptions compiles Stage 2 ATS job matching prompts and omits the inline
+// <response_schema> block when opts.NativeStructuredOutput is true.
+func BuildATSMatchingPromptWithOptions(branch core.Branch, extracted *core.ATSExtractedCandidate, session *sanitizer.Session, opts PromptOptions) (*PromptPayload, error) {
 	var sysBuilder strings.Builder
 	sysBuilder.Grow(1024)
 	if err := atsMatchSystemTmpl.Execute(&sysBuilder, nil); err != nil {
 		return nil, fmt.Errorf("failed to render ats match system prompt template: %w", err)
+	}
+	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, ATSMatchingResponseSchemaJSON)
+	if err != nil {
+		return nil, err
 	}
 
 	candidateToSerialize := extracted
@@ -377,7 +515,7 @@ func BuildATSMatchingPrompt(branch core.Branch, extracted *core.ATSExtractedCand
 	}
 
 	return &PromptPayload{
-		SystemPrompt: sysBuilder.String(),
+		SystemPrompt: systemPrompt,
 		UserPrompt:   userBuilder.String(),
 	}, nil
 }

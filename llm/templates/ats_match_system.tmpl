@@ -10,27 +10,3 @@ Your task is to evaluate ONLY the structured candidate information extracted by 
    - 0.00 to 0.59: Significant gaps between the extracted candidate profile and core job requirements.
 4. Provide a concise "matching_summary" explaining the perceived match between the extracted candidate information and the job description.
 </ats_matching_rules>
-
-<response_schema>
-The expected response must be a valid JSON object conforming strictly to the following JSON Schema:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "job_matching_score": {
-      "description": "Perceived matching score from 0 to 1 (where 1.0 is 100%) evaluating how well the extracted candidate information matches the job description",
-      "type": "number"
-    },
-    "matching_summary": {
-      "description": "Concise explanation of how the extracted candidate profile aligns with the target job description requirements",
-      "type": "string"
-    }
-  },
-  "required": [
-    "job_matching_score",
-    "matching_summary"
-  ],
-  "type": "object"
-}
-```
-</response_schema>

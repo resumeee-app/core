@@ -38,6 +38,9 @@ func NewServiceAdapter(registry *Registry) *ServiceAdapter {
 // Returns:
 //   - GenerationResponse containing tailored content, citations, and gap report, or an error.
 func (a *ServiceAdapter) GenerateTailoredResume(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error) {
+	if a == nil || a.registry == nil {
+		return nil, ErrNoProviders
+	}
 	var profile *core.Profile
 	if req.MainProfile != nil {
 		profile = &req.MainProfile.Profile
@@ -66,6 +69,9 @@ func (a *ServiceAdapter) GenerateTailoredResume(ctx context.Context, req core.Ge
 // Returns:
 //   - Populated and normalized *core.GapReport, or an error.
 func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+	if a == nil || a.registry == nil {
+		return nil, ErrNoProviders
+	}
 	var profile *core.Profile
 	if req.MainProfile != nil {
 		profile = &req.MainProfile.Profile
@@ -76,34 +82,45 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 	}
 	req.Model = model
 
-	// If provider implements RawCompleter, run the lightweight gap analysis prompt
-	if rawCompleter, ok := provider.(RawCompleter); ok {
-		prompts, pErr := BuildGapAnalysisPrompt(req)
-		if pErr == nil {
-			text, cErr := rawCompleter.CompleteText(ctx, prompts.SystemPrompt, prompts.UserPrompt, model)
-			if cErr == nil {
-				cleaned := ExtractJSON(text)
-				var wrapper struct {
-					GapReport *core.GapReport `json:"gap_report"`
-				}
-				if err := json.Unmarshal([]byte(cleaned), &wrapper); err == nil && wrapper.GapReport != nil {
-					session := sanitizer.NewSessionFromRequest(req)
-					session.DeobfuscateGapReport(wrapper.GapReport)
-					wrapper.GapReport.Normalize()
-					return wrapper.GapReport, nil
-				}
-				var direct core.GapReport
-				if err := json.Unmarshal([]byte(cleaned), &direct); err == nil && (direct.OverallMatchSummary != "" || len(direct.MissingRequirements) > 0 || len(direct.IdentifiedGaps) > 0) {
-					session := sanitizer.NewSessionFromRequest(req)
-					session.DeobfuscateGapReport(&direct)
-					direct.Normalize()
-					return &direct, nil
-				}
-			}
+	if canExecuteProviderCompletion(provider) {
+		supportsStructured := supportsNativeStructuredCall(provider, model)
+		prompts, pErr := BuildGapAnalysisPromptWithOptions(req, PromptOptions{NativeStructuredOutput: supportsStructured})
+		if pErr != nil {
+			return nil, pErr
+		}
+		text, _, cErr := (structuredCall{
+			Provider:       provider,
+			Operation:      "GenerateGapAnalysis",
+			Model:          model,
+			Prompts:        prompts,
+			Schema:         GapAnalysisResponseSchema(),
+			SchemaName:     "gap_analysis_response",
+			ReasoningLevel: req.ReasoningLevel,
+		}).execute(ctx)
+		if cErr != nil {
+			return nil, cErr
+		}
+
+		cleaned := ExtractJSON(text)
+		var wrapper struct {
+			GapReport *core.GapReport `json:"gap_report"`
+		}
+		if err := json.Unmarshal([]byte(cleaned), &wrapper); err == nil && wrapper.GapReport != nil {
+			session := sanitizer.NewSessionFromRequest(req)
+			session.DeobfuscateGapReport(wrapper.GapReport)
+			wrapper.GapReport.Normalize()
+			return wrapper.GapReport, nil
+		}
+		var direct core.GapReport
+		if err := json.Unmarshal([]byte(cleaned), &direct); err == nil && (direct.OverallMatchSummary != "" || len(direct.MissingRequirements) > 0 || len(direct.IdentifiedGaps) > 0) {
+			session := sanitizer.NewSessionFromRequest(req)
+			session.DeobfuscateGapReport(&direct)
+			direct.Normalize()
+			return &direct, nil
 		}
 	}
 
-	// Fallback to full generation if lightweight analysis is unavailable or fails
+	// Fallback to full generation if lightweight analysis is unavailable or returns unrecognized output
 	resp, err := provider.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
@@ -131,6 +148,9 @@ type atsMatchingLLMOutput struct {
 //  2. Stage 2 evaluates only the extracted candidate profile from Stage 1 against the job description,
 //     producing a Job Matching Score from 0 to 1 (converted to 0..100%).
 func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+	if a == nil || a.registry == nil {
+		return nil, ErrNoProviders
+	}
 	formatUsed, err := core.NormalizeATSFormat(req.FormatUsed)
 	if err != nil {
 		return nil, err
@@ -154,24 +174,24 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulation
 		return nil, err
 	}
 
-	completeStep := func(systemPrompt, userPrompt string) (string, core.TokenUsage, error) {
-		if rawUsage, ok := provider.(RawUsageCompleter); ok {
-			return rawUsage.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
-		}
-		if raw, ok := provider.(RawCompleter); ok {
-			text, cErr := raw.CompleteText(ctx, systemPrompt, userPrompt, model)
-			return text, core.TokenUsage{}, cErr
-		}
-		return "", core.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion for ATS simulation", ErrInvalidResponse, provider.Name())
-	}
+	supportsStructured := supportsNativeStructuredCall(provider, model)
+	promptOpts := PromptOptions{NativeStructuredOutput: supportsStructured}
 
 	// Stage 1: ATS Content Extraction & Extraction Confidence Score
-	extractPrompts, session, err := BuildATSExtractionPrompt(req)
+	extractPrompts, session, err := BuildATSExtractionPromptWithOptions(req, promptOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	rawExtract, usage1, err := completeStep(extractPrompts.SystemPrompt, extractPrompts.UserPrompt)
+	rawExtract, usage1, err := (structuredCall{
+		Provider:       provider,
+		Operation:      "ATSExtraction",
+		Model:          model,
+		Prompts:        extractPrompts,
+		Schema:         ATSExtractionResponseSchema(),
+		SchemaName:     "ats_extraction_response",
+		ReasoningLevel: req.ReasoningLevel,
+	}).execute(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ats extraction failed: %w", err)
 	}
@@ -188,12 +208,20 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulation
 	parsedExtract.ExtractedCandidate.Normalize()
 
 	// Stage 2: Perceived Job Matching Score using ONLY the extracted candidate data
-	matchPrompts, err := BuildATSMatchingPrompt(req.BranchContext, &parsedExtract.ExtractedCandidate, session)
+	matchPrompts, err := BuildATSMatchingPromptWithOptions(req.BranchContext, &parsedExtract.ExtractedCandidate, session, promptOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	rawMatch, usage2, err := completeStep(matchPrompts.SystemPrompt, matchPrompts.UserPrompt)
+	rawMatch, usage2, err := (structuredCall{
+		Provider:       provider,
+		Operation:      "ATSMatching",
+		Model:          model,
+		Prompts:        matchPrompts,
+		Schema:         ATSMatchingResponseSchema(),
+		SchemaName:     "ats_matching_response",
+		ReasoningLevel: req.ReasoningLevel,
+	}).execute(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ats matching failed: %w", err)
 	}

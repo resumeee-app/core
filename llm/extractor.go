@@ -20,6 +20,19 @@ type UsageCompleter interface {
 	CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, core.TokenUsage, error)
 }
 
+// ModelCatalogCompleter is an optional capability interface implemented by Completers
+// that expose a catalog of configured models.
+type ModelCatalogCompleter interface {
+	AvailableModels() []core.ModelOption
+}
+
+// SchemaCompleter is an optional capability interface implemented by Completers
+// that negotiate and execute schema-enforced structured completions per target provider and model.
+type SchemaCompleter interface {
+	SupportsStructuredCompletion(provider, model string) bool
+	CompleteSchemaWithUsage(ctx context.Context, operation, systemPrompt, userPrompt, provider, model, schemaName string, schema map[string]any) (string, core.TokenUsage, error)
+}
+
 // CompleterFunc allows using an ordinary function as a Completer.
 type CompleterFunc func(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, error)
 
@@ -76,10 +89,13 @@ func NewDefaultResumeExtractor(registry *Registry) core.ResumeExtractor {
 	}
 }
 
-// AvailableModels returns available configured models if the completer is backed by a Registry.
+// AvailableModels returns available configured models if the completer implements ModelCatalogCompleter.
 func (e *resumeExtractor) AvailableModels() []core.ModelOption {
-	if rc, ok := e.completer.(*registryCompleter); ok && rc.registry != nil {
-		return rc.registry.AvailableModels()
+	if e == nil || e.completer == nil {
+		return nil
+	}
+	if mcc, ok := e.completer.(ModelCatalogCompleter); ok {
+		return mcc.AvailableModels()
 	}
 	return nil
 }
@@ -93,6 +109,49 @@ func NewRegistryCompleter(registry *Registry) Completer {
 	return &registryCompleter{registry: registry}
 }
 
+func (rc *registryCompleter) AvailableModels() []core.ModelOption {
+	if rc == nil || rc.registry == nil {
+		return nil
+	}
+	return rc.registry.AvailableModels()
+}
+
+func (rc *registryCompleter) resolveProviderAndModel(provider, model string) (core.LLMProvider, string, error) {
+	if rc == nil || rc.registry == nil {
+		return nil, "", ErrNoProviders
+	}
+	return rc.registry.Resolve(core.GenerationRequest{
+		Model:         model,
+		BranchContext: core.Branch{ProviderOverride: provider},
+	}, nil, nil)
+}
+
+func (rc *registryCompleter) SupportsStructuredCompletion(provider, model string) bool {
+	p, resolvedModel, err := rc.resolveProviderAndModel(provider, model)
+	if err != nil {
+		return false
+	}
+	return supportsNativeStructuredCall(p, resolvedModel)
+}
+
+func (rc *registryCompleter) CompleteSchemaWithUsage(ctx context.Context, operation, systemPrompt, userPrompt, provider, model, schemaName string, schema map[string]any) (string, core.TokenUsage, error) {
+	p, targetModel, err := rc.resolveProviderAndModel(provider, model)
+	if err != nil {
+		return "", core.TokenUsage{}, err
+	}
+	return (structuredCall{
+		Provider:   p,
+		Operation:  operation,
+		Model:      targetModel,
+		Schema:     schema,
+		SchemaName: schemaName,
+		Prompts: &PromptPayload{
+			SystemPrompt: systemPrompt,
+			UserPrompt:   userPrompt,
+		},
+	}).execute(ctx)
+}
+
 // Complete delegates raw text completion to the resolved LLM provider from the registry.
 func (rc *registryCompleter) Complete(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, error) {
 	text, _, err := rc.CompleteWithUsage(ctx, systemPrompt, userPrompt, provider, model)
@@ -101,42 +160,7 @@ func (rc *registryCompleter) Complete(ctx context.Context, systemPrompt, userPro
 
 // CompleteWithUsage delegates raw text completion and captures token usage from the resolved LLM provider.
 func (rc *registryCompleter) CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, core.TokenUsage, error) {
-	if rc.registry == nil {
-		return "", core.TokenUsage{}, ErrNoProviders
-	}
-
-	targetProvider := provider
-	if strings.TrimSpace(targetProvider) == "" {
-		targetProvider = rc.registry.DefaultProvider()
-	}
-	if strings.TrimSpace(targetProvider) == "" {
-		return "", core.TokenUsage{}, ErrNoProviders
-	}
-
-	p, err := rc.registry.Get(targetProvider)
-	if err != nil {
-		return "", core.TokenUsage{}, err
-	}
-
-	targetModel := model
-	if strings.TrimSpace(targetModel) == "" {
-		if strings.EqualFold(targetProvider, rc.registry.DefaultProvider()) {
-			targetModel = rc.registry.DefaultModel()
-		} else {
-			targetModel = defaultModelForProvider(targetProvider)
-		}
-	}
-
-	if rawUsage, ok := p.(RawUsageCompleter); ok {
-		return rawUsage.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, targetModel)
-	}
-
-	if raw, ok := p.(RawCompleter); ok {
-		text, err := raw.CompleteText(ctx, systemPrompt, userPrompt, targetModel)
-		return text, core.TokenUsage{}, err
-	}
-
-	return "", core.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion", ErrInvalidResponse, p.Name())
+	return rc.CompleteSchemaWithUsage(ctx, "CompleteText", systemPrompt, userPrompt, provider, model, "", nil)
 }
 
 // ExtractResume parses unstructured resume text into a structured JSONResume document.
@@ -156,22 +180,41 @@ func (e *resumeExtractor) ExtractResumeWithUsage(ctx context.Context, text strin
 		return nil, core.TokenUsage{}, fmt.Errorf("%w: empty resume text", core.ErrValidation)
 	}
 
-	if e.completer == nil {
+	if e == nil || e.completer == nil {
 		return nil, core.TokenUsage{}, fmt.Errorf("%w: no completer configured", core.ErrValidation)
 	}
 
-	prompts, err := BuildResumeExtractPrompt(trimmedText)
-	if err != nil {
-		return nil, core.TokenUsage{}, fmt.Errorf("failed to build resume extraction prompt: %w", err)
+	var (
+		rawResponse string
+		usage       core.TokenUsage
+		err         error
+	)
+
+	if sc, isSchemaCompleter := e.completer.(SchemaCompleter); isSchemaCompleter {
+		supportsStructured := sc.SupportsStructuredCompletion(provider, model)
+		prompts, pErr := BuildResumeExtractPromptWithOptions(trimmedText, PromptOptions{NativeStructuredOutput: supportsStructured})
+		if pErr != nil {
+			return nil, core.TokenUsage{}, fmt.Errorf("failed to build resume extraction prompt: %w", pErr)
+		}
+		var schema map[string]any
+		var schemaName string
+		if supportsStructured {
+			schema = ResumeExtractResponseSchema()
+			schemaName = "resume_extract_response"
+		}
+		rawResponse, usage, err = sc.CompleteSchemaWithUsage(ctx, "ExtractResume", prompts.SystemPrompt, prompts.UserPrompt, provider, model, schemaName, schema)
+	} else {
+		prompts, pErr := BuildResumeExtractPromptWithOptions(trimmedText, PromptOptions{NativeStructuredOutput: false})
+		if pErr != nil {
+			return nil, core.TokenUsage{}, fmt.Errorf("failed to build resume extraction prompt: %w", pErr)
+		}
+		if uc, ok := e.completer.(UsageCompleter); ok {
+			rawResponse, usage, err = uc.CompleteWithUsage(ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model)
+		} else {
+			rawResponse, err = e.completer.Complete(ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model)
+		}
 	}
 
-	var rawResponse string
-	var usage core.TokenUsage
-	if uc, ok := e.completer.(UsageCompleter); ok {
-		rawResponse, usage, err = uc.CompleteWithUsage(ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model)
-	} else {
-		rawResponse, err = e.completer.Complete(ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model)
-	}
 	if err != nil {
 		return nil, core.TokenUsage{}, err
 	}

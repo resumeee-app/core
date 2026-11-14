@@ -11,8 +11,9 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// CompatProvider implements core.LLMClient for generic OpenAI-compatible HTTP endpoints
-// such as Ollama, vLLM, llama.cpp, LocalAI, and LM Studio.
+// CompatProvider implements core.LLMClient for generic OpenAI-compatible /v1/chat/completions
+// HTTP endpoints such as vLLM, llama.cpp, LocalAI, and LM Studio (whereas native Ollama /api/chat
+// servers use OllamaProvider).
 type CompatProvider struct {
 	baseURL      string
 	apiKey       string
@@ -38,7 +39,7 @@ func (p *CompatProvider) Name() string {
 
 // DefaultModel returns the configured default model for the compatible endpoint.
 func (p *CompatProvider) DefaultModel() string {
-	if strings.TrimSpace(p.defaultModel) != "" {
+	if p != nil && strings.TrimSpace(p.defaultModel) != "" {
 		return p.defaultModel
 	}
 	return defaultCompatModel
@@ -57,8 +58,18 @@ func (p *CompatProvider) Models() []core.ModelOption {
 	}
 }
 
+// SupportsStructuredOutput reports false for generic OpenAI-compatible endpoints because
+// arbitrary compatible servers cannot guarantee strict JSON Schema enforcement.
+func (p *CompatProvider) SupportsStructuredOutput(_ string) bool {
+	return false
+}
+
 // Complete executes a completion request against the OpenAI-compatible chat completions endpoint.
 func (p *CompatProvider) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+	if p == nil {
+		return nil, fmt.Errorf("%w: compat provider is not initialized", ErrNoProviders)
+	}
+
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
 		model = p.DefaultModel()
@@ -83,12 +94,14 @@ func (p *CompatProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 
 	var respFmt *responseFormat
 	if req.ResponseSchema != nil {
-		schemaBytes, err := json.Marshal(req.ResponseSchema)
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize schema: %w", err)
+		if !containsResponseSchemaDirective(systemPrompt) {
+			schemaBytes, err := json.Marshal(req.ResponseSchema)
+			if err != nil {
+				return nil, fmt.Errorf("failed to serialize schema: %w", err)
+			}
+			systemPrompt = fmt.Sprintf("%s\n\n<json_output_schema>\n%s\n</json_output_schema>",
+				req.SystemPrompt, string(schemaBytes))
 		}
-		systemPrompt = fmt.Sprintf("%s\n\n<json_output_schema>\n%s\n</json_output_schema>",
-			req.SystemPrompt, string(schemaBytes))
 		respFmt = &responseFormat{Type: "json_object"}
 	}
 
@@ -117,7 +130,7 @@ func (p *CompatProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
 
-	resp, err := p.httpClient.Do(httpReq)
+	resp, err := resolveHTTPClient(p.httpClient).Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("compat http request failed: %w", err)
 	}

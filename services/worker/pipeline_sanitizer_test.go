@@ -32,6 +32,10 @@ func (c *sanitizerPipelineClient) Models() []core.ModelOption {
 	return []core.ModelOption{{Provider: llm.ProviderOpenAI, Model: "gpt-4o", DisplayName: "GPT-4o", IsDefault: true}}
 }
 
+func (c *sanitizerPipelineClient) SupportsStructuredOutput(_ string) bool {
+	return true
+}
+
 func (c *sanitizerPipelineClient) Complete(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	c.mu.Lock()
 	c.capturedReq = req

@@ -153,6 +153,7 @@ type LLMCompletionRequest struct {
 	SystemPrompt   string
 	UserPrompt     string
 	ResponseSchema map[string]any
+	SchemaName     string
 	ReasoningLevel string
 }
 
@@ -170,7 +171,26 @@ type LLMClient interface {
 	Name() string
 	DefaultModel() string
 	Models() []ModelOption
+	SupportsStructuredOutput(model string) bool
 	Complete(ctx context.Context, req LLMCompletionRequest) (*LLMCompletionResponse, error)
+}
+
+// StructuredOutputCapable is an optional capability interface implemented by LLM providers
+// or clients that can report whether a given model supports provider-native structured outputs.
+type StructuredOutputCapable interface {
+	SupportsStructuredOutput(model string) bool
+}
+
+// SupportsStructuredOutput returns true when target implements StructuredOutputCapable and
+// reports native structured output support for the specified model.
+func SupportsStructuredOutput(target any, model string) bool {
+	if target == nil {
+		return false
+	}
+	if capProv, ok := target.(StructuredOutputCapable); ok {
+		return capProv.SupportsStructuredOutput(model)
+	}
+	return false
 }
 
 // LLMProvider abstracts interactions with generative AI model providers.

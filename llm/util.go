@@ -17,10 +17,80 @@ func readBoundedBody(r io.Reader) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, maxLLMResponseBodyBytes))
 }
 
+func resolveHTTPClient(c *http.Client) *http.Client {
+	if c != nil {
+		return c
+	}
+	return defaultLLMHTTPClient
+}
+
+type boundedReadCloser struct {
+	reader io.Reader
+	closer io.Closer
+}
+
+func (b *boundedReadCloser) Read(p []byte) (int, error) {
+	return b.reader.Read(p)
+}
+
+func (b *boundedReadCloser) Close() error {
+	if b.closer != nil {
+		return b.closer.Close()
+	}
+	return nil
+}
+
+type boundedResponseTransport struct {
+	base       http.RoundTripper
+	limitBytes int64
+}
+
+func (t *boundedResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt := t.base
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	resp, err := rt.RoundTrip(req)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	limit := t.limitBytes
+	if limit <= 0 {
+		limit = maxLLMResponseBodyBytes
+	}
+	resp.Body = &boundedReadCloser{
+		reader: io.LimitReader(resp.Body, limit),
+		closer: resp.Body,
+	}
+	return resp, nil
+}
+
+// wrapBoundedHTTPClient returns a shallow clone of client whose Transport enforces
+// maxLLMResponseBodyBytes on upstream response bodies (used for SDK-managed HTTP transports).
+func wrapBoundedHTTPClient(client *http.Client) *http.Client {
+	return wrapBoundedHTTPClientWithLimit(client, maxLLMResponseBodyBytes)
+}
+
+func wrapBoundedHTTPClientWithLimit(client *http.Client, limitBytes int64) *http.Client {
+	if limitBytes <= 0 {
+		limitBytes = maxLLMResponseBodyBytes
+	}
+	resolved := resolveHTTPClient(client)
+	cloned := *resolved
+	cloned.Transport = &boundedResponseTransport{
+		base:       resolved.Transport,
+		limitBytes: limitBytes,
+	}
+	return &cloned
+}
+
 // checkStatusError converts upstream HTTP error status codes into canonical domain LLM errors.
 func checkStatusError(provider string, statusCode int, body []byte) error {
 	if statusCode == http.StatusOK {
 		return nil
+	}
+	if statusCode == http.StatusBadRequest {
+		return fmt.Errorf("%w: status 400: %s", ErrBadRequest, string(body))
 	}
 	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
 		return fmt.Errorf("%w: status %d: %s", ErrUnauthorized, statusCode, string(body))

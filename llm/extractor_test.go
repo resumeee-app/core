@@ -3,6 +3,7 @@ package llm_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/resumeee-app/resumeee-core"
@@ -270,4 +271,70 @@ func TestResumeExtractor_WithUsage(t *testing.T) {
 			t.Errorf("expected default 1000 total tokens, got %+v", usage)
 		}
 	})
+}
+
+type capturingExtractClient struct {
+	name                     string
+	defaultModel             string
+	supportsStructuredOutput bool
+	captured                 *core.LLMCompletionRequest
+}
+
+func (c *capturingExtractClient) Name() string                   { return c.name }
+func (c *capturingExtractClient) DefaultModel() string           { return c.defaultModel }
+func (c *capturingExtractClient) Models() []core.ModelOption     { return nil }
+func (c *capturingExtractClient) SupportsStructuredOutput() bool { return c.supportsStructuredOutput }
+func (c *capturingExtractClient) Complete(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+	cp := req
+	c.captured = &cp
+	return &core.LLMCompletionResponse{
+		Text:       `{"basics": {"name": "Alex Mercer", "email": "alex@example.com"}}`,
+		StatusCode: 200,
+		Usage:      core.TokenUsage{PromptTokens: 20, CompletionTokens: 30, TotalTokens: 50},
+	}, nil
+}
+
+func TestResumeExtractor_StructuredVsFallback(t *testing.T) {
+	cases := []struct {
+		name               string
+		supportsStructured bool
+		wantPromptSchema   bool
+		wantReqSchema      bool
+	}{
+		{"structured client omits prompt schema and sends ResumeExtractResponseSchema", true, false, true},
+		{"fallback client appends prompt schema and omits ResponseSchema", false, true, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &capturingExtractClient{
+				name:                     "extract-prov",
+				defaultModel:             "extract-model",
+				supportsStructuredOutput: tc.supportsStructured,
+			}
+			reg := llm.NewRegistry()
+			reg.RegisterClient(client)
+			extractor := llm.NewDefaultResumeExtractor(reg)
+
+			res, err := extractor.ExtractResume(context.Background(), "Alex Mercer resume text", "extract-prov", "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Basics.Name != "Alex Mercer" {
+				t.Errorf("expected Basics.Name 'Alex Mercer', got %q", res.Basics.Name)
+			}
+			if client.captured == nil {
+				t.Fatal("expected request to be captured")
+			}
+			if got := strings.Contains(client.captured.SystemPrompt, "<response_schema>"); got != tc.wantPromptSchema {
+				t.Errorf("prompt has <response_schema> = %v, want %v", got, tc.wantPromptSchema)
+			}
+			if got := client.captured.ResponseSchema != nil; got != tc.wantReqSchema {
+				t.Errorf("ResponseSchema present = %v, want %v", got, tc.wantReqSchema)
+			}
+			if tc.wantReqSchema && client.captured.SchemaName != "resume_extract_response" {
+				t.Errorf("expected SchemaName 'resume_extract_response', got %q", client.captured.SchemaName)
+			}
+		})
+	}
 }

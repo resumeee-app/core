@@ -76,28 +76,28 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 	}
 	req.Model = model
 
-	// If provider implements RawCompleter, run the lightweight gap analysis prompt
-	if rawCompleter, ok := provider.(RawCompleter); ok {
-		prompts, pErr := BuildGapAnalysisPrompt(req)
+	supportsStructured := providerSupportsNativeSchemaDelivery(provider)
+	if canCompleteLightweight(provider) {
+		prompts, pErr := BuildGapAnalysisPromptWithOptions(req, PromptOptions{
+			NativeStructuredOutput: supportsStructured,
+		})
 		if pErr == nil {
-			text, cErr := rawCompleter.CompleteText(ctx, prompts.SystemPrompt, prompts.UserPrompt, model)
+			text, _, cErr := completeProviderPrompt(
+				ctx, provider, model, prompts,
+				GapAnalysisResponseSchema(), "gap_analysis_response",
+				req.ReasoningLevel, supportsStructured,
+			)
 			if cErr == nil {
 				cleaned := ExtractJSON(text)
 				var wrapper struct {
 					GapReport *core.GapReport `json:"gap_report"`
 				}
 				if err := json.Unmarshal([]byte(cleaned), &wrapper); err == nil && wrapper.GapReport != nil {
-					session := sanitizer.NewSessionFromRequest(req)
-					session.DeobfuscateGapReport(wrapper.GapReport)
-					wrapper.GapReport.Normalize()
-					return wrapper.GapReport, nil
+					return finalizeGapReport(req, wrapper.GapReport), nil
 				}
 				var direct core.GapReport
 				if err := json.Unmarshal([]byte(cleaned), &direct); err == nil && (direct.OverallMatchSummary != "" || len(direct.MissingRequirements) > 0 || len(direct.IdentifiedGaps) > 0) {
-					session := sanitizer.NewSessionFromRequest(req)
-					session.DeobfuscateGapReport(&direct)
-					direct.Normalize()
-					return &direct, nil
+					return finalizeGapReport(req, &direct), nil
 				}
 			}
 		}
@@ -112,6 +112,71 @@ func (a *ServiceAdapter) GenerateGapAnalysis(ctx context.Context, req core.Gener
 	session.DeobfuscateGenerationResponse(resp)
 	resp.GapReport.Normalize()
 	return &resp.GapReport, nil
+}
+
+func finalizeGapReport(req core.GenerationRequest, report *core.GapReport) *core.GapReport {
+	session := sanitizer.NewSessionFromRequest(req)
+	session.DeobfuscateGapReport(report)
+	report.Normalize()
+	return report
+}
+
+func providerSupportsNativeSchemaDelivery(p core.LLMProvider) bool {
+	if _, ok := p.(StructuredCompleter); !ok {
+		return false
+	}
+	return providerSupportsStructuredOutput(p)
+}
+
+func canCompleteLightweight(p core.LLMProvider) bool {
+	if _, ok := p.(StructuredCompleter); ok {
+		return true
+	}
+	_, ok := p.(RawCompleter)
+	return ok
+}
+
+func completeProviderPrompt(
+	ctx context.Context,
+	provider core.LLMProvider,
+	model string,
+	prompts *PromptPayload,
+	schema map[string]any,
+	schemaName string,
+	reasoningLevel string,
+	supportsStructured bool,
+) (string, core.TokenUsage, error) {
+	if prompts == nil {
+		return "", core.TokenUsage{}, fmt.Errorf("%w: prompt payload is nil", ErrInvalidResponse)
+	}
+	if sc, ok := provider.(StructuredCompleter); ok {
+		compReq := core.LLMCompletionRequest{
+			Model:          model,
+			SystemPrompt:   prompts.SystemPrompt,
+			UserPrompt:     prompts.UserPrompt,
+			ReasoningLevel: reasoningLevel,
+		}
+		if supportsStructured {
+			compReq.ResponseSchema = schema
+			compReq.SchemaName = schemaName
+		}
+		compResp, err := sc.CompleteStructuredWithUsage(ctx, compReq)
+		if err != nil {
+			return "", core.TokenUsage{}, err
+		}
+		if compResp == nil {
+			return "", core.TokenUsage{}, fmt.Errorf("%w: empty completion response from provider %s", ErrInvalidResponse, provider.Name())
+		}
+		return compResp.Text, compResp.Usage, nil
+	}
+	if rawUsage, ok := provider.(RawUsageCompleter); ok {
+		return rawUsage.CompleteTextWithUsage(ctx, prompts.SystemPrompt, prompts.UserPrompt, model)
+	}
+	if raw, ok := provider.(RawCompleter); ok {
+		text, err := raw.CompleteText(ctx, prompts.SystemPrompt, prompts.UserPrompt, model)
+		return text, core.TokenUsage{}, err
+	}
+	return "", core.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion for ATS simulation", ErrInvalidResponse, provider.Name())
 }
 
 type atsExtractionLLMOutput struct {
@@ -154,24 +219,20 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulation
 		return nil, err
 	}
 
-	completeStep := func(systemPrompt, userPrompt string) (string, core.TokenUsage, error) {
-		if rawUsage, ok := provider.(RawUsageCompleter); ok {
-			return rawUsage.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
-		}
-		if raw, ok := provider.(RawCompleter); ok {
-			text, cErr := raw.CompleteText(ctx, systemPrompt, userPrompt, model)
-			return text, core.TokenUsage{}, cErr
-		}
-		return "", core.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion for ATS simulation", ErrInvalidResponse, provider.Name())
-	}
+	supportsStructured := providerSupportsNativeSchemaDelivery(provider)
+	promptOpts := PromptOptions{NativeStructuredOutput: supportsStructured}
 
 	// Stage 1: ATS Content Extraction & Extraction Confidence Score
-	extractPrompts, session, err := BuildATSExtractionPrompt(req)
+	extractPrompts, session, err := BuildATSExtractionPromptWithOptions(req, promptOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	rawExtract, usage1, err := completeStep(extractPrompts.SystemPrompt, extractPrompts.UserPrompt)
+	rawExtract, usage1, err := completeProviderPrompt(
+		ctx, provider, model, extractPrompts,
+		ATSExtractionResponseSchema(), "ats_extraction_response",
+		req.ReasoningLevel, supportsStructured,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("ats extraction failed: %w", err)
 	}
@@ -188,12 +249,16 @@ func (a *ServiceAdapter) SimulateATS(ctx context.Context, req core.ATSSimulation
 	parsedExtract.ExtractedCandidate.Normalize()
 
 	// Stage 2: Perceived Job Matching Score using ONLY the extracted candidate data
-	matchPrompts, err := BuildATSMatchingPrompt(req.BranchContext, &parsedExtract.ExtractedCandidate, session)
+	matchPrompts, err := BuildATSMatchingPromptWithOptions(req.BranchContext, &parsedExtract.ExtractedCandidate, session, promptOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	rawMatch, usage2, err := completeStep(matchPrompts.SystemPrompt, matchPrompts.UserPrompt)
+	rawMatch, usage2, err := completeProviderPrompt(
+		ctx, provider, model, matchPrompts,
+		ATSMatchingResponseSchema(), "ats_matching_response",
+		req.ReasoningLevel, supportsStructured,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("ats matching failed: %w", err)
 	}

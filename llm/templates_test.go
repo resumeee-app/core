@@ -343,36 +343,62 @@ func TestPromptTemplates_EmbeddedJSONSchemas(t *testing.T) {
 		templateFile string
 		schemaGetter func() map[string]any
 		expectedProp string
+		buildFn      func(native bool) (*llm.PromptPayload, error)
 	}{
 		{
-			name:         "tailor system prompt contains GenerationResponseSchema",
+			name:         "tailor system prompt",
 			templateFile: "tailor_system.tmpl",
 			schemaGetter: llm.GenerationResponseSchema,
 			expectedProp: "tailored_content",
+			buildFn: func(native bool) (*llm.PromptPayload, error) {
+				return llm.BuildPromptWithOptions(core.GenerationRequest{
+					BranchContext: core.Branch{TargetRole: "Staff Go Engineer"},
+				}, llm.PromptOptions{NativeStructuredOutput: native})
+			},
 		},
 		{
-			name:         "gap analysis system prompt contains GapAnalysisResponseSchema",
+			name:         "gap analysis system prompt",
 			templateFile: "gap_analysis_system.tmpl",
 			schemaGetter: llm.GapAnalysisResponseSchema,
 			expectedProp: "gap_report",
+			buildFn: func(native bool) (*llm.PromptPayload, error) {
+				return llm.BuildGapAnalysisPromptWithOptions(core.GenerationRequest{
+					BranchContext: core.Branch{TargetRole: "Staff Go Engineer"},
+				}, llm.PromptOptions{NativeStructuredOutput: native})
+			},
 		},
 		{
-			name:         "resume extract system prompt contains ResumeExtractResponseSchema",
+			name:         "resume extract system prompt",
 			templateFile: "resume_extract_system.tmpl",
 			schemaGetter: llm.ResumeExtractResponseSchema,
 			expectedProp: "basics",
+			buildFn: func(native bool) (*llm.PromptPayload, error) {
+				return llm.BuildResumeExtractPromptWithOptions("Alex Mercer resume", llm.PromptOptions{NativeStructuredOutput: native})
+			},
 		},
 		{
-			name:         "ats extract system prompt contains ATSExtractionResponseSchema",
+			name:         "ats extract system prompt",
 			templateFile: "ats_extract_system.tmpl",
 			schemaGetter: llm.ATSExtractionResponseSchema,
 			expectedProp: "extraction_confidence_score",
+			buildFn: func(native bool) (*llm.PromptPayload, error) {
+				return func() (*llm.PromptPayload, error) {
+					p, _, err := llm.BuildATSExtractionPromptWithOptions(core.ATSSimulationRequest{
+						ResumeText: "Alex Mercer",
+						FormatUsed: "markdown",
+					}, llm.PromptOptions{NativeStructuredOutput: native})
+					return p, err
+				}()
+			},
 		},
 		{
-			name:         "ats match system prompt contains ATSMatchingResponseSchema",
+			name:         "ats match system prompt",
 			templateFile: "ats_match_system.tmpl",
 			schemaGetter: llm.ATSMatchingResponseSchema,
 			expectedProp: "job_matching_score",
+			buildFn: func(native bool) (*llm.PromptPayload, error) {
+				return llm.BuildATSMatchingPromptWithOptions(core.Branch{TargetRole: "Backend"}, nil, nil, llm.PromptOptions{NativeStructuredOutput: native})
+			},
 		},
 	}
 
@@ -382,27 +408,41 @@ func TestPromptTemplates_EmbeddedJSONSchemas(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to read template %s: %v", tc.templateFile, err)
 			}
-
-			// Must contain markdown json code block
-			if !strings.Contains(content, "```json") || !strings.Contains(content, "```") {
-				t.Fatalf("template %s missing ```json code fence block", tc.templateFile)
+			if strings.Contains(content, "<response_schema>") || strings.Contains(content, "```json") {
+				t.Fatalf("base template %s must not hardcode <response_schema> JSON schema", tc.templateFile)
 			}
 
-			// Extract json from code fence
-			extracted := llm.ExtractJSON(content)
+			// Native structured output omits <response_schema> and ```json fences
+			nativePayload, err := tc.buildFn(true)
+			if err != nil {
+				t.Fatalf("build native failed: %v", err)
+			}
+			if strings.Contains(nativePayload.SystemPrompt, "<response_schema>") || strings.Contains(nativePayload.SystemPrompt, "```json") {
+				t.Errorf("%s with NativeStructuredOutput=true must omit <response_schema>", tc.name)
+			}
+
+			// Fallback mode appends canonical schema in <response_schema> matching *Schema()
+			fallbackPayload, err := tc.buildFn(false)
+			if err != nil {
+				t.Fatalf("build fallback failed: %v", err)
+			}
+			if !strings.Contains(fallbackPayload.SystemPrompt, "<response_schema>") || !strings.Contains(fallbackPayload.SystemPrompt, "```json") {
+				t.Fatalf("%s with NativeStructuredOutput=false missing fallback <response_schema>", tc.name)
+			}
+
+			extracted := llm.ExtractJSON(fallbackPayload.SystemPrompt)
 			if strings.TrimSpace(extracted) == "" {
-				t.Fatalf("template %s: ExtractJSON found no JSON inside code fence", tc.templateFile)
+				t.Fatalf("%s: ExtractJSON found no JSON in fallback system prompt", tc.name)
 			}
 
-			expectedSchema := tc.schemaGetter()
-			expectedBytes, err := json.Marshal(expectedSchema)
+			expectedBytes, err := json.Marshal(tc.schemaGetter())
 			if err != nil {
 				t.Fatalf("failed to marshal expected schema: %v", err)
 			}
 
 			var parsedTemplateSchema map[string]any
 			if err := json.Unmarshal([]byte(extracted), &parsedTemplateSchema); err != nil {
-				t.Fatalf("template %s contained invalid JSON in code fence: %v", tc.templateFile, err)
+				t.Fatalf("%s fallback prompt contained invalid JSON: %v", tc.name, err)
 			}
 
 			var parsedExpectedSchema map[string]any
@@ -411,16 +451,58 @@ func TestPromptTemplates_EmbeddedJSONSchemas(t *testing.T) {
 			}
 
 			if !reflect.DeepEqual(parsedTemplateSchema, parsedExpectedSchema) {
-				t.Errorf("template %s embedded JSON schema does not match canonical schema in code", tc.templateFile)
+				t.Errorf("%s fallback prompt JSON schema does not match canonical schema", tc.name)
 			}
 
-			// Verify expected property exists at top level of schema
 			props, ok := parsedTemplateSchema["properties"].(map[string]any)
 			if !ok {
-				t.Fatalf("template %s schema missing properties map", tc.templateFile)
+				t.Fatalf("%s schema missing properties map", tc.name)
 			}
 			if _, ok := props[tc.expectedProp]; !ok {
-				t.Errorf("template %s schema missing expected property %q", tc.templateFile, tc.expectedProp)
+				t.Errorf("%s schema missing expected property %q", tc.name, tc.expectedProp)
+			}
+		})
+	}
+}
+
+func TestPromptCompiler_ProviderCapabilityAwareness(t *testing.T) {
+	reg := llm.NewRegistry()
+	llm.RegisterClients(reg, llm.ProviderConfig{
+		GeminiAPIKey:  "gem-key",
+		OllamaBaseURL: "http://localhost:11434",
+		CompatBaseURL: "http://localhost:8080/v1",
+	})
+
+	compiler := llm.NewPromptCompiler(llm.WithPromptRegistry(reg))
+	defaultCompiler := llm.NewPromptCompiler()
+
+	tests := []struct {
+		name             string
+		compiler         core.PromptCompiler
+		providerOverride string
+		wantSchemaInSys  bool
+	}{
+		{"gemini omits schema", compiler, llm.ProviderGemini, false},
+		{"ollama omits schema", compiler, llm.ProviderOllama, false},
+		{"compat appends schema fallback", compiler, llm.ProviderCompat, true},
+		{"default provider gemini omits schema", compiler, "", false},
+		{"default zero-arg compiler appends schema fallback", defaultCompiler, "", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			preview, err := tc.compiler.CompilePrompt(core.GenerationRequest{
+				BranchContext: core.Branch{
+					TargetRole:       "Staff Systems Engineer",
+					ProviderOverride: tc.providerOverride,
+				},
+			})
+			if err != nil {
+				t.Fatalf("CompilePrompt failed: %v", err)
+			}
+			hasSchema := strings.Contains(preview.SystemPrompt, "<response_schema>")
+			if hasSchema != tc.wantSchemaInSys {
+				t.Errorf("has <response_schema> = %v, want %v", hasSchema, tc.wantSchemaInSys)
 			}
 		})
 	}

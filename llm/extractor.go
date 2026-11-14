@@ -20,6 +20,12 @@ type UsageCompleter interface {
 	CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, core.TokenUsage, error)
 }
 
+// StructuredUsageCompleter extends Completer with provider capability detection and schema-guided structured completions.
+type StructuredUsageCompleter interface {
+	SupportsStructuredOutput(provider string) bool
+	CompleteStructuredWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string, schema map[string]any, schemaName string) (string, core.TokenUsage, error)
+}
+
 // CompleterFunc allows using an ordinary function as a Completer.
 type CompleterFunc func(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, error)
 
@@ -101,8 +107,58 @@ func (rc *registryCompleter) Complete(ctx context.Context, systemPrompt, userPro
 
 // CompleteWithUsage delegates raw text completion and captures token usage from the resolved LLM provider.
 func (rc *registryCompleter) CompleteWithUsage(ctx context.Context, systemPrompt, userPrompt, provider, model string) (string, core.TokenUsage, error) {
+	p, targetModel, err := rc.resolveProvider(provider, model)
+	if err != nil {
+		return "", core.TokenUsage{}, err
+	}
+	return completeWithRawFallback(ctx, p, systemPrompt, userPrompt, targetModel)
+}
+
+// SupportsStructuredOutput reports whether the resolved provider natively enforces structured JSON schemas.
+func (rc *registryCompleter) SupportsStructuredOutput(provider string) bool {
+	p, _, err := rc.resolveProvider(provider, "")
+	if err != nil {
+		return false
+	}
+	return providerSupportsNativeSchemaDelivery(p)
+}
+
+// CompleteStructuredWithUsage dispatches a schema-guided completion when supported, falling back to raw completion otherwise.
+func (rc *registryCompleter) CompleteStructuredWithUsage(
+	ctx context.Context,
+	systemPrompt, userPrompt, provider, model string,
+	schema map[string]any,
+	schemaName string,
+) (string, core.TokenUsage, error) {
+	p, targetModel, err := rc.resolveProvider(provider, model)
+	if err != nil {
+		return "", core.TokenUsage{}, err
+	}
+	if sc, ok := p.(StructuredCompleter); ok {
+		compReq := core.LLMCompletionRequest{
+			Model:        targetModel,
+			SystemPrompt: systemPrompt,
+			UserPrompt:   userPrompt,
+		}
+		if providerSupportsNativeSchemaDelivery(p) {
+			compReq.ResponseSchema = schema
+			compReq.SchemaName = schemaName
+		}
+		compResp, err := sc.CompleteStructuredWithUsage(ctx, compReq)
+		if err != nil {
+			return "", core.TokenUsage{}, err
+		}
+		if compResp == nil {
+			return "", core.TokenUsage{}, fmt.Errorf("%w: empty completion response from provider %s", ErrInvalidResponse, p.Name())
+		}
+		return strings.TrimSpace(compResp.Text), compResp.Usage, nil
+	}
+	return completeWithRawFallback(ctx, p, systemPrompt, userPrompt, targetModel)
+}
+
+func (rc *registryCompleter) resolveProvider(provider, model string) (core.LLMProvider, string, error) {
 	if rc.registry == nil {
-		return "", core.TokenUsage{}, ErrNoProviders
+		return nil, "", ErrNoProviders
 	}
 
 	targetProvider := provider
@@ -110,32 +166,36 @@ func (rc *registryCompleter) CompleteWithUsage(ctx context.Context, systemPrompt
 		targetProvider = rc.registry.DefaultProvider()
 	}
 	if strings.TrimSpace(targetProvider) == "" {
-		return "", core.TokenUsage{}, ErrNoProviders
+		return nil, "", ErrNoProviders
 	}
 
 	p, err := rc.registry.Get(targetProvider)
 	if err != nil {
-		return "", core.TokenUsage{}, err
+		return nil, "", err
 	}
 
 	targetModel := model
 	if strings.TrimSpace(targetModel) == "" {
 		if strings.EqualFold(targetProvider, rc.registry.DefaultProvider()) {
 			targetModel = rc.registry.DefaultModel()
+		} else if mcp, ok := p.(ModelCatalogProvider); ok && strings.TrimSpace(mcp.DefaultModel()) != "" {
+			targetModel = mcp.DefaultModel()
 		} else {
 			targetModel = defaultModelForProvider(targetProvider)
 		}
 	}
 
-	if rawUsage, ok := p.(RawUsageCompleter); ok {
-		return rawUsage.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, targetModel)
-	}
+	return p, targetModel, nil
+}
 
+func completeWithRawFallback(ctx context.Context, p core.LLMProvider, systemPrompt, userPrompt, model string) (string, core.TokenUsage, error) {
+	if rawUsage, ok := p.(RawUsageCompleter); ok {
+		return rawUsage.CompleteTextWithUsage(ctx, systemPrompt, userPrompt, model)
+	}
 	if raw, ok := p.(RawCompleter); ok {
-		text, err := raw.CompleteText(ctx, systemPrompt, userPrompt, targetModel)
+		text, err := raw.CompleteText(ctx, systemPrompt, userPrompt, model)
 		return text, core.TokenUsage{}, err
 	}
-
 	return "", core.TokenUsage{}, fmt.Errorf("%w: provider %s does not support raw completion", ErrInvalidResponse, p.Name())
 }
 
@@ -160,14 +220,32 @@ func (e *resumeExtractor) ExtractResumeWithUsage(ctx context.Context, text strin
 		return nil, core.TokenUsage{}, fmt.Errorf("%w: no completer configured", core.ErrValidation)
 	}
 
-	prompts, err := BuildResumeExtractPrompt(trimmedText)
+	supportsStructured := false
+	structuredCompleter, hasStructured := e.completer.(StructuredUsageCompleter)
+	if hasStructured {
+		supportsStructured = structuredCompleter.SupportsStructuredOutput(provider)
+	}
+
+	prompts, err := BuildResumeExtractPromptWithOptions(trimmedText, PromptOptions{
+		NativeStructuredOutput: supportsStructured,
+	})
 	if err != nil {
 		return nil, core.TokenUsage{}, fmt.Errorf("failed to build resume extraction prompt: %w", err)
 	}
 
 	var rawResponse string
 	var usage core.TokenUsage
-	if uc, ok := e.completer.(UsageCompleter); ok {
+	if hasStructured {
+		var schema map[string]any
+		var schemaName string
+		if supportsStructured {
+			schema = ResumeExtractResponseSchema()
+			schemaName = "resume_extract_response"
+		}
+		rawResponse, usage, err = structuredCompleter.CompleteStructuredWithUsage(
+			ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model, schema, schemaName,
+		)
+	} else if uc, ok := e.completer.(UsageCompleter); ok {
 		rawResponse, usage, err = uc.CompleteWithUsage(ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model)
 	} else {
 		rawResponse, err = e.completer.Complete(ctx, prompts.SystemPrompt, prompts.UserPrompt, provider, model)

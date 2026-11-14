@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -791,34 +792,149 @@ func ResumeExtractResponseSchema() map[string]any {
 // unsupported keywords (such as "additionalProperties", "$schema", "$defs", "definitions", "title")
 // while preserving OpenAPI 3.0 fields supported by the Google Generative Language API.
 func SanitizeGeminiSchema(schema map[string]any) map[string]any {
+	return transformSchema(schema, func(m map[string]any) map[string]any {
+		cleaned := make(map[string]any, len(m))
+		for k, child := range m {
+			switch k {
+			case "additionalProperties", "$schema", "$defs", "definitions", "title":
+				continue
+			default:
+				cleaned[k] = child
+			}
+		}
+		return cleaned
+	})
+}
+
+// SanitizeGeminiJSONSchema creates a deep clone of the provided JSON Schema map suitable for
+// Google Gemini's generationConfig.responseJsonSchema field, stripping unsupported schema meta
+// keywords ("$schema", "definitions") while preserving "additionalProperties", "properties",
+// "required", and descriptions.
+func SanitizeGeminiJSONSchema(schema map[string]any) map[string]any {
+	return transformSchema(schema, func(m map[string]any) map[string]any {
+		cleaned := make(map[string]any, len(m))
+		for k, child := range m {
+			switch k {
+			case "$schema", "definitions":
+				continue
+			default:
+				cleaned[k] = child
+			}
+		}
+		return cleaned
+	})
+}
+
+// SanitizeAnthropicSchema creates a deep clone of the provided JSON Schema map and ensures every
+// object schema explicitly sets "additionalProperties": false as required by Anthropic's
+// output_config.format structured output validator.
+func SanitizeAnthropicSchema(schema map[string]any) map[string]any {
+	return transformSchema(schema, func(m map[string]any) map[string]any {
+		if m["type"] == "object" {
+			m["additionalProperties"] = false
+		}
+		return m
+	})
+}
+
+// SanitizeOpenAISchema creates a deep clone of the provided JSON Schema map and normalizes every
+// object schema for OpenAI strict mode (strict: true): setting "additionalProperties": false,
+// ensuring every key in "properties" is listed in "required", and converting non-required
+// properties to accept null so optional fields remain valid.
+func SanitizeOpenAISchema(schema map[string]any) map[string]any {
+	return transformSchema(schema, func(m map[string]any) map[string]any {
+		if m["type"] != "object" {
+			return m
+		}
+		m["additionalProperties"] = false
+		props, hasProps := m["properties"].(map[string]any)
+		if !hasProps || len(props) == 0 {
+			return m
+		}
+
+		reqSet := extractRequiredSet(m["required"])
+		allKeys := make([]string, 0, len(props))
+		for k, subVal := range props {
+			allKeys = append(allKeys, k)
+			if !reqSet[k] {
+				props[k] = makeNullableSchemaNode(subVal)
+			}
+		}
+		sort.Strings(allKeys)
+		m["required"] = allKeys
+		return m
+	})
+}
+
+func extractRequiredSet(raw any) map[string]bool {
+	set := make(map[string]bool)
+	switch v := raw.(type) {
+	case []string:
+		for _, s := range v {
+			set[s] = true
+		}
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				set[s] = true
+			}
+		}
+	}
+	return set
+}
+
+func makeNullableSchemaNode(val any) any {
+	m, ok := val.(map[string]any)
+	if !ok || m == nil {
+		return val
+	}
+	if typStr, ok := m["type"].(string); ok {
+		if typStr == "null" {
+			return m
+		}
+		if typStr == "object" {
+			wrapped := map[string]any{
+				"anyOf": []any{m, map[string]any{"type": "null"}},
+			}
+			if desc, hasDesc := m["description"]; hasDesc {
+				wrapped["description"] = desc
+			}
+			return wrapped
+		}
+		m["type"] = []string{typStr, "null"}
+		return m
+	}
+	if _, hasAnyOf := m["anyOf"]; hasAnyOf {
+		return m
+	}
+	return map[string]any{
+		"anyOf": []any{m, map[string]any{"type": "null"}},
+	}
+}
+
+func transformSchema(schema map[string]any, fn func(map[string]any) map[string]any) map[string]any {
 	if schema == nil {
 		return nil
 	}
-	res, ok := sanitizeNode(schema).(map[string]any)
+	res, ok := transformNode(schema, fn).(map[string]any)
 	if !ok {
 		return nil
 	}
 	return res
 }
 
-// sanitizeNode recursively traverses and sanitizes maps, slices, and primitive values.
-func sanitizeNode(val any) any {
+func transformNode(val any, fn func(map[string]any) map[string]any) any {
 	switch v := val.(type) {
 	case map[string]any:
-		cleaned := make(map[string]any, len(v))
+		cloned := make(map[string]any, len(v))
 		for k, child := range v {
-			switch k {
-			case "additionalProperties", "$schema", "$defs", "definitions", "title":
-				continue
-			default:
-				cleaned[k] = sanitizeNode(child)
-			}
+			cloned[k] = transformNode(child, fn)
 		}
-		return cleaned
+		return fn(cloned)
 	case []any:
 		cleaned := make([]any, len(v))
 		for i, child := range v {
-			cleaned[i] = sanitizeNode(child)
+			cleaned[i] = transformNode(child, fn)
 		}
 		return cleaned
 	case []string:

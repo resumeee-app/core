@@ -40,6 +40,13 @@ func TestGeminiProvider_Complete_StructuredAndText(t *testing.T) {
 			if !ok || genCfg["responseMimeType"] != "application/json" {
 				t.Errorf("expected responseMimeType application/json, got %v", body["generationConfig"])
 			}
+			if _, hasDeprecated := genCfg["responseSchema"]; hasDeprecated {
+				t.Errorf("did not expect deprecated responseSchema alongside responseJsonSchema")
+			}
+			jsonSchema, hasJSONSchema := genCfg["responseJsonSchema"].(map[string]any)
+			if !hasJSONSchema || jsonSchema["additionalProperties"] != false {
+				t.Errorf("expected responseJsonSchema preserving additionalProperties: false, got %v", genCfg["responseJsonSchema"])
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"candidates": [{"content": {"parts": [{"text": "{\"summary\":\"Tailored\"}"}]}}],
@@ -146,22 +153,72 @@ func TestGeminiProvider_Complete_StructuredAndText(t *testing.T) {
 	})
 }
 
+func TestProviders_SupportsStructuredOutput(t *testing.T) {
+	cases := []struct {
+		name string
+		prov core.LLMClient
+		want bool
+	}{
+		{"gemini", NewGeminiProvider("k"), true},
+		{"openai", NewOpenAIProvider("k"), true},
+		{"anthropic", NewAnthropicProvider("k"), true},
+		{"ollama", NewOllamaProvider("", ""), true},
+		{"compat", NewCompatProvider("http://localhost:8080/v1", ""), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.prov.SupportsStructuredOutput(); got != tc.want {
+				t.Errorf("SupportsStructuredOutput() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOpenAIProvider_Complete_StructuredAndText(t *testing.T) {
-	t.Run("structured response with json_schema", func(t *testing.T) {
+	t.Run("structured response via Responses API", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/responses" {
+				t.Errorf("expected /v1/responses, got %q", r.URL.Path)
+			}
 			if r.Header.Get("Authorization") != "Bearer test-openai-key" {
 				t.Errorf("unexpected Authorization header: %q", r.Header.Get("Authorization"))
 			}
 			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			rf, ok := body["response_format"].(map[string]any)
-			if !ok || rf["type"] != "json_schema" {
-				t.Errorf("expected response_format json_schema, got %v", body["response_format"])
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode body: %v", err)
+			}
+			if body["instructions"] != "sys" {
+				t.Errorf("expected instructions 'sys', got %v", body["instructions"])
+			}
+			if body["input"] != "user" {
+				t.Errorf("expected input 'user', got %v", body["input"])
+			}
+			reasoning, ok := body["reasoning"].(map[string]any)
+			if !ok || reasoning["effort"] != "high" {
+				t.Errorf("expected reasoning effort high, got %v", body["reasoning"])
+			}
+			textObj, ok := body["text"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected text object in Responses API body, got %v", body)
+			}
+			formatObj, ok := textObj["format"].(map[string]any)
+			if !ok || formatObj["type"] != "json_schema" || formatObj["strict"] != true || formatObj["name"] != "gap_analysis_response" {
+				t.Errorf("unexpected text.format payload: %v", textObj["format"])
+			}
+			schemaObj, ok := formatObj["schema"].(map[string]any)
+			if !ok || schemaObj["additionalProperties"] != false {
+				t.Errorf("expected normalized strict schema in text.format.schema, got %v", formatObj["schema"])
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
-				"choices": [{"message": {"content": "{\"summary\":\"OpenAI Tailored\"}"}}],
-				"usage": {"prompt_tokens": 50, "completion_tokens": 25, "total_tokens": 75}
+				"status": "completed",
+				"output": [{
+					"type": "message",
+					"role": "assistant",
+					"content": [{"type": "output_text", "text": "{\"summary\":\"OpenAI Tailored\"}"}]
+				}],
+				"usage": {"input_tokens": 50, "output_tokens": 25, "total_tokens": 75}
 			}`))
 		}))
 		defer srv.Close()
@@ -178,6 +235,8 @@ func TestOpenAIProvider_Complete_StructuredAndText(t *testing.T) {
 			SystemPrompt:   "sys",
 			UserPrompt:     "user",
 			ResponseSchema: sampleTestSchema,
+			SchemaName:     "gap_analysis_response",
+			ReasoningLevel: "high",
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -185,28 +244,70 @@ func TestOpenAIProvider_Complete_StructuredAndText(t *testing.T) {
 		if resp.Text != `{"summary":"OpenAI Tailored"}` {
 			t.Errorf("unexpected text: %q", resp.Text)
 		}
-		if resp.Usage.TotalTokens != 75 {
-			t.Errorf("expected 75 tokens, got %d", resp.Usage.TotalTokens)
+		if resp.Usage.PromptTokens != 50 || resp.Usage.CompletionTokens != 25 || resp.Usage.TotalTokens != 75 {
+			t.Errorf("unexpected usage: %+v", resp.Usage)
 		}
 	})
 
-	t.Run("error statuses and empty choices", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"choices":[]}`))
+	t.Run("plain text without schema omits text.format and reasoning when none", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if _, hasText := body["text"]; hasText {
+				t.Errorf("did not expect text format when ResponseSchema is nil, got %v", body["text"])
+			}
+			if _, hasReasoning := body["reasoning"]; hasReasoning {
+				t.Errorf("did not expect reasoning when level is 'none', got %v", body["reasoning"])
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"output_text": "Plain Responses Text",
+				"usage": {"input_tokens": 12, "output_tokens": 8}
+			}`))
 		}))
 		defer srv.Close()
 
 		prov := NewOpenAIProvider("key", WithBaseURL(srv.URL))
-		_, err := prov.Complete(context.Background(), core.LLMCompletionRequest{UserPrompt: "hi"})
-		if !errors.Is(err, ErrInvalidResponse) {
-			t.Errorf("expected ErrInvalidResponse, got %v", err)
+		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
+			UserPrompt:     "hi",
+			ReasoningLevel: "none",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Text != "Plain Responses Text" || resp.Usage.TotalTokens != 20 {
+			t.Errorf("unexpected resp: %+v", resp)
+		}
+	})
+
+	t.Run("refusal and empty output return ErrInvalidResponse", func(t *testing.T) {
+		cases := []struct {
+			name string
+			body string
+		}{
+			{"empty output", `{"output":[]}`},
+			{"refusal block", `{"output":[{"type":"message","content":[{"type":"refusal","refusal":"unsafe"}]}]}`},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				defer srv.Close()
+
+				prov := NewOpenAIProvider("key", WithBaseURL(srv.URL))
+				_, err := prov.Complete(context.Background(), core.LLMCompletionRequest{UserPrompt: "hi"})
+				if !errors.Is(err, ErrInvalidResponse) {
+					t.Errorf("expected ErrInvalidResponse, got %v", err)
+				}
+			})
 		}
 	})
 }
 
 func TestAnthropicProvider_Complete_StructuredAndText(t *testing.T) {
-	t.Run("structured response via tool_use", func(t *testing.T) {
+	t.Run("structured response via output_config.format", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("x-api-key") != "test-anthropic-key" {
 				t.Errorf("unexpected x-api-key: %q", r.Header.Get("x-api-key"))
@@ -214,9 +315,32 @@ func TestAnthropicProvider_Complete_StructuredAndText(t *testing.T) {
 			if r.Header.Get("anthropic-version") != anthropicAPIVersion {
 				t.Errorf("unexpected anthropic-version: %q", r.Header.Get("anthropic-version"))
 			}
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode body: %v", err)
+			}
+			if _, hasTools := body["tools"]; hasTools {
+				t.Errorf("did not expect legacy tools workaround when using output_config.format")
+			}
+			if _, hasTC := body["tool_choice"]; hasTC {
+				t.Errorf("did not expect legacy tool_choice workaround when using output_config.format")
+			}
+			outCfg, ok := body["output_config"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected output_config in anthropic request, got %v", body)
+			}
+			fmtCfg, ok := outCfg["format"].(map[string]any)
+			if !ok || fmtCfg["type"] != "json_schema" {
+				t.Errorf("expected output_config.format.type == json_schema, got %v", outCfg["format"])
+			}
+			schemaObj, ok := fmtCfg["schema"].(map[string]any)
+			if !ok || schemaObj["additionalProperties"] != false {
+				t.Errorf("expected normalized schema with additionalProperties: false, got %v", fmtCfg["schema"])
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
-				"content": [{"type": "tool_use", "name": "generate_tailored_resume", "input": {"summary": "Anthropic Tailored"}}],
+				"content": [{"type": "text", "text": "{\"summary\":\"Anthropic Tailored\"}"}],
+				"stop_reason": "end_turn",
 				"usage": {"input_tokens": 40, "output_tokens": 20}
 			}`))
 		}))
@@ -247,7 +371,12 @@ func TestAnthropicProvider_Complete_StructuredAndText(t *testing.T) {
 	})
 
 	t.Run("plain text response", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if _, hasOutCfg := body["output_config"]; hasOutCfg {
+				t.Errorf("did not expect output_config for plain text request")
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"content": [{"type": "text", "text": "Plain Claude Output"}],
@@ -269,69 +398,206 @@ func TestAnthropicProvider_Complete_StructuredAndText(t *testing.T) {
 		}
 	})
 
-	t.Run("missing tool call returns ErrInvalidResponse", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	t.Run("refusal and empty content return ErrInvalidResponse", func(t *testing.T) {
+		cases := []struct {
+			name string
+			body string
+		}{
+			{"empty content", `{"content": []}`},
+			{"refusal stop reason", `{"stop_reason": "refusal", "content": [{"type": "text", "text": "cannot comply"}]}`},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				defer srv.Close()
+
+				prov := NewAnthropicProvider("key", WithBaseURL(srv.URL))
+				_, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
+					UserPrompt:     "user",
+					ResponseSchema: sampleTestSchema,
+				})
+				if !errors.Is(err, ErrInvalidResponse) {
+					t.Errorf("expected ErrInvalidResponse, got %v", err)
+				}
+			})
+		}
+	})
+}
+
+func TestOllamaProvider_Complete_StructuredAndText(t *testing.T) {
+	t.Run("structured response sets stream false and format schema", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/chat" {
+				t.Errorf("expected /api/chat, got %q", r.URL.Path)
+			}
+			if r.Header.Get("Authorization") != "Bearer ollama-secret" {
+				t.Errorf("expected optional bearer auth header, got %q", r.Header.Get("Authorization"))
+			}
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode body: %v", err)
+			}
+			streamVal, hasStream := body["stream"]
+			if !hasStream || streamVal != false {
+				t.Errorf("expected explicit stream: false in Ollama /api/chat request, got present=%v val=%v", hasStream, streamVal)
+			}
+			fmtObj, ok := body["format"].(map[string]any)
+			if !ok || fmtObj["type"] != "object" {
+				t.Errorf("expected JSON Schema object in Ollama format field, got %v", body["format"])
+			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"content": [{"type": "text", "text": "no tool"}]}`))
+			_, _ = w.Write([]byte(`{
+				"model": "llama3.2",
+				"message": {"role": "assistant", "content": "{\"summary\":\"Ollama Tailored\"}"},
+				"done": true,
+				"prompt_eval_count": 45,
+				"eval_count": 15
+			}`))
 		}))
 		defer srv.Close()
 
-		prov := NewAnthropicProvider("key", WithBaseURL(srv.URL))
-		_, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
+		prov := NewOllamaProvider(srv.URL, "ollama-secret", WithDefaultModel("llama3.2"))
+		if prov.Name() != ProviderOllama {
+			t.Errorf("expected %q, got %q", ProviderOllama, prov.Name())
+		}
+		if len(prov.Models()) != 1 || prov.Models()[0].Model != "llama3.2" {
+			t.Errorf("unexpected ollama models: %+v", prov.Models())
+		}
+
+		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
+			SystemPrompt:   "sys",
 			UserPrompt:     "user",
 			ResponseSchema: sampleTestSchema,
 		})
-		if !errors.Is(err, ErrInvalidResponse) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Text != `{"summary":"Ollama Tailored"}` {
+			t.Errorf("unexpected text: %q", resp.Text)
+		}
+		if resp.Usage.PromptTokens != 45 || resp.Usage.CompletionTokens != 15 || resp.Usage.TotalTokens != 60 {
+			t.Errorf("unexpected ollama token usage: %+v", resp.Usage)
+		}
+	})
+
+	t.Run("plain text omits format and handles errors", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if _, hasFormat := body["format"]; hasFormat {
+				t.Errorf("did not expect format for plain text Ollama request, got %v", body["format"])
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"message": {"role": "assistant", "content": "  Plain Ollama Output  "},
+				"prompt_eval_count": 10,
+				"eval_count": 5
+			}`))
+		}))
+		defer srv.Close()
+
+		prov := NewOllamaProvider(srv.URL, "")
+		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{UserPrompt: "hi"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Text != "Plain Ollama Output" || resp.Usage.TotalTokens != 15 {
+			t.Errorf("unexpected response: %+v", resp)
+		}
+	})
+
+	t.Run("empty content and error status", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":""}}`))
+		}))
+		defer srv.Close()
+
+		prov := NewOllamaProvider(srv.URL, "")
+		if _, err := prov.Complete(context.Background(), core.LLMCompletionRequest{UserPrompt: "hi"}); !errors.Is(err, ErrInvalidResponse) {
 			t.Errorf("expected ErrInvalidResponse, got %v", err)
 		}
 	})
 }
 
 func TestCompatProvider_Complete_StructuredAndText(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			t.Errorf("expected /v1/chat/completions, got %q", r.URL.Path)
-		}
-		var body struct {
-			Messages []struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"messages"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if len(body.Messages) == 0 || !strings.Contains(body.Messages[0].Content, "<json_output_schema>") {
-			t.Errorf("expected embedded <json_output_schema> in system message, got %+v", body.Messages)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"summary\":\"Compat Tailored\"}"}}],
-			"usage": {"prompt_tokens": 30, "completion_tokens": 10}
-		}`))
-	}))
-	defer srv.Close()
+	t.Run("direct schema without prompt directive appends fallback", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/chat/completions" {
+				t.Errorf("expected /v1/chat/completions, got %q", r.URL.Path)
+			}
+			var body struct {
+				Messages []struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"messages"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if len(body.Messages) == 0 || !strings.Contains(body.Messages[0].Content, "<json_output_schema>") {
+				t.Errorf("expected embedded <json_output_schema> in system message, got %+v", body.Messages)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"choices": [{"message": {"content": "{\"summary\":\"Compat Tailored\"}"}}],
+				"usage": {"prompt_tokens": 30, "completion_tokens": 10}
+			}`))
+		}))
+		defer srv.Close()
 
-	prov := NewCompatProvider(srv.URL+"/v1", "optional-key", WithDefaultModel("llama3.3"))
-	if prov.Name() != ProviderCompat {
-		t.Errorf("expected %q, got %q", ProviderCompat, prov.Name())
-	}
-	if len(prov.Models()) != 1 || prov.Models()[0].Model != "llama3.3" {
-		t.Errorf("unexpected compat models: %+v", prov.Models())
-	}
+		prov := NewCompatProvider(srv.URL+"/v1", "optional-key", WithDefaultModel("llama3.3"))
+		if prov.Name() != ProviderCompat {
+			t.Errorf("expected %q, got %q", ProviderCompat, prov.Name())
+		}
+		if len(prov.Models()) != 1 || prov.Models()[0].Model != "llama3.3" {
+			t.Errorf("unexpected compat models: %+v", prov.Models())
+		}
 
-	resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
-		SystemPrompt:   "sys",
-		UserPrompt:     "user",
-		ResponseSchema: sampleTestSchema,
+		resp, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
+			SystemPrompt:   "sys",
+			UserPrompt:     "user",
+			ResponseSchema: sampleTestSchema,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Text != `{"summary":"Compat Tailored"}` {
+			t.Errorf("unexpected text: %q", resp.Text)
+		}
+		if resp.Usage.TotalTokens != 40 {
+			t.Errorf("expected 40 total tokens, got %d", resp.Usage.TotalTokens)
+		}
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.Text != `{"summary":"Compat Tailored"}` {
-		t.Errorf("unexpected text: %q", resp.Text)
-	}
-	if resp.Usage.TotalTokens != 40 {
-		t.Errorf("expected 40 total tokens, got %d", resp.Usage.TotalTokens)
-	}
+
+	t.Run("does not duplicate schema when <response_schema> already compiled", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Messages []struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"messages"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if strings.Contains(body.Messages[0].Content, "<json_output_schema>") {
+				t.Errorf("expected CompatProvider not to duplicate schema when <response_schema> already present")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices": [{"message": {"content": "{\"summary\":\"ok\"}"}}]}`))
+		}))
+		defer srv.Close()
+
+		prov := NewCompatProvider(srv.URL+"/v1", "")
+		_, err := prov.Complete(context.Background(), core.LLMCompletionRequest{
+			SystemPrompt:   "rules\n<response_schema>{}</response_schema>",
+			UserPrompt:     "user",
+			ResponseSchema: sampleTestSchema,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestRegisterClients_DefaultModelPerProvider(t *testing.T) {
@@ -343,12 +609,14 @@ func TestRegisterClients_DefaultModelPerProvider(t *testing.T) {
 		OpenAIAPIKey:    "oai-key",
 		OpenAIModel:     "gpt-4o-mini",
 		AnthropicAPIKey: "ant-key",
-		AnthropicModel:  "claude-3-5-haiku-20241022",
-		CompatBaseURL:   "http://localhost:11434/v1",
+		AnthropicModel:  "claude-sonnet-4-5",
+		OllamaBaseURL:   "http://localhost:11434",
+		OllamaModel:     "llama3.1",
+		CompatBaseURL:   "http://localhost:1234/v1",
 		CompatModel:     "qwen2.5",
 	}, WithTimeout(30*time.Second))
 
-	for _, name := range []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderCompat, ProviderCompatAlt} {
+	for _, name := range []string{ProviderGemini, ProviderOpenAI, ProviderAnthropic, ProviderOllama, ProviderCompat, ProviderCompatAlt} {
 		if _, err := reg.Get(name); err != nil {
 			t.Errorf("expected provider %q to be registered: %v", name, err)
 		}
@@ -360,8 +628,8 @@ func TestRegisterClients_DefaultModelPerProvider(t *testing.T) {
 	}
 
 	models := reg.AvailableModels()
-	if len(models) != 4 {
-		t.Errorf("expected exactly 4 default models (one per registered provider), got %d: %+v", len(models), models)
+	if len(models) != 5 {
+		t.Errorf("expected exactly 5 default models (one per registered provider), got %d: %+v", len(models), models)
 	}
 }
 

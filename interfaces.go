@@ -153,6 +153,7 @@ type LLMCompletionRequest struct {
 	SystemPrompt   string
 	UserPrompt     string
 	ResponseSchema map[string]any
+	SchemaName     string
 	ReasoningLevel string
 }
 
@@ -164,12 +165,19 @@ type LLMCompletionResponse struct {
 	Usage      TokenUsage
 }
 
+// StructuredOutputCapable identifies transport clients or providers capable of
+// natively enforcing a structured JSON ResponseSchema at the provider API layer.
+type StructuredOutputCapable interface {
+	SupportsStructuredOutput() bool
+}
+
 // LLMClient abstracts pure transport communication with an external LLM vendor API.
 // Implementations must only handle wire serialization, HTTP transport, and status error mapping.
 type LLMClient interface {
 	Name() string
 	DefaultModel() string
 	Models() []ModelOption
+	SupportsStructuredOutput() bool
 	Complete(ctx context.Context, req LLMCompletionRequest) (*LLMCompletionResponse, error)
 }
 

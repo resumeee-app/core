@@ -58,6 +58,11 @@ func (p *GeminiProvider) Models() []core.ModelOption {
 	}
 }
 
+// SupportsStructuredOutput reports that Google Gemini natively enforces JSON schemas via generationConfig.
+func (p *GeminiProvider) SupportsStructuredOutput() bool {
+	return true
+}
+
 // Complete executes a completion request against the Google Gemini Generative Language API.
 func (p *GeminiProvider) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	model := strings.TrimSpace(req.Model)
@@ -73,8 +78,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 		Parts []part `json:"parts"`
 	}
 	type generationConfig struct {
-		ResponseMimeType string         `json:"responseMimeType,omitempty"`
-		ResponseSchema   map[string]any `json:"responseSchema,omitempty"`
+		ResponseMimeType   string         `json:"responseMimeType,omitempty"`
+		ResponseJsonSchema map[string]any `json:"responseJsonSchema,omitempty"`
 	}
 	type requestBody struct {
 		SystemInstruction *content          `json:"systemInstruction,omitempty"`
@@ -96,8 +101,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 
 	if req.ResponseSchema != nil {
 		payload.GenerationConfig = &generationConfig{
-			ResponseMimeType: "application/json",
-			ResponseSchema:   SanitizeGeminiSchema(req.ResponseSchema),
+			ResponseMimeType:   "application/json",
+			ResponseJsonSchema: SanitizeGeminiJSONSchema(req.ResponseSchema),
 		}
 	}
 

@@ -342,3 +342,86 @@ func TestServiceAdapter_SimulateATS_ErrorPaths(t *testing.T) {
 		}
 	})
 }
+
+type capturingATSClient struct {
+	name                     string
+	defaultModel             string
+	supportsStructuredOutput bool
+	reqs                     []core.LLMCompletionRequest
+	responses                []string
+}
+
+func (c *capturingATSClient) Name() string                   { return c.name }
+func (c *capturingATSClient) DefaultModel() string           { return c.defaultModel }
+func (c *capturingATSClient) Models() []core.ModelOption     { return nil }
+func (c *capturingATSClient) SupportsStructuredOutput() bool { return c.supportsStructuredOutput }
+func (c *capturingATSClient) Complete(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+	idx := len(c.reqs)
+	c.reqs = append(c.reqs, req)
+	var text string
+	if idx < len(c.responses) {
+		text = c.responses[idx]
+	}
+	return &core.LLMCompletionResponse{Text: text, StatusCode: 200}, nil
+}
+
+func TestServiceAdapter_SimulateATS_StructuredVsFallback(t *testing.T) {
+	cases := []struct {
+		name               string
+		supportsStructured bool
+		wantPromptSchema   bool
+		wantReqSchema      bool
+	}{
+		{"structured provider omits prompt schema and sends stage schemas", true, false, true},
+		{"fallback provider appends prompt schema and omits stage ResponseSchema", false, true, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &capturingATSClient{
+				name:                     "test-ats-prov",
+				defaultModel:             "test-model",
+				supportsStructuredOutput: tc.supportsStructured,
+				responses: []string{
+					`{"extraction_confidence_score": 0.9, "extraction_summary": "ok", "extracted_candidate": {"skills": ["Go"]}}`,
+					`{"job_matching_score": 0.85, "matching_summary": "strong match"}`,
+				},
+			}
+			reg := llm.NewRegistry()
+			reg.RegisterClient(client)
+			adapter := llm.NewServiceAdapter(reg)
+
+			resp, err := adapter.SimulateATS(context.Background(), core.ATSSimulationRequest{
+				ResumeText: "Alex Mercer Go Engineer",
+				FormatUsed: "markdown",
+				BranchContext: core.Branch{
+					TargetRole:         "Staff Go Engineer",
+					TargetRequirements: "Go",
+					ProviderOverride:   "test-ats-prov",
+				},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.Score.ExtractionConfidenceScore != 90 || resp.Score.JobMatchingScore != 85 {
+				t.Errorf("unexpected scores: %+v", resp.Score)
+			}
+			if len(client.reqs) != 2 {
+				t.Fatalf("expected 2 requests (extract + match), got %d", len(client.reqs))
+			}
+
+			expectedNames := []string{"ats_extraction_response", "ats_matching_response"}
+			for i, req := range client.reqs {
+				if got := strings.Contains(req.SystemPrompt, "<response_schema>"); got != tc.wantPromptSchema {
+					t.Errorf("stage %d prompt has <response_schema> = %v, want %v", i+1, got, tc.wantPromptSchema)
+				}
+				if got := req.ResponseSchema != nil; got != tc.wantReqSchema {
+					t.Errorf("stage %d ResponseSchema present = %v, want %v", i+1, got, tc.wantReqSchema)
+				}
+				if tc.wantReqSchema && req.SchemaName != expectedNames[i] {
+					t.Errorf("stage %d SchemaName = %q, want %q", i+1, req.SchemaName, expectedNames[i])
+				}
+			}
+		})
+	}
+}

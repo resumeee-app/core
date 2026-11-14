@@ -57,6 +57,13 @@ func (p *CompatProvider) Models() []core.ModelOption {
 	}
 }
 
+// SupportsStructuredOutput reports false for generic OpenAI-compatible endpoints because
+// strict JSON Schema enforcement is not uniformly supported; prompt compilation appends
+// the desired schema inline as a fallback.
+func (p *CompatProvider) SupportsStructuredOutput() bool {
+	return false
+}
+
 // Complete executes a completion request against the OpenAI-compatible chat completions endpoint.
 func (p *CompatProvider) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	model := strings.TrimSpace(req.Model)
@@ -82,7 +89,7 @@ func (p *CompatProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 	}
 
 	var respFmt *responseFormat
-	if req.ResponseSchema != nil {
+	if req.ResponseSchema != nil && !containsSchemaDirective(systemPrompt) {
 		schemaBytes, err := json.Marshal(req.ResponseSchema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize schema: %w", err)
@@ -188,4 +195,8 @@ func buildCompatURL(baseURL string) string {
 		return cleaned
 	}
 	return cleaned + "/chat/completions"
+}
+
+func containsSchemaDirective(systemPrompt string) bool {
+	return strings.Contains(systemPrompt, "<response_schema>") || strings.Contains(systemPrompt, "<json_output_schema>")
 }

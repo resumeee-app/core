@@ -58,50 +58,62 @@ func (p *OpenAIProvider) Models() []core.ModelOption {
 	}
 }
 
-// Complete executes a completion request against the OpenAI v1/chat/completions API.
+// SupportsStructuredOutput reports that OpenAI natively enforces JSON schemas via the Responses API text.format.
+func (p *OpenAIProvider) SupportsStructuredOutput() bool {
+	return true
+}
+
+// Complete executes a completion request against the OpenAI v1/responses API.
 func (p *OpenAIProvider) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
 		model = p.DefaultModel()
 	}
 
-	type chatMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+	type reasoningConfig struct {
+		Effort string `json:"effort"`
 	}
 
-	type jsonSchemaDefinition struct {
+	type textFormat struct {
+		Type   string         `json:"type"`
 		Name   string         `json:"name"`
 		Strict bool           `json:"strict"`
 		Schema map[string]any `json:"schema"`
 	}
 
-	type responseFormat struct {
-		Type       string               `json:"type"`
-		JSONSchema jsonSchemaDefinition `json:"json_schema"`
+	type textConfig struct {
+		Format *textFormat `json:"format,omitempty"`
 	}
 
 	type requestBody struct {
-		Model          string          `json:"model"`
-		Messages       []chatMessage   `json:"messages"`
-		ResponseFormat *responseFormat `json:"response_format,omitempty"`
+		Model        string           `json:"model"`
+		Instructions string           `json:"instructions,omitempty"`
+		Input        string           `json:"input"`
+		Reasoning    *reasoningConfig `json:"reasoning,omitempty"`
+		Text         *textConfig      `json:"text,omitempty"`
 	}
 
 	payload := requestBody{
-		Model: model,
-		Messages: []chatMessage{
-			{Role: "system", Content: req.SystemPrompt},
-			{Role: "user", Content: req.UserPrompt},
-		},
+		Model:        model,
+		Instructions: req.SystemPrompt,
+		Input:        req.UserPrompt,
+	}
+
+	if effort := strings.ToLower(strings.TrimSpace(req.ReasoningLevel)); effort != "" && effort != "none" {
+		payload.Reasoning = &reasoningConfig{Effort: effort}
 	}
 
 	if req.ResponseSchema != nil {
-		payload.ResponseFormat = &responseFormat{
-			Type: "json_schema",
-			JSONSchema: jsonSchemaDefinition{
-				Name:   "tailored_resume_response",
+		schemaName := strings.TrimSpace(req.SchemaName)
+		if schemaName == "" {
+			schemaName = "structured_response"
+		}
+		payload.Text = &textConfig{
+			Format: &textFormat{
+				Type:   "json_schema",
+				Name:   schemaName,
 				Strict: true,
-				Schema: req.ResponseSchema,
+				Schema: SanitizeOpenAISchema(req.ResponseSchema),
 			},
 		}
 	}
@@ -111,7 +123,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 		return nil, fmt.Errorf("failed to marshal openai request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/v1/chat/completions", strings.TrimRight(p.baseURL, "/"))
+	url := fmt.Sprintf("%s/v1/responses", strings.TrimRight(p.baseURL, "/"))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create http request: %w", err)
@@ -139,16 +151,26 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 		}, err
 	}
 
+	type outputContent struct {
+		Type    string `json:"type"`
+		Text    string `json:"text,omitempty"`
+		Refusal string `json:"refusal,omitempty"`
+	}
+
+	type outputItem struct {
+		Type    string          `json:"type"`
+		Role    string          `json:"role,omitempty"`
+		Status  string          `json:"status,omitempty"`
+		Content []outputContent `json:"content,omitempty"`
+	}
+
 	type openAIResponse struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+		OutputText string       `json:"output_text,omitempty"`
+		Output     []outputItem `json:"output"`
+		Usage      struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+			TotalTokens  int `json:"total_tokens"`
 		} `json:"usage"`
 	}
 
@@ -160,24 +182,42 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req core.LLMCompletionReq
 		}, fmt.Errorf("%w: malformed openai response: %v", ErrInvalidResponse, err)
 	}
 
-	if len(openAIResp.Choices) == 0 {
-		return &core.LLMCompletionResponse{
-			RawBody:    rawBody,
-			StatusCode: resp.StatusCode,
-		}, fmt.Errorf("%w: no choices returned by openai", ErrInvalidResponse)
-	}
-
 	usage := core.TokenUsage{
-		PromptTokens:     openAIResp.Usage.PromptTokens,
-		CompletionTokens: openAIResp.Usage.CompletionTokens,
+		PromptTokens:     openAIResp.Usage.InputTokens,
+		CompletionTokens: openAIResp.Usage.OutputTokens,
 		TotalTokens:      openAIResp.Usage.TotalTokens,
 	}
 	if usage.TotalTokens == 0 && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 
+	var extractedText string
+	for _, item := range openAIResp.Output {
+		for _, content := range item.Content {
+			if content.Type == "refusal" || strings.TrimSpace(content.Refusal) != "" {
+				return &core.LLMCompletionResponse{
+					RawBody:    rawBody,
+					StatusCode: resp.StatusCode,
+					Usage:      usage,
+				}, fmt.Errorf("%w: openai model refused structured output request: %s", ErrInvalidResponse, strings.TrimSpace(content.Refusal))
+			}
+			if (content.Type == "output_text" || content.Type == "text") && strings.TrimSpace(content.Text) != "" && extractedText == "" {
+				extractedText = strings.TrimSpace(content.Text)
+			}
+		}
+	}
+	if extractedText == "" {
+		extractedText = strings.TrimSpace(openAIResp.OutputText)
+	}
+	if extractedText == "" {
+		return &core.LLMCompletionResponse{
+			RawBody:    rawBody,
+			StatusCode: resp.StatusCode,
+		}, fmt.Errorf("%w: no output content returned by openai", ErrInvalidResponse)
+	}
+
 	return &core.LLMCompletionResponse{
-		Text:       strings.TrimSpace(openAIResp.Choices[0].Message.Content),
+		Text:       extractedText,
 		RawBody:    rawBody,
 		StatusCode: resp.StatusCode,
 		Usage:      usage,

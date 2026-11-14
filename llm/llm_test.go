@@ -118,15 +118,17 @@ func sampleRequest() core.GenerationRequest {
 }
 
 type fakeTransportClient struct {
-	name         string
-	defaultModel string
-	models       []core.ModelOption
-	completeFn   func(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error)
+	name                     string
+	defaultModel             string
+	models                   []core.ModelOption
+	supportsStructuredOutput bool
+	completeFn               func(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error)
 }
 
-func (f *fakeTransportClient) Name() string               { return f.name }
-func (f *fakeTransportClient) DefaultModel() string       { return f.defaultModel }
-func (f *fakeTransportClient) Models() []core.ModelOption { return f.models }
+func (f *fakeTransportClient) Name() string                   { return f.name }
+func (f *fakeTransportClient) DefaultModel() string           { return f.defaultModel }
+func (f *fakeTransportClient) Models() []core.ModelOption     { return f.models }
+func (f *fakeTransportClient) SupportsStructuredOutput() bool { return f.supportsStructuredOutput }
 func (f *fakeTransportClient) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	if f.completeFn != nil {
 		return f.completeFn(ctx, req)
@@ -201,8 +203,9 @@ func TestClientProvider_GenerateTailoredResume_SuccessAndFences(t *testing.T) {
 
 	var capturedReq core.LLMCompletionRequest
 	client := &fakeTransportClient{
-		name:         ProviderGemini,
-		defaultModel: defaultGeminiModel,
+		name:                     ProviderGemini,
+		defaultModel:             defaultGeminiModel,
+		supportsStructuredOutput: true,
 		completeFn: func(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 			capturedReq = req
 			return &core.LLMCompletionResponse{
@@ -231,6 +234,89 @@ func TestClientProvider_GenerateTailoredResume_SuccessAndFences(t *testing.T) {
 	}
 	if capturedReq.ResponseSchema == nil {
 		t.Error("expected ResponseSchema to be attached by ClientProvider")
+	}
+	if capturedReq.SchemaName != "tailored_resume_response" {
+		t.Errorf("expected SchemaName 'tailored_resume_response', got %q", capturedReq.SchemaName)
+	}
+	if strings.Contains(capturedReq.SystemPrompt, "<response_schema>") {
+		t.Error("expected <response_schema> omitted from system prompt for structured-output provider")
+	}
+}
+
+func TestClientProvider_FallbackAndGapAnalysis_StructuredVsUnstructured(t *testing.T) {
+	tailorBytes, _ := json.Marshal(sampleResponse)
+	gapBytes, _ := json.Marshal(map[string]any{
+		"gap_report": core.GapReport{
+			OverallMatchSummary: "Strong distributed systems background.",
+		},
+	})
+
+	cases := []struct {
+		name               string
+		supportsStructured bool
+		wantPromptSchema   bool
+		wantReqSchema      bool
+	}{
+		{"native structured omits prompt schema and sets ResponseSchema", true, false, true},
+		{"fallback appends prompt schema and omits ResponseSchema", false, true, false},
+	}
+
+	for _, tc := range cases {
+		t.Run("GenerateTailoredResume/"+tc.name, func(t *testing.T) {
+			var captured core.LLMCompletionRequest
+			client := &fakeTransportClient{
+				name:                     "test-prov",
+				defaultModel:             "test-model",
+				supportsStructuredOutput: tc.supportsStructured,
+				completeFn: func(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+					captured = req
+					return &core.LLMCompletionResponse{Text: string(tailorBytes), StatusCode: http.StatusOK}, nil
+				},
+			}
+			prov := NewClientProvider(client)
+			if _, err := prov.GenerateTailoredResume(context.Background(), sampleRequest()); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := strings.Contains(captured.SystemPrompt, "<response_schema>"); got != tc.wantPromptSchema {
+				t.Errorf("prompt has <response_schema> = %v, want %v", got, tc.wantPromptSchema)
+			}
+			if got := captured.ResponseSchema != nil; got != tc.wantReqSchema {
+				t.Errorf("ResponseSchema present = %v, want %v", got, tc.wantReqSchema)
+			}
+		})
+
+		t.Run("GenerateGapAnalysis/"+tc.name, func(t *testing.T) {
+			var captured core.LLMCompletionRequest
+			client := &fakeTransportClient{
+				name:                     "test-prov",
+				defaultModel:             "test-model",
+				supportsStructuredOutput: tc.supportsStructured,
+				completeFn: func(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+					captured = req
+					return &core.LLMCompletionResponse{Text: string(gapBytes), StatusCode: http.StatusOK}, nil
+				},
+			}
+			reg := NewRegistry()
+			reg.RegisterClient(client)
+			svc := NewServiceAdapter(reg)
+
+			report, err := svc.GenerateGapAnalysis(context.Background(), sampleRequest())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if report.OverallMatchSummary == "" {
+				t.Errorf("expected non-empty gap report")
+			}
+			if got := strings.Contains(captured.SystemPrompt, "<response_schema>"); got != tc.wantPromptSchema {
+				t.Errorf("prompt has <response_schema> = %v, want %v", got, tc.wantPromptSchema)
+			}
+			if got := captured.ResponseSchema != nil; got != tc.wantReqSchema {
+				t.Errorf("ResponseSchema present = %v, want %v", got, tc.wantReqSchema)
+			}
+			if tc.wantReqSchema && captured.SchemaName != "gap_analysis_response" {
+				t.Errorf("expected SchemaName 'gap_analysis_response', got %q", captured.SchemaName)
+			}
+		})
 	}
 }
 

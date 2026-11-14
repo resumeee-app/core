@@ -15,7 +15,6 @@ const (
 	defaultAnthropicBaseURL = "https://api.anthropic.com"
 	anthropicAPIVersion     = "2023-06-01"
 	defaultAnthropicTokens  = 8192
-	anthropicToolName       = "generate_tailored_resume"
 )
 
 // AnthropicProvider implements core.LLMClient for Anthropic Claude models via the Messages API.
@@ -63,6 +62,11 @@ func (p *AnthropicProvider) Models() []core.ModelOption {
 	}
 }
 
+// SupportsStructuredOutput reports that Anthropic natively enforces JSON schemas via output_config.format.
+func (p *AnthropicProvider) SupportsStructuredOutput() bool {
+	return true
+}
+
 // Complete executes a completion request against the Anthropic Messages API.
 func (p *AnthropicProvider) Complete(ctx context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
 	model := strings.TrimSpace(req.Model)
@@ -75,24 +79,21 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req core.LLMCompletion
 		Content string `json:"content"`
 	}
 
-	type anthropicTool struct {
-		Name        string         `json:"name"`
-		Description string         `json:"description"`
-		InputSchema map[string]any `json:"input_schema"`
+	type outputFormat struct {
+		Type   string         `json:"type"`
+		Schema map[string]any `json:"schema"`
 	}
 
-	type anthropicToolChoice struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
+	type outputConfig struct {
+		Format *outputFormat `json:"format,omitempty"`
 	}
 
 	type requestBody struct {
-		Model      string               `json:"model"`
-		MaxTokens  int                  `json:"max_tokens"`
-		System     string               `json:"system,omitempty"`
-		Messages   []anthropicMessage   `json:"messages"`
-		Tools      []anthropicTool      `json:"tools,omitempty"`
-		ToolChoice *anthropicToolChoice `json:"tool_choice,omitempty"`
+		Model        string             `json:"model"`
+		MaxTokens    int                `json:"max_tokens"`
+		System       string             `json:"system,omitempty"`
+		Messages     []anthropicMessage `json:"messages"`
+		OutputConfig *outputConfig      `json:"output_config,omitempty"`
 	}
 
 	payload := requestBody{
@@ -105,16 +106,11 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req core.LLMCompletion
 	}
 
 	if req.ResponseSchema != nil {
-		payload.Tools = []anthropicTool{
-			{
-				Name:        anthropicToolName,
-				Description: "Output tailored resume and gap analysis adhering strictly to candidate profile",
-				InputSchema: req.ResponseSchema,
+		payload.OutputConfig = &outputConfig{
+			Format: &outputFormat{
+				Type:   "json_schema",
+				Schema: SanitizeAnthropicSchema(req.ResponseSchema),
 			},
-		}
-		payload.ToolChoice = &anthropicToolChoice{
-			Type: "tool",
-			Name: anthropicToolName,
 		}
 	}
 
@@ -153,15 +149,14 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req core.LLMCompletion
 	}
 
 	type contentBlock struct {
-		Type  string          `json:"type"`
-		Name  string          `json:"name,omitempty"`
-		Text  string          `json:"text,omitempty"`
-		Input json.RawMessage `json:"input,omitempty"`
+		Type string `json:"type"`
+		Text string `json:"text,omitempty"`
 	}
 
 	type anthropicResponse struct {
-		Content []contentBlock `json:"content"`
-		Usage   struct {
+		StopReason string         `json:"stop_reason,omitempty"`
+		Content    []contentBlock `json:"content"`
+		Usage      struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
@@ -181,26 +176,12 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req core.LLMCompletion
 		TotalTokens:      anthropicResp.Usage.InputTokens + anthropicResp.Usage.OutputTokens,
 	}
 
-	if req.ResponseSchema != nil {
-		var targetInput json.RawMessage
-		for _, block := range anthropicResp.Content {
-			if block.Type == "tool_use" && block.Name == anthropicToolName {
-				targetInput = block.Input
-				break
-			}
-		}
-		if len(targetInput) == 0 {
-			return &core.LLMCompletionResponse{
-				RawBody:    rawBody,
-				StatusCode: resp.StatusCode,
-			}, fmt.Errorf("%w: no %s tool call in anthropic response", ErrInvalidResponse, anthropicToolName)
-		}
+	if anthropicResp.StopReason == "refusal" {
 		return &core.LLMCompletionResponse{
-			Text:       string(targetInput),
 			RawBody:    rawBody,
 			StatusCode: resp.StatusCode,
 			Usage:      usage,
-		}, nil
+		}, fmt.Errorf("%w: anthropic refused structured output request", ErrInvalidResponse)
 	}
 
 	for _, block := range anthropicResp.Content {

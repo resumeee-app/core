@@ -169,6 +169,106 @@ func TestResumeExtractResponseSchema_ExistsAndEnriched(t *testing.T) {
 	}
 }
 
+func assertStrictOpenAISchemaNode(t *testing.T, path string, node map[string]any) {
+	t.Helper()
+
+	if node["type"] == "object" {
+		if node["additionalProperties"] != false {
+			t.Errorf("openai schema %s: missing additionalProperties: false", path)
+		}
+		if props, ok := node["properties"].(map[string]any); ok {
+			reqSlice, _ := node["required"].([]string)
+			reqSet := make(map[string]bool, len(reqSlice))
+			for _, r := range reqSlice {
+				reqSet[r] = true
+			}
+			for key, subVal := range props {
+				if !reqSet[key] {
+					t.Errorf("openai schema %s: property %q must be in required", path, key)
+				}
+				if subMap, ok := subVal.(map[string]any); ok {
+					assertStrictOpenAISchemaNode(t, path+"."+key, subMap)
+				}
+			}
+		}
+	}
+	if items, ok := node["items"].(map[string]any); ok {
+		assertStrictOpenAISchemaNode(t, path+"[]", items)
+	}
+	if anyOf, ok := node["anyOf"].([]any); ok {
+		for _, branch := range anyOf {
+			if m, ok := branch.(map[string]any); ok {
+				assertStrictOpenAISchemaNode(t, path+"<anyOf>", m)
+			}
+		}
+	}
+}
+
+func assertAnthropicSchemaNode(t *testing.T, path string, node map[string]any) {
+	t.Helper()
+
+	if node["type"] == "object" {
+		if node["additionalProperties"] != false {
+			t.Errorf("anthropic schema %s: missing additionalProperties: false", path)
+		}
+		if props, ok := node["properties"].(map[string]any); ok {
+			for key, subVal := range props {
+				if subMap, ok := subVal.(map[string]any); ok {
+					assertAnthropicSchemaNode(t, path+"."+key, subMap)
+				}
+			}
+		}
+	}
+	if items, ok := node["items"].(map[string]any); ok {
+		assertAnthropicSchemaNode(t, path+"[]", items)
+	}
+}
+
+func TestSchemaSanitizers_AllSchemas(t *testing.T) {
+	schemas := []struct {
+		name   string
+		getter func() map[string]any
+	}{
+		{"GenerationResponseSchema", llm.GenerationResponseSchema},
+		{"GapAnalysisResponseSchema", llm.GapAnalysisResponseSchema},
+		{"ResumeExtractResponseSchema", llm.ResumeExtractResponseSchema},
+		{"ATSExtractionResponseSchema", llm.ATSExtractionResponseSchema},
+		{"ATSMatchingResponseSchema", llm.ATSMatchingResponseSchema},
+	}
+
+	for _, tc := range schemas {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := tc.getter()
+
+			oai := llm.SanitizeOpenAISchema(orig)
+			if oai == nil {
+				t.Fatalf("SanitizeOpenAISchema returned nil")
+			}
+			assertStrictOpenAISchemaNode(t, tc.name, oai)
+
+			ant := llm.SanitizeAnthropicSchema(orig)
+			if ant == nil {
+				t.Fatalf("SanitizeAnthropicSchema returned nil")
+			}
+			assertAnthropicSchemaNode(t, tc.name, ant)
+
+			gem := llm.SanitizeGeminiJSONSchema(orig)
+			if gem == nil {
+				t.Fatalf("SanitizeGeminiJSONSchema returned nil")
+			}
+			if _, hasSchemaKeyword := gem["$schema"]; hasSchemaKeyword {
+				t.Errorf("expected $schema stripped in SanitizeGeminiJSONSchema")
+			}
+		})
+	}
+
+	// Verify ResumeExtractResponseSchema was not mutated in place
+	rawExtract := llm.ResumeExtractResponseSchema()
+	if _, hasAP := rawExtract["additionalProperties"]; hasAP {
+		t.Errorf("expected canonical ResumeExtractResponseSchema not to be mutated by sanitizers")
+	}
+}
+
 func TestResumeExtractPrompt_Composition(t *testing.T) {
 	tests := []struct {
 		name             string

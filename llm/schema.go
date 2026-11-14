@@ -2,1449 +2,360 @@ package llm
 
 import (
 	"encoding/json"
-	"regexp"
 	"slices"
-	"strings"
 )
 
-var (
-	codeFenceRegex = regexp.MustCompile("(?s)```(?:json|JSON)?\\s*([\\s\\S]*?)\\s*```")
+// SchemaType identifies a JSON Schema primitive or compound value type.
+type SchemaType string
+
+// Supported JSON Schema type identifiers.
+const (
+	// TypeObject represents a JSON object node.
+	TypeObject SchemaType = "object"
+	// TypeArray represents a JSON array node.
+	TypeArray SchemaType = "array"
+	// TypeString represents a JSON string node.
+	TypeString SchemaType = "string"
+	// TypeNumber represents a JSON floating-point or numeric node.
+	TypeNumber SchemaType = "number"
+	// TypeInteger represents a JSON integer node.
+	TypeInteger SchemaType = "integer"
+	// TypeBoolean represents a JSON boolean node.
+	TypeBoolean SchemaType = "boolean"
+	// TypeNull represents a JSON null node.
+	TypeNull SchemaType = "null"
 )
 
-// ExtractJSON extracts raw JSON from conversational wrappers, markdown fences, or raw text.
-func ExtractJSON(s string) string {
-	trimmed := strings.TrimSpace(s)
-	if trimmed == "" {
-		return ""
-	}
+// SchemaTypes encodes one or more JSON Schema types; a single element marshals as a string,
+// while multiple elements marshal as a JSON array (e.g. ["string", "null"]).
+type SchemaTypes []SchemaType
 
-	// 1. Look for markdown code fence
-	if matches := codeFenceRegex.FindStringSubmatch(trimmed); len(matches) > 1 {
-		inner := strings.TrimSpace(matches[1])
-		firstObj := strings.Index(inner, "{")
-		lastObj := strings.LastIndex(inner, "}")
-		if firstObj != -1 && lastObj > firstObj {
-			return inner[firstObj : lastObj+1]
+// Contains reports whether target is included in st.
+func (st SchemaTypes) Contains(target SchemaType) bool {
+	return slices.Contains(st, target)
+}
+
+// MarshalJSON formats a single type as a JSON string and multiple types as a JSON array.
+func (st SchemaTypes) MarshalJSON() ([]byte, error) {
+	if len(st) == 0 {
+		return []byte("null"), nil
+	}
+	if len(st) == 1 {
+		return json.Marshal(string(st[0]))
+	}
+	return json.Marshal([]SchemaType(st))
+}
+
+// UnmarshalJSON decodes either a single JSON type string or an array of type strings.
+func (st *SchemaTypes) UnmarshalJSON(data []byte) error {
+	var single SchemaType
+	if err := json.Unmarshal(data, &single); err == nil {
+		if single == "" {
+			*st = nil
+		} else {
+			*st = SchemaTypes{single}
 		}
-		firstArr := strings.Index(inner, "[")
-		lastArr := strings.LastIndex(inner, "]")
-		if firstArr != -1 && lastArr > firstArr {
-			return inner[firstArr : lastArr+1]
-		}
-		return inner
-	}
-
-	// 2. Greedy search for outermost matching JSON braces without fences
-	firstBrace := strings.Index(trimmed, "{")
-	lastBrace := strings.LastIndex(trimmed, "}")
-	if firstBrace != -1 && lastBrace > firstBrace {
-		return trimmed[firstBrace : lastBrace+1]
-	}
-
-	firstBracket := strings.Index(trimmed, "[")
-	lastBracket := strings.LastIndex(trimmed, "]")
-	if firstBracket != -1 && lastBracket > firstBracket {
-		return trimmed[firstBracket : lastBracket+1]
-	}
-
-	return trimmed
-}
-
-// GenerationResponseSchema returns the canonical JSON Schema for core.GenerationResponse
-// (TailoredContent and GapReport), enforcing strict validation keywords (required, additionalProperties: false)
-// with comprehensive field descriptions and hints to guide accurate LLM token generation.
-//
-// Returns:
-//   - A map[string]any representing the JSON Schema draft-07 compatible structure for structured LLM decoding.
-func GenerationResponseSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"tailored_content": map[string]any{
-				"type":        "object",
-				"description": "Curated and customized resume content matching the target role, grounded strictly in the candidate's main profile",
-				"properties": map[string]any{
-					"summary": map[string]any{
-						"type":        "string",
-						"description": "Professional executive summary tailored to target role (2-4 sentences highlighting candidate strengths, key domains, and role fit)",
-					},
-					"skill_groups": map[string]any{
-						"type":        "array",
-						"description": "Categorized groups of technical and domain skills relevant to target role",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"category": map[string]any{
-									"type":        "string",
-									"description": "Functional skill category title (e.g. Programming Languages, Cloud Infrastructure, Databases)",
-								},
-								"skills": map[string]any{
-									"type":        "array",
-									"items":       map[string]any{"type": "string"},
-									"description": "Array of candidate skill names belonging to this category",
-								},
-								"source_skill_ids": map[string]any{
-									"type":        "array",
-									"items":       map[string]any{"type": "string"},
-									"description": "Short identifiers of cited Skills (e.g. skill-1)",
-								},
-							},
-							"required":             []string{"category", "skills"},
-							"additionalProperties": false,
-						},
-					},
-					"experiences": map[string]any{
-						"type":        "array",
-						"description": "Chronological employment history tailored to target role",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"source_entity_id": map[string]any{
-									"type":        "string",
-									"description": "Short identifier of the Main WorkExperience (e.g. exp-1)",
-								},
-								"company": map[string]any{
-									"type":        "string",
-									"description": "Official employer or company name",
-								},
-								"role_title": map[string]any{
-									"type":        "string",
-									"description": "Professional job title or position held",
-								},
-								"start_date": map[string]any{
-									"type":        "string",
-									"description": "Start date of employment in YYYY-MM or YYYY format",
-								},
-								"end_date": map[string]any{
-									"type":        "string",
-									"description": "End date of employment in YYYY-MM or YYYY format, or 'Present'",
-								},
-								"duties_summary": map[string]any{
-									"type":        "string",
-									"description": "High-level summary of responsibilities and scope of the role",
-								},
-								"bullets": map[string]any{
-									"type":        "array",
-									"description": "Tailored accomplishment statements with metrics and impact",
-									"items": map[string]any{
-										"type": "object",
-										"properties": map[string]any{
-											"text": map[string]any{
-												"type":        "string",
-												"description": "Tailored accomplishment bullet phrased with action verb, technical context, and quantifiable results",
-											},
-											"source_fact_ids": map[string]any{
-												"type":        "array",
-												"items":       map[string]any{"type": "string"},
-												"description": "Short identifiers of Facts under this WorkExperience that justify this bullet (e.g. fact-1)",
-											},
-											"source_skill_ids": map[string]any{
-												"type":        "array",
-												"items":       map[string]any{"type": "string"},
-												"description": "Short identifiers of Skills (e.g. skill-1)",
-											},
-										},
-										"required":             []string{"text", "source_fact_ids"},
-										"additionalProperties": false,
-									},
-								},
-							},
-							"required":             []string{"source_entity_id", "company", "role_title", "start_date", "bullets"},
-							"additionalProperties": false,
-						},
-					},
-					"projects": map[string]any{
-						"type":        "array",
-						"description": "Key technical projects, open-source initiatives, or deliverables tailored to target role",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"source_entity_id": map[string]any{
-									"type":        "string",
-									"description": "Short identifier of the Main Project (e.g. proj-1)",
-								},
-								"name": map[string]any{
-									"type":        "string",
-									"description": "Project title or initiative name",
-								},
-								"role": map[string]any{
-									"type":        "string",
-									"description": "Role or contribution of candidate in project",
-								},
-								"url": map[string]any{
-									"type":        "string",
-									"description": "Live URL, repository, or documentation link",
-								},
-								"start_date": map[string]any{
-									"type":        "string",
-									"description": "Project start date in YYYY-MM or YYYY format",
-								},
-								"end_date": map[string]any{
-									"type":        "string",
-									"description": "Project completion date in YYYY-MM or YYYY format, or 'Present'",
-								},
-								"summary": map[string]any{
-									"type":        "string",
-									"description": "Brief synopsis of project scope and architecture",
-								},
-								"bullets": map[string]any{
-									"type":        "array",
-									"description": "Accomplishment statements detailing implementation and measurable impact",
-									"items": map[string]any{
-										"type": "object",
-										"properties": map[string]any{
-											"text": map[string]any{
-												"type":        "string",
-												"description": "Accomplishment bullet detailing implementation, architectural decisions, and impact",
-											},
-											"source_fact_ids":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Short identifiers of Facts under this Project (e.g. fact-1)"},
-											"source_skill_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Short identifiers of Skills (e.g. skill-1)"},
-										},
-										"required":             []string{"text", "source_fact_ids"},
-										"additionalProperties": false,
-									},
-								},
-							},
-							"required":             []string{"source_entity_id", "name", "bullets"},
-							"additionalProperties": false,
-						},
-					},
-					"education": map[string]any{
-						"type":        "array",
-						"description": "Academic degrees, diplomas, and relevant higher education",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"source_entity_id": map[string]any{
-									"type":        "string",
-									"description": "Short identifier of the Main Education (e.g. edu-1)",
-								},
-								"institution": map[string]any{
-									"type":        "string",
-									"description": "Name of university, college, or school",
-								},
-								"degree": map[string]any{
-									"type":        "string",
-									"description": "Degree type or credential (e.g. Bachelor of Science, Master of Science, Ph.D.)",
-								},
-								"field": map[string]any{
-									"type":        "string",
-									"description": "Academic major, discipline, or field of study",
-								},
-								"start_date": map[string]any{
-									"type":        "string",
-									"description": "Start date in YYYY-MM or YYYY format",
-								},
-								"end_date": map[string]any{
-									"type":        "string",
-									"description": "Graduation or completion date in YYYY-MM or YYYY format, or 'Expected YYYY'",
-								},
-								"score": map[string]any{
-									"type":        "string",
-									"description": "Academic GPA, graduation honors, or class rank",
-								},
-							},
-							"required":             []string{"source_entity_id", "institution", "degree", "field", "start_date"},
-							"additionalProperties": false,
-						},
-					},
-					"certifications": map[string]any{
-						"type":        "array",
-						"description": "Professional certifications and technical credentials",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"source_entity_id": map[string]any{
-									"type":        "string",
-									"description": "Short identifier of the Main Certification (e.g. cert-1)",
-								},
-								"name": map[string]any{
-									"type":        "string",
-									"description": "Certification or credential title",
-								},
-								"issuer": map[string]any{
-									"type":        "string",
-									"description": "Issuing organization or authority (e.g. AWS, CNCF, Google Cloud)",
-								},
-								"date": map[string]any{
-									"type":        "string",
-									"description": "Date obtained or renewed in YYYY-MM or YYYY format",
-								},
-								"url": map[string]any{
-									"type":        "string",
-									"description": "Credential verification URL or badge link",
-								},
-							},
-							"required":             []string{"source_entity_id", "name", "issuer", "date"},
-							"additionalProperties": false,
-						},
-					},
-				},
-				"required":             []string{"summary", "skill_groups", "experiences", "projects", "education", "certifications"},
-				"additionalProperties": false,
-			},
-			"gap_report": gapReportSchema(),
-		},
-		"required":             []string{"tailored_content", "gap_report"},
-		"additionalProperties": false,
-	}
-}
-
-// gapReportSchema returns the canonical JSON Schema for a core.GapReport object,
-// enforcing strict validation keywords, enum constraints, and comprehensive field descriptions.
-func gapReportSchema() map[string]any {
-	return map[string]any{
-		"type":        "object",
-		"description": "Objective gap analysis evaluating candidate profile alignment with target requirements",
-		"properties": map[string]any{
-			"overall_match_summary": map[string]any{
-				"type":        "string",
-				"description": "Concise summary of alignment against target requirements",
-			},
-			"missing_requirements": map[string]any{
-				"type":        "array",
-				"description": "Specific required or preferred qualifications missing from candidate profile",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"requirement": map[string]any{
-							"type":        "string",
-							"description": "Target requirement or qualification missing from main profile",
-						},
-						"missing_area": map[string]any{
-							"type":        "string",
-							"description": "Functional domain or skill area (e.g. Distributed Systems, Frontend)",
-						},
-						"importance": map[string]any{
-							"type":        "string",
-							"enum":        []string{"critical", "preferred", "nice_to_have"},
-							"description": "Severity rating: critical (must-have blocker), preferred (strong differentiator), or nice_to_have (bonus)",
-						},
-						"clarifying_prompt": map[string]any{
-							"type":        "string",
-							"description": "Question to prompt user for missing experience or facts",
-						},
-						"recommended_action": map[string]any{
-							"type":        "string",
-							"description": "Suggested action or resume framing strategy to address this gap",
-						},
-					},
-					"required":             []string{"requirement", "missing_area", "importance", "clarifying_prompt"},
-					"additionalProperties": false,
-				},
-			},
-			"strategic_recommendations": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "string",
-				},
-				"description": "Actionable strategic recommendations for tailoring and interview preparation",
-			},
-		},
-		"required":             []string{"overall_match_summary", "missing_requirements"},
-		"additionalProperties": false,
-	}
-}
-
-// GapReportSchema returns the canonical JSON Schema for a core.GapReport object,
-// enforcing strict validation keywords, enum constraints, and comprehensive field descriptions.
-func GapReportSchema() map[string]any {
-	return gapReportSchema()
-}
-
-// GapAnalysisResponseSchema returns the canonical JSON Schema for a standalone GapReport,
-// enforcing strict validation keywords and wrapping the report under the "gap_report" key.
-func GapAnalysisResponseSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"gap_report": gapReportSchema(),
-		},
-		"required":             []string{"gap_report"},
-		"additionalProperties": false,
-	}
-}
-
-// ResumeExtractResponseSchema returns the canonical JSON Schema for extracting unstructured resume text
-// into standard JSON Resume format (v1.0.0) with detailed descriptions and formatting hints.
-func ResumeExtractResponseSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"basics": map[string]any{
-				"type":        "object",
-				"description": "Personal contact details, headline, and profile links",
-				"properties": map[string]any{
-					"name": map[string]any{
-						"type":        "string",
-						"description": "Candidate's full legal or preferred name",
-					},
-					"label": map[string]any{
-						"type":        "string",
-						"description": "Professional title or headline (e.g. Senior Software Engineer)",
-					},
-					"image": map[string]any{
-						"type":        "string",
-						"description": "URL to a profile photo",
-					},
-					"email": map[string]any{
-						"type":        "string",
-						"description": "Contact email address",
-					},
-					"phone": map[string]any{
-						"type":        "string",
-						"description": "Primary contact phone number",
-					},
-					"url": map[string]any{
-						"type":        "string",
-						"description": "Personal website or portfolio URL",
-					},
-					"summary": map[string]any{
-						"type":        "string",
-						"description": "Professional biographical summary or objective",
-					},
-					"location": map[string]any{
-						"type":        "object",
-						"description": "Postal and geographic residence information",
-						"properties": map[string]any{
-							"address": map[string]any{
-								"type":        "string",
-								"description": "Street address line",
-							},
-							"postalCode": map[string]any{
-								"type":        "string",
-								"description": "Postal or ZIP code",
-							},
-							"city": map[string]any{
-								"type":        "string",
-								"description": "City of residence",
-							},
-							"countryCode": map[string]any{
-								"type":        "string",
-								"description": "ISO 3166-1 alpha-2 two-letter country code (e.g. US)",
-							},
-							"region": map[string]any{
-								"type":        "string",
-								"description": "State, province, or canton",
-							},
-						},
-					},
-					"profiles": map[string]any{
-						"type":        "array",
-						"description": "Social and developer profiles (e.g. LinkedIn, GitHub)",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"network": map[string]any{
-									"type":        "string",
-									"description": "Platform or network name (e.g. LinkedIn, GitHub, Twitter)",
-								},
-								"username": map[string]any{
-									"type":        "string",
-									"description": "Profile username or handle",
-								},
-								"url": map[string]any{
-									"type":        "string",
-									"description": "Direct URL to user profile page",
-								},
-							},
-						},
-					},
-				},
-				"required": []string{"name"},
-			},
-			"work": map[string]any{
-				"type":        "array",
-				"description": "Chronological employment history and positions held",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name": map[string]any{
-							"type":        "string",
-							"description": "Company or employer name",
-						},
-						"company": map[string]any{
-							"type":        "string",
-							"description": "Company or employer name (synonym for name)",
-						},
-						"position": map[string]any{
-							"type":        "string",
-							"description": "Job title or position held",
-						},
-						"url": map[string]any{
-							"type":        "string",
-							"description": "Company website or employer URL",
-						},
-						"startDate": map[string]any{
-							"type":        "string",
-							"description": "Start date of employment (YYYY-MM-DD, YYYY-MM, or YYYY)",
-						},
-						"endDate": map[string]any{
-							"type":        "string",
-							"description": "End date of employment (YYYY-MM-DD, YYYY-MM, YYYY, or 'Present')",
-						},
-						"summary": map[string]any{
-							"type":        "string",
-							"description": "Summary of role duties and scope",
-						},
-						"highlights": map[string]any{
-							"type":        "array",
-							"items":       map[string]any{"type": "string"},
-							"description": "Bulleted accomplishment statements and contributions",
-						},
-						"location": map[string]any{
-							"type":        "string",
-							"description": "Location of employment (e.g. City, State or Remote)",
-						},
-					},
-				},
-			},
-			"volunteer": map[string]any{
-				"type":        "array",
-				"description": "Volunteer experience and community service",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"organization": map[string]any{
-							"type":        "string",
-							"description": "Volunteer organization or non-profit name",
-						},
-						"position": map[string]any{
-							"type":        "string",
-							"description": "Role or title held within organization",
-						},
-						"url": map[string]any{
-							"type":        "string",
-							"description": "Organization website link",
-						},
-						"startDate": map[string]any{
-							"type":        "string",
-							"description": "Start date of service (YYYY-MM-DD or YYYY-MM)",
-						},
-						"endDate": map[string]any{
-							"type":        "string",
-							"description": "End date of service or 'Present'",
-						},
-						"summary": map[string]any{
-							"type":        "string",
-							"description": "Summary of volunteer activities",
-						},
-						"highlights": map[string]any{
-							"type":        "array",
-							"items":       map[string]any{"type": "string"},
-							"description": "Key achievements and contributions",
-						},
-					},
-				},
-			},
-			"education": map[string]any{
-				"type":        "array",
-				"description": "Academic degrees and higher education history",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"institution": map[string]any{
-							"type":        "string",
-							"description": "School, college, or university name",
-						},
-						"url": map[string]any{
-							"type":        "string",
-							"description": "Institution website link",
-						},
-						"area": map[string]any{
-							"type":        "string",
-							"description": "Academic field of study or major (e.g. Computer Science)",
-						},
-						"studyType": map[string]any{
-							"type":        "string",
-							"description": "Degree type or credential earned (e.g. B.S., M.S., Ph.D.)",
-						},
-						"startDate": map[string]any{
-							"type":        "string",
-							"description": "Start date of matriculation (YYYY-MM or YYYY)",
-						},
-						"endDate": map[string]any{
-							"type":        "string",
-							"description": "Graduation or completion date (YYYY-MM, YYYY, or 'Expected YYYY')",
-						},
-						"score": map[string]any{
-							"type":        "string",
-							"description": "Grade point average (GPA), honors, or distinction",
-						},
-						"courses": map[string]any{
-							"type":        "array",
-							"items":       map[string]any{"type": "string"},
-							"description": "Relevant completed coursework titles",
-						},
-					},
-				},
-			},
-			"awards": map[string]any{
-				"type":        "array",
-				"description": "Honors, awards, and industry recognitions",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"title": map[string]any{
-							"type":        "string",
-							"description": "Award or honor title",
-						},
-						"date": map[string]any{
-							"type":        "string",
-							"description": "Date received (YYYY-MM or YYYY)",
-						},
-						"awarder": map[string]any{
-							"type":        "string",
-							"description": "Organization or entity presenting the award",
-						},
-						"summary": map[string]any{
-							"type":        "string",
-							"description": "Description of why the award was conferred",
-						},
-					},
-				},
-			},
-			"certificates": map[string]any{
-				"type":        "array",
-				"description": "Professional certifications and technical credentials",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name": map[string]any{
-							"type":        "string",
-							"description": "Certification or credential title",
-						},
-						"issuer": map[string]any{
-							"type":        "string",
-							"description": "Accreditation body or issuer (e.g. AWS, CNCF, Google)",
-						},
-						"date": map[string]any{
-							"type":        "string",
-							"description": "Date certified or issued (YYYY-MM or YYYY)",
-						},
-						"url": map[string]any{
-							"type":        "string",
-							"description": "Verification link or badge URL",
-						},
-					},
-				},
-			},
-			"publications": map[string]any{
-				"type":        "array",
-				"description": "Academic papers, journal articles, books, or blog posts",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name": map[string]any{
-							"type":        "string",
-							"description": "Publication or article title",
-						},
-						"publisher": map[string]any{
-							"type":        "string",
-							"description": "Publisher, journal, conference, or platform name",
-						},
-						"releaseDate": map[string]any{
-							"type":        "string",
-							"description": "Date published (YYYY-MM-DD, YYYY-MM, or YYYY)",
-						},
-						"url": map[string]any{
-							"type":        "string",
-							"description": "Link to publication or DOI",
-						},
-						"summary": map[string]any{
-							"type":        "string",
-							"description": "Abstract or synopsis of published work",
-						},
-					},
-				},
-			},
-			"skills": map[string]any{
-				"type":        "array",
-				"description": "Technical, functional, and domain competencies",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name": map[string]any{
-							"type":        "string",
-							"description": "Skill name or technology title",
-						},
-						"level": map[string]any{
-							"type":        "string",
-							"description": "Proficiency level (e.g. Expert, Intermediate, Beginner)",
-						},
-						"keywords": map[string]any{
-							"type":        "array",
-							"items":       map[string]any{"type": "string"},
-							"description": "Sub-skills, tools, or related technical concepts",
-						},
-					},
-				},
-			},
-			"languages": map[string]any{
-				"type":        "array",
-				"description": "Spoken and written natural languages",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"language": map[string]any{
-							"type":        "string",
-							"description": "Natural language name (e.g. English, Spanish, Japanese)",
-						},
-						"fluency": map[string]any{
-							"type":        "string",
-							"description": "Fluency level (e.g. Native, Fluent, Professional Working)",
-						},
-					},
-				},
-			},
-			"interests": map[string]any{
-				"type":        "array",
-				"description": "Personal interests, hobbies, or extracurricular pursuits",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name": map[string]any{
-							"type":        "string",
-							"description": "Interest or hobby category",
-						},
-						"keywords": map[string]any{
-							"type":        "array",
-							"items":       map[string]any{"type": "string"},
-							"description": "Associated topics or specific activities",
-						},
-					},
-				},
-			},
-			"references": map[string]any{
-				"type":        "array",
-				"description": "Professional references or recommendations",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name": map[string]any{
-							"type":        "string",
-							"description": "Reference person name",
-						},
-						"reference": map[string]any{
-							"type":        "string",
-							"description": "Reference statement or testimonial",
-						},
-					},
-				},
-			},
-			"projects": map[string]any{
-				"type":        "array",
-				"description": "Independent, open-source, or academic projects",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name": map[string]any{
-							"type":        "string",
-							"description": "Project title or repository name",
-						},
-						"description": map[string]any{
-							"type":        "string",
-							"description": "Synopsis of project architecture and purpose",
-						},
-						"highlights": map[string]any{
-							"type":        "array",
-							"items":       map[string]any{"type": "string"},
-							"description": "Key achievements, metrics, or technical milestones",
-						},
-						"keywords": map[string]any{
-							"type":        "array",
-							"items":       map[string]any{"type": "string"},
-							"description": "Technologies and libraries used in project",
-						},
-						"startDate": map[string]any{
-							"type":        "string",
-							"description": "Project start date (YYYY-MM or YYYY)",
-						},
-						"endDate": map[string]any{
-							"type":        "string",
-							"description": "Project completion date (YYYY-MM, YYYY, or 'Present')",
-						},
-						"url": map[string]any{
-							"type":        "string",
-							"description": "Live URL or repository link",
-						},
-						"roles": map[string]any{
-							"type":        "array",
-							"items":       map[string]any{"type": "string"},
-							"description": "Functional roles performed on project",
-						},
-						"entity": map[string]any{
-							"type":        "string",
-							"description": "Organization or entity affiliated with project",
-						},
-						"type": map[string]any{
-							"type":        "string",
-							"description": "Project classification (e.g. application, library, open-source)",
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-// SanitizeGeminiSchema creates a deep clone of the provided schema map and recursively strips
-// keywords unsupported by the legacy OpenAPI 3.0 responseSchema subset (such as "additionalProperties",
-// "$schema", "$defs", "definitions", "title"). For the Gemini Interactions API JSON Schema grammar,
-// use SanitizeGeminiJSONSchema.
-func SanitizeGeminiSchema(schema map[string]any) map[string]any {
-	if schema == nil {
 		return nil
 	}
-	res, ok := sanitizeNode(schema).(map[string]any)
-	if !ok {
+	var multi []SchemaType
+	if err := json.Unmarshal(data, &multi); err != nil {
+		return err
+	}
+	*st = SchemaTypes(multi)
+	return nil
+}
+
+// Schema defines a strongly typed JSON Schema node free of untyped map[string]any containers.
+type Schema struct {
+	Type                 SchemaTypes        `json:"type,omitempty"`
+	Description          string             `json:"description,omitempty"`
+	Properties           map[string]*Schema `json:"properties,omitempty"`
+	Items                *Schema            `json:"items,omitempty"`
+	Required             []string           `json:"-"`
+	AdditionalProperties *bool              `json:"additionalProperties,omitempty"`
+	Enum                 []string           `json:"enum,omitempty"`
+	AnyOf                []*Schema          `json:"anyOf,omitempty"`
+	OneOf                []*Schema          `json:"oneOf,omitempty"`
+	AllOf                []*Schema          `json:"allOf,omitempty"`
+	PrefixItems          []*Schema          `json:"prefixItems,omitempty"`
+}
+
+// schemaJSONWire mirrors Schema for encoding/decoding while preserving non-nil empty Required slices.
+type schemaJSONWire struct {
+	Type                 SchemaTypes        `json:"type,omitempty"`
+	Description          string             `json:"description,omitempty"`
+	Properties           map[string]*Schema `json:"properties,omitempty"`
+	Items                *Schema            `json:"items,omitempty"`
+	Required             *[]string          `json:"required,omitempty"`
+	AdditionalProperties *bool              `json:"additionalProperties,omitempty"`
+	Enum                 []string           `json:"enum,omitempty"`
+	AnyOf                []*Schema          `json:"anyOf,omitempty"`
+	OneOf                []*Schema          `json:"oneOf,omitempty"`
+	AllOf                []*Schema          `json:"allOf,omitempty"`
+	PrefixItems          []*Schema          `json:"prefixItems,omitempty"`
+}
+
+// MarshalJSON encodes Schema while emitting explicit non-nil empty Required slices as "required": [].
+func (s Schema) MarshalJSON() ([]byte, error) {
+	wire := schemaJSONWire{
+		Type:                 s.Type,
+		Description:          s.Description,
+		Properties:           s.Properties,
+		Items:                s.Items,
+		AdditionalProperties: s.AdditionalProperties,
+		Enum:                 s.Enum,
+		AnyOf:                s.AnyOf,
+		OneOf:                s.OneOf,
+		AllOf:                s.AllOf,
+		PrefixItems:          s.PrefixItems,
+	}
+	if s.Required != nil {
+		req := s.Required
+		wire.Required = &req
+	}
+	return json.Marshal(wire)
+}
+
+// UnmarshalJSON decodes Schema while preserving explicit empty "required": [] slices.
+func (s *Schema) UnmarshalJSON(data []byte) error {
+	var wire schemaJSONWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	s.Type = wire.Type
+	s.Description = wire.Description
+	s.Properties = wire.Properties
+	s.Items = wire.Items
+	s.AdditionalProperties = wire.AdditionalProperties
+	s.Enum = wire.Enum
+	s.AnyOf = wire.AnyOf
+	s.OneOf = wire.OneOf
+	s.AllOf = wire.AllOf
+	s.PrefixItems = wire.PrefixItems
+	if wire.Required != nil {
+		s.Required = *wire.Required
+	}
+	return nil
+}
+
+// JSON returns the indented JSON representation of s.
+func (s *Schema) JSON() (string, error) {
+	b, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// Clone returns an independent deep copy of s so transport-specific mutations never alias shared schemas.
+func (s *Schema) Clone() *Schema {
+	if s == nil {
 		return nil
 	}
-	return res
-}
-
-// sanitizeNode recursively traverses and sanitizes maps, slices, and primitive values.
-func sanitizeNode(val any) any {
-	switch v := val.(type) {
-	case map[string]any:
-		cleaned := make(map[string]any, len(v))
-		for k, child := range v {
-			switch k {
-			case "additionalProperties", "$schema", "$defs", "definitions", "title":
-				continue
-			default:
-				cleaned[k] = sanitizeNode(child)
-			}
+	out := &Schema{
+		Type:        slices.Clone(s.Type),
+		Description: s.Description,
+		Items:       s.Items.Clone(),
+		Enum:        slices.Clone(s.Enum),
+		AnyOf:       cloneSchemaSlice(s.AnyOf),
+		OneOf:       cloneSchemaSlice(s.OneOf),
+		AllOf:       cloneSchemaSlice(s.AllOf),
+		PrefixItems: cloneSchemaSlice(s.PrefixItems),
+	}
+	if s.Required != nil {
+		out.Required = make([]string, len(s.Required))
+		copy(out.Required, s.Required)
+	}
+	if s.AdditionalProperties != nil {
+		ap := *s.AdditionalProperties
+		out.AdditionalProperties = &ap
+	}
+	if s.Properties != nil {
+		out.Properties = make(map[string]*Schema, len(s.Properties))
+		for k, v := range s.Properties {
+			out.Properties[k] = v.Clone()
 		}
-		return cleaned
-	case []any:
-		cleaned := make([]any, len(v))
-		for i, child := range v {
-			cleaned[i] = sanitizeNode(child)
-		}
-		return cleaned
-	case []string:
-		cleaned := make([]string, len(v))
-		copy(cleaned, v)
-		return cleaned
-	default:
-		return v
-	}
-}
-
-// GeminiResponseSchema returns an OpenAPI 3.0-compatible JSON schema for core.GenerationResponse
-// targeting legacy Gemini responseSchema callers; GeminiProvider uses SanitizeGeminiJSONSchema
-// for the Interactions API JSON Schema format.
-func GeminiResponseSchema() map[string]any {
-	return SanitizeGeminiSchema(GenerationResponseSchema())
-}
-
-// GenerationResponseSchemaJSON returns the indented JSON representation of GenerationResponseSchema().
-func GenerationResponseSchemaJSON() (string, error) {
-	b, err := json.MarshalIndent(GenerationResponseSchema(), "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// GapAnalysisResponseSchemaJSON returns the indented JSON representation of GapAnalysisResponseSchema().
-func GapAnalysisResponseSchemaJSON() (string, error) {
-	b, err := json.MarshalIndent(GapAnalysisResponseSchema(), "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// GapReportSchemaJSON returns the indented JSON representation of GapReportSchema().
-func GapReportSchemaJSON() (string, error) {
-	b, err := json.MarshalIndent(GapReportSchema(), "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// ResumeExtractResponseSchemaJSON returns the indented JSON representation of ResumeExtractResponseSchema().
-func ResumeExtractResponseSchemaJSON() (string, error) {
-	b, err := json.MarshalIndent(ResumeExtractResponseSchema(), "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// leanSkillItemSchema returns the JSON Schema definition for a single LeanSkill item.
-func leanSkillItemSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"id":               map[string]any{"type": "string", "description": "Compact short identifier for citation (e.g. sk-1)"},
-			"name":             map[string]any{"type": "string", "description": "Skill name"},
-			"category":         map[string]any{"type": "string", "description": "Skill functional category"},
-			"proficiency":      map[string]any{"type": "string", "description": "Proficiency level"},
-			"years_experience": map[string]any{"type": "number", "description": "Years of experience"},
-			"keywords": map[string]any{
-				"type":        "array",
-				"description": "Sub-skills and related keywords",
-				"items":       map[string]any{"type": "string", "description": "Keyword or sub-skill term"},
-			},
-		},
-		"required": []string{"id", "name"},
-	}
-}
-
-// leanFactItemSchema returns the JSON Schema definition for a single LeanFact item.
-func leanFactItemSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"id":         map[string]any{"type": "string", "description": "Compact short identifier for bullet citation (e.g. fact-1)"},
-			"owner_id":   map[string]any{"type": "string", "description": "Parent entity short identifier"},
-			"owner_type": map[string]any{"type": "string", "description": "Parent entity type"},
-			"statement":  map[string]any{"type": "string", "description": "Factual accomplishment description"},
-			"impact":     map[string]any{"type": "string", "description": "Quantifiable outcome or metric"},
-			"skills": map[string]any{
-				"type":        "array",
-				"description": "Skills utilized in this factual accomplishment",
-				"items":       leanSkillItemSchema(),
-			},
-		},
-		"required": []string{"id", "statement"},
-	}
-}
-
-// LeanMainProfileSchema returns the canonical JSON Schema for LeanMainProfile,
-// defining only LLM-relevant public career profile attributes and short identifiers for provenance,
-// with zero leakage of internal database or multi-tenancy attributes.
-func LeanMainProfileSchema() map[string]any {
-	return map[string]any{
-		"type":        "object",
-		"description": "Minimal, lean main profile structure for LLM grounding with short IDs",
-		"properties": map[string]any{
-			"profile": map[string]any{
-				"type":        "object",
-				"description": "Candidate biographical and career summary",
-				"properties": map[string]any{
-					"headline": map[string]any{"type": "string", "description": "Professional headline"},
-					"summary":  map[string]any{"type": "string", "description": "Candidate summary"},
-				},
-			},
-			"skills": map[string]any{
-				"type":        "array",
-				"description": "Candidate technical and domain competencies",
-				"items":       leanSkillItemSchema(),
-			},
-			"experiences": map[string]any{
-				"type":        "array",
-				"description": "Employment history",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"id":              map[string]any{"type": "string", "description": "Compact short identifier for entity citation (e.g. exp-1)"},
-						"company":         map[string]any{"type": "string", "description": "Employer name"},
-						"role_title":      map[string]any{"type": "string", "description": "Position title"},
-						"employment_type": map[string]any{"type": "string", "description": "Employment type"},
-						"start_date":      map[string]any{"type": "string", "description": "Employment start date"},
-						"end_date":        map[string]any{"type": "string", "description": "Employment end date"},
-						"is_current":      map[string]any{"type": "boolean", "description": "Current position flag"},
-						"duties_summary":  map[string]any{"type": "string", "description": "Role duties summary"},
-						"facts": map[string]any{
-							"type":        "array",
-							"description": "Achievements and metrics belonging to experience",
-							"items":       leanFactItemSchema(),
-						},
-						"skills": map[string]any{
-							"type":        "array",
-							"description": "Skills utilized in experience",
-							"items":       leanSkillItemSchema(),
-						},
-					},
-					"required": []string{"id", "company", "role_title"},
-				},
-			},
-			"projects": map[string]any{
-				"type":        "array",
-				"description": "Technical and open-source projects",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"id":         map[string]any{"type": "string", "description": "Compact short identifier for entity citation (e.g. proj-1)"},
-						"name":       map[string]any{"type": "string", "description": "Project title"},
-						"role":       map[string]any{"type": "string", "description": "Role in project"},
-						"url":        map[string]any{"type": "string", "description": "Project URL"},
-						"start_date": map[string]any{"type": "string", "description": "Start date"},
-						"end_date":   map[string]any{"type": "string", "description": "End date"},
-						"summary":    map[string]any{"type": "string", "description": "Project summary"},
-						"facts": map[string]any{
-							"type":        "array",
-							"description": "Facts under project",
-							"items":       leanFactItemSchema(),
-						},
-						"skills": map[string]any{
-							"type":        "array",
-							"description": "Skills under project",
-							"items":       leanSkillItemSchema(),
-						},
-					},
-					"required": []string{"id", "name"},
-				},
-			},
-			"education": map[string]any{
-				"type":        "array",
-				"description": "Academic degrees and higher education",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"id":          map[string]any{"type": "string", "description": "Compact short identifier for entity citation (e.g. edu-1)"},
-						"institution": map[string]any{"type": "string", "description": "Institution name"},
-						"degree":      map[string]any{"type": "string", "description": "Degree earned"},
-						"field":       map[string]any{"type": "string", "description": "Major or field of study"},
-						"start_date":  map[string]any{"type": "string", "description": "Start date"},
-						"end_date":    map[string]any{"type": "string", "description": "Completion date"},
-						"score":       map[string]any{"type": "string", "description": "GPA or academic score"},
-						"facts": map[string]any{
-							"type":        "array",
-							"description": "Facts under education",
-							"items":       leanFactItemSchema(),
-						},
-					},
-					"required": []string{"id", "institution"},
-				},
-			},
-			"certifications": map[string]any{
-				"type":        "array",
-				"description": "Professional certifications and credentials",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"id":      map[string]any{"type": "string", "description": "Compact short identifier for entity citation (e.g. cert-1)"},
-						"name":    map[string]any{"type": "string", "description": "Certification name"},
-						"issuer":  map[string]any{"type": "string", "description": "Issuing authority"},
-						"date":    map[string]any{"type": "string", "description": "Date certified"},
-						"url":     map[string]any{"type": "string", "description": "Verification link"},
-						"summary": map[string]any{"type": "string", "description": "Credential summary"},
-					},
-					"required": []string{"id", "name"},
-				},
-			},
-			"facts": map[string]any{
-				"type":        "array",
-				"description": "Atomic factual achievements and responsibilities",
-				"items":       leanFactItemSchema(),
-			},
-		},
-		"required": []string{"profile"},
-	}
-}
-
-// LeanMainProfileSchemaJSON returns the indented JSON representation of LeanMainProfileSchema().
-func LeanMainProfileSchemaJSON() (string, error) {
-	b, err := json.MarshalIndent(LeanMainProfileSchema(), "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// ATSExtractionResponseSchema returns the canonical JSON Schema for Stage 1 ATS extraction and confidence scoring.
-func ATSExtractionResponseSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"extraction_confidence_score": map[string]any{
-				"type":        "number",
-				"description": "Confidence score from 0 to 1 (where 1.0 is 100%) indicating how complete and unambiguously structured the extracted resume information is",
-			},
-			"extraction_summary": map[string]any{
-				"type":        "string",
-				"description": "Concise explanation of ATS extraction completeness and any structural or formatting observations",
-			},
-			"extracted_candidate": map[string]any{
-				"type":        "object",
-				"description": "Structured candidate career profile extracted and categorized from the text-based resume",
-				"properties": map[string]any{
-					"summary": map[string]any{
-						"type":        "string",
-						"description": "Extracted professional summary or objective statement",
-					},
-					"skills": map[string]any{
-						"type":        "array",
-						"description": "Categorized technical, domain, and professional skills extracted from the resume",
-						"items":       map[string]any{"type": "string"},
-					},
-					"experiences": map[string]any{
-						"type":        "array",
-						"description": "Work experience entries parsed from the resume",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"company": map[string]any{
-									"type":        "string",
-									"description": "Employer or organization name",
-								},
-								"title": map[string]any{
-									"type":        "string",
-									"description": "Job title or role held",
-								},
-								"date_range": map[string]any{
-									"type":        "string",
-									"description": "Employment date range as parsed from the resume",
-								},
-								"highlights": map[string]any{
-									"type":        "array",
-									"description": "Accomplishment bullets and responsibilities extracted for this role",
-									"items":       map[string]any{"type": "string"},
-								},
-							},
-							"required":             []string{"company", "title"},
-							"additionalProperties": false,
-						},
-					},
-					"educations": map[string]any{
-						"type":        "array",
-						"description": "Academic credentials parsed from the resume",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"institution": map[string]any{
-									"type":        "string",
-									"description": "University, college, or school name",
-								},
-								"degree": map[string]any{
-									"type":        "string",
-									"description": "Degree or qualification earned",
-								},
-								"field": map[string]any{
-									"type":        "string",
-									"description": "Field of study or major",
-								},
-								"date_range": map[string]any{
-									"type":        "string",
-									"description": "Graduation date or attendance range",
-								},
-							},
-							"required":             []string{"institution", "degree"},
-							"additionalProperties": false,
-						},
-					},
-					"certifications": map[string]any{
-						"type":        "array",
-						"description": "Professional certifications, licenses, or awards extracted from the resume",
-						"items":       map[string]any{"type": "string"},
-					},
-				},
-				"required":             []string{"summary", "skills", "experiences", "educations"},
-				"additionalProperties": false,
-			},
-		},
-		"required":             []string{"extraction_confidence_score", "extraction_summary", "extracted_candidate"},
-		"additionalProperties": false,
-	}
-}
-
-// ATSExtractionResponseSchemaJSON returns the indented JSON representation of ATSExtractionResponseSchema().
-func ATSExtractionResponseSchemaJSON() (string, error) {
-	b, err := json.MarshalIndent(ATSExtractionResponseSchema(), "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// ATSMatchingResponseSchema returns the canonical JSON Schema for Stage 2 ATS job matching evaluation.
-func ATSMatchingResponseSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"job_matching_score": map[string]any{
-				"type":        "number",
-				"description": "Perceived matching score from 0 to 1 (where 1.0 is 100%) evaluating how well the extracted candidate information matches the job description",
-			},
-			"matching_summary": map[string]any{
-				"type":        "string",
-				"description": "Concise explanation of how the extracted candidate profile aligns with the target job description requirements",
-			},
-		},
-		"required":             []string{"job_matching_score", "matching_summary"},
-		"additionalProperties": false,
-	}
-}
-
-// ATSMatchingResponseSchemaJSON returns the indented JSON representation of ATSMatchingResponseSchema().
-func ATSMatchingResponseSchemaJSON() (string, error) {
-	b, err := json.MarshalIndent(ATSMatchingResponseSchema(), "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// SanitizeStandardJSONSchema returns a deep clone of schema stripped of JSON Schema draft
-// meta-keywords ($schema, $id, $defs, definitions) while preserving additionalProperties,
-// properties, required, description, enum, items, and anyOf for standard JSON Schema transports
-// such as Ollama (/api/chat format) and the Gemini Interactions API.
-func SanitizeStandardJSONSchema(schema map[string]any) map[string]any {
-	if schema == nil {
-		return nil
-	}
-	res, ok := cloneJSONSchemaValue(schema, true).(map[string]any)
-	if !ok {
-		return nil
-	}
-	return res
-}
-
-// SanitizeGeminiJSONSchema returns a deep clone of schema stripped of JSON Schema
-// meta-keywords unsupported by Gemini's structured output grammar ($schema, $id, $defs, definitions)
-// while preserving additionalProperties, properties, required, description, enum, items, and anyOf.
-func SanitizeGeminiJSONSchema(schema map[string]any) map[string]any {
-	return SanitizeStandardJSONSchema(schema)
-}
-
-func sanitizeStrictObjectSchema(schema map[string]any) map[string]any {
-	if schema == nil {
-		return nil
-	}
-	res, ok := normalizeStrictSchemaNode(schema).(map[string]any)
-	if !ok {
-		return nil
-	}
-	return res
-}
-
-// SanitizeOpenAISchema returns a deep clone of schema normalized for OpenAI Structured Outputs
-// strict mode (strict: true): every object sets additionalProperties: false, every property key
-// is included in sorted required slices, and previously optional properties accept null.
-func SanitizeOpenAISchema(schema map[string]any) map[string]any {
-	return sanitizeStrictObjectSchema(schema)
-}
-
-// SanitizeAnthropicSchema returns a deep clone of schema normalized for Anthropic output_config.format:
-// every object sets additionalProperties: false and normalizes optional properties into required
-// nullable properties so large schemas stay well within Anthropic's optional-parameter grammar limit.
-func SanitizeAnthropicSchema(schema map[string]any) map[string]any {
-	return sanitizeStrictObjectSchema(schema)
-}
-
-func cloneJSONSchemaValue(val any, stripMetaKeywords bool) any {
-	switch v := val.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for k, child := range v {
-			if stripMetaKeywords {
-				switch k {
-				case "$schema", "$id", "$defs", "definitions":
-					continue
-				}
-			}
-			out[k] = cloneJSONSchemaValue(child, stripMetaKeywords)
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = cloneJSONSchemaValue(item, stripMetaKeywords)
-		}
-		return out
-	case []string:
-		out := make([]string, len(v))
-		copy(out, v)
-		return out
-	default:
-		return v
-	}
-}
-
-func normalizeStrictSchemaNode(val any) any {
-	switch v := val.(type) {
-	case map[string]any:
-		cleaned := make(map[string]any, len(v)+2)
-		for k, child := range v {
-			switch k {
-			case "$schema", "$id", "$defs", "definitions":
-				continue
-			case "properties", "required":
-				// Handled explicitly below for object nodes.
-				continue
-			case "items", "additionalProperties":
-				if b, isBool := child.(bool); isBool {
-					cleaned[k] = b
-				} else {
-					cleaned[k] = normalizeStrictSchemaNode(child)
-				}
-			case "anyOf", "oneOf", "allOf", "prefixItems":
-				cleaned[k] = normalizeStrictSchemaSlice(child)
-			default:
-				cleaned[k] = cloneJSONSchemaValue(child, true)
-			}
-		}
-
-		rawProps, hasProps := v["properties"].(map[string]any)
-		isObj := v["type"] == "object" || hasProps
-		if isObj {
-			cleaned["additionalProperties"] = false
-			reqSet := extractRequiredKeySet(v["required"])
-			if hasProps {
-				normProps := make(map[string]any, len(rawProps))
-				allKeys := make([]string, 0, len(rawProps))
-				for propKey, propVal := range rawProps {
-					allKeys = append(allKeys, propKey)
-					normProp := normalizeStrictSchemaNode(propVal)
-					if !reqSet[propKey] {
-						normProp = makePropertyNullable(normProp)
-					}
-					normProps[propKey] = normProp
-				}
-				slices.Sort(allKeys)
-				cleaned["properties"] = normProps
-				cleaned["required"] = allKeys
-			} else {
-				cleaned["required"] = []string{}
-			}
-		}
-		return cleaned
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = normalizeStrictSchemaNode(item)
-		}
-		return out
-	case []string:
-		out := make([]string, len(v))
-		copy(out, v)
-		return out
-	default:
-		return v
-	}
-}
-
-func normalizeStrictSchemaSlice(val any) any {
-	list, ok := val.([]any)
-	if !ok {
-		return cloneJSONSchemaValue(val, true)
-	}
-	out := make([]any, len(list))
-	for i, item := range list {
-		out[i] = normalizeStrictSchemaNode(item)
 	}
 	return out
 }
 
-func extractRequiredKeySet(raw any) map[string]bool {
-	set := make(map[string]bool)
-	switch r := raw.(type) {
-	case []string:
-		for _, k := range r {
-			set[k] = true
-		}
-	case []any:
-		for _, item := range r {
-			if k, ok := item.(string); ok {
-				set[k] = true
-			}
-		}
+// cloneSchemaSlice deep-clones a slice of child Schema pointers while preserving nil slices.
+func cloneSchemaSlice(items []*Schema) []*Schema {
+	if items == nil {
+		return nil
 	}
-	return set
+	out := make([]*Schema, len(items))
+	for i, item := range items {
+		out[i] = item.Clone()
+	}
+	return out
 }
 
-func makePropertyNullable(prop any) any {
-	m, ok := prop.(map[string]any)
-	if !ok {
+// Strict returns a deep copy of s normalized for OpenAI and Anthropic strict structured output modes:
+// every object sets additionalProperties=false, requires every property in sorted order, and makes
+// previously optional properties accept null.
+func (s *Schema) Strict() *Schema {
+	if s == nil {
+		return nil
+	}
+	out := &Schema{
+		Type:        slices.Clone(s.Type),
+		Description: s.Description,
+		Items:       s.Items.Strict(),
+		Enum:        slices.Clone(s.Enum),
+		AnyOf:       strictSchemaSlice(s.AnyOf),
+		OneOf:       strictSchemaSlice(s.OneOf),
+		AllOf:       strictSchemaSlice(s.AllOf),
+		PrefixItems: strictSchemaSlice(s.PrefixItems),
+	}
+	if s.Required != nil {
+		out.Required = make([]string, len(s.Required))
+		copy(out.Required, s.Required)
+	}
+	if s.AdditionalProperties != nil {
+		ap := *s.AdditionalProperties
+		out.AdditionalProperties = &ap
+	}
+
+	if s.isObject() {
+		out.applyStrictObjectNormalization(s)
+	}
+	return out
+}
+
+// applyStrictObjectNormalization populates sorted Required keys, nullable optional properties, and additionalProperties=false.
+func (s *Schema) applyStrictObjectNormalization(orig *Schema) {
+	s.AdditionalProperties = boolPtr(false)
+	if len(orig.Properties) == 0 {
+		s.Required = []string{}
+		return
+	}
+
+	reqSet := make(map[string]bool, len(orig.Required))
+	for _, k := range orig.Required {
+		reqSet[k] = true
+	}
+
+	normProps := make(map[string]*Schema, len(orig.Properties))
+	allKeys := make([]string, 0, len(orig.Properties))
+	for key, prop := range orig.Properties {
+		allKeys = append(allKeys, key)
+		normProp := prop.Strict()
+		if !reqSet[key] {
+			normProp = makePropertyNullable(normProp)
+		}
+		normProps[key] = normProp
+	}
+	slices.Sort(allKeys)
+	s.Properties = normProps
+	s.Required = allKeys
+}
+
+// strictSchemaSlice normalizes each Schema element in items for strict structured outputs.
+func strictSchemaSlice(items []*Schema) []*Schema {
+	if items == nil {
+		return nil
+	}
+	out := make([]*Schema, len(items))
+	for i, item := range items {
+		out[i] = item.Strict()
+	}
+	return out
+}
+
+// isObject reports whether s explicitly declares object type or defines object properties.
+func (s *Schema) isObject() bool {
+	return s.Type.Contains(TypeObject) || len(s.Properties) > 0
+}
+
+// acceptsNull reports whether s already permits null values directly or via an anyOf branch.
+func (s *Schema) acceptsNull() bool {
+	if s.Type.Contains(TypeNull) {
+		return true
+	}
+	for _, branch := range s.AnyOf {
+		if branch != nil && branch.Type.Contains(TypeNull) {
+			return true
+		}
+	}
+	return false
+}
+
+// makePropertyNullable converts a strict-mode schema node so it accepts null when optional in the canonical schema.
+func makePropertyNullable(prop *Schema) *Schema {
+	if prop == nil || prop.acceptsNull() {
 		return prop
 	}
-	if schemaNodeAcceptsNull(m) {
-		return m
+	if len(prop.AnyOf) > 0 {
+		prop.AnyOf = append(prop.AnyOf, &Schema{Type: SchemaTypes{TypeNull}})
+		return prop
 	}
-
-	if anyOfRaw, hasAnyOf := m["anyOf"].([]any); hasAnyOf {
-		nextAnyOf := make([]any, 0, len(anyOfRaw)+1)
-		nextAnyOf = append(nextAnyOf, anyOfRaw...)
-		nextAnyOf = append(nextAnyOf, map[string]any{"type": "null"})
-		m["anyOf"] = nextAnyOf
-		return m
-	}
-
-	_, hasEnum := m["enum"]
-	_, hasProps := m["properties"]
-	if hasEnum || hasProps || m["type"] == "object" {
-		branch := make(map[string]any, len(m))
-		var outerDesc string
-		for k, val := range m {
-			if k == "description" {
-				if s, isStr := val.(string); isStr {
-					outerDesc = s
-				}
-				continue
-			}
-			branch[k] = val
-		}
-		wrapped := map[string]any{
-			"anyOf": []any{
-				branch,
-				map[string]any{"type": "null"},
+	if len(prop.Enum) > 0 || len(prop.Properties) > 0 || prop.Type.Contains(TypeObject) {
+		outerDesc := prop.Description
+		prop.Description = ""
+		return &Schema{
+			Description: outerDesc,
+			AnyOf: []*Schema{
+				prop,
+				{Type: SchemaTypes{TypeNull}},
 			},
 		}
-		if outerDesc != "" {
-			wrapped["description"] = outerDesc
-		}
-		return wrapped
 	}
-
-	switch tv := m["type"].(type) {
-	case string:
-		if tv != "" {
-			m["type"] = []string{tv, "null"}
-			return m
-		}
-	case []string:
-		next := make([]string, 0, len(tv)+1)
-		next = append(next, tv...)
-		next = append(next, "null")
-		m["type"] = next
-		return m
-	case []any:
-		next := make([]any, 0, len(tv)+1)
-		next = append(next, tv...)
-		next = append(next, "null")
-		m["type"] = next
-		return m
+	if len(prop.Type) > 0 {
+		prop.Type = append(slices.Clone(prop.Type), TypeNull)
+		return prop
 	}
-
-	return map[string]any{
-		"anyOf": []any{
-			m,
-			map[string]any{"type": "null"},
+	return &Schema{
+		AnyOf: []*Schema{
+			prop,
+			{Type: SchemaTypes{TypeNull}},
 		},
 	}
 }
 
-func schemaNodeAcceptsNull(m map[string]any) bool {
-	switch tv := m["type"].(type) {
-	case string:
-		if tv == "null" {
-			return true
-		}
-	case []string:
-		for _, s := range tv {
-			if s == "null" {
-				return true
-			}
-		}
-	case []any:
-		for _, item := range tv {
-			if s, ok := item.(string); ok && s == "null" {
-				return true
-			}
-		}
+// boolPtr allocates a pointer copy of v for optional schema boolean attributes.
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+// stringProp returns a typed string Schema node with desc.
+func stringProp(desc string) *Schema {
+	return &Schema{Type: SchemaTypes{TypeString}, Description: desc}
+}
+
+// boolProp returns a typed boolean Schema node with desc.
+func boolProp(desc string) *Schema {
+	return &Schema{Type: SchemaTypes{TypeBoolean}, Description: desc}
+}
+
+// numberProp returns a typed numeric Schema node with desc.
+func numberProp(desc string) *Schema {
+	return &Schema{Type: SchemaTypes{TypeNumber}, Description: desc}
+}
+
+// arrayProp returns a typed array Schema node containing items.
+func arrayProp(desc string, items *Schema) *Schema {
+	return &Schema{Type: SchemaTypes{TypeArray}, Description: desc, Items: items}
+}
+
+// stringArrayProp returns a typed array-of-string Schema node with desc.
+func stringArrayProp(desc string) *Schema {
+	return arrayProp(desc, &Schema{Type: SchemaTypes{TypeString}})
+}
+
+// objectSchema returns a typed object Schema node with optional required keys.
+func objectSchema(desc string, props map[string]*Schema, required ...string) *Schema {
+	return &Schema{
+		Type:        SchemaTypes{TypeObject},
+		Description: desc,
+		Properties:  props,
+		Required:    required,
 	}
-	if anyOfRaw, ok := m["anyOf"].([]any); ok {
-		for _, item := range anyOfRaw {
-			if sub, ok := item.(map[string]any); ok && sub["type"] == "null" {
-				return true
-			}
-		}
-	}
-	return false
+}
+
+// strictObjectSchema returns a typed object Schema node with additionalProperties=false and required keys.
+func strictObjectSchema(desc string, props map[string]*Schema, required ...string) *Schema {
+	s := objectSchema(desc, props, required...)
+	s.AdditionalProperties = boolPtr(false)
+	return s
 }

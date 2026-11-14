@@ -3,6 +3,7 @@ package memory_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/resumeee-app/resumeee-core"
@@ -10,18 +11,18 @@ import (
 	"github.com/resumeee-app/resumeee-core/seed"
 )
 
-// TestSeedDefaultData_Agnostic verifies that SeedDefaultData populates any repository store implementation.
-func TestSeedDefaultData_Agnostic(t *testing.T) {
+// TestDefaultData_Agnostic verifies that DefaultData populates any store implementation.
+func TestDefaultData_Agnostic(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	targetUserID := "seeded-user-1"
 
-	if err := seed.SeedDefaultData(ctx, store, targetUserID); err != nil {
-		t.Fatalf("SeedDefaultData failed: %v", err)
+	if err := seed.DefaultData(ctx, store, targetUserID); err != nil {
+		t.Fatalf("DefaultData failed: %v", err)
 	}
 
 	// 1. Verify profile
-	prof, err := store.GetProfile(ctx, targetUserID)
+	prof, err := store.Profile(ctx, targetUserID)
 	if err != nil {
 		t.Fatalf("get seeded profile: %v", err)
 	}
@@ -59,7 +60,7 @@ func TestSeedDefaultData_Agnostic(t *testing.T) {
 		t.Fatal("expected default branch to have an active version")
 	}
 
-	ver, err := store.GetVersion(ctx, branches[0].ID, *branches[0].ActiveVersionID)
+	ver, err := store.Version(ctx, branches[0].ID, *branches[0].ActiveVersionID)
 	if err != nil {
 		t.Fatalf("get active version: %v", err)
 	}
@@ -92,20 +93,20 @@ func TestDefaultPresets(t *testing.T) {
 	}
 }
 
-// TestSeedDefaultData_SystemPresetsAndTemplates verifies presets and templates are seeded under system user
+// TestDefaultData_SystemPresetsAndTemplates verifies presets and templates are seeded under system user
 // and accessible across any tenant.
-func TestSeedDefaultData_SystemPresetsAndTemplates(t *testing.T) {
+func TestDefaultData_SystemPresetsAndTemplates(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	targetUserID := "user-alice"
 
-	if err := seed.SeedDefaultData(ctx, store, targetUserID); err != nil {
-		t.Fatalf("SeedDefaultData failed: %v", err)
+	if err := seed.DefaultData(ctx, store, targetUserID); err != nil {
+		t.Fatalf("DefaultData failed: %v", err)
 	}
 
 	// Presets should be owned by system
 	for _, pid := range []string{core.Preset1PageTechResumeID, core.PresetImmigrationFullHistoryCVID} {
-		pr, err := store.GetPreset(ctx, "other-user", pid)
+		pr, err := store.Preset(ctx, "other-user", pid)
 		if err != nil {
 			t.Fatalf("expected preset %s to be available to other-user: %v", pid, err)
 		}
@@ -135,7 +136,7 @@ func TestEnsureTenantProvisioned(t *testing.T) {
 	store := memory.New()
 
 	// Seed system data first
-	if err := seed.SeedDefaultData(ctx, store, "default"); err != nil {
+	if err := seed.DefaultData(ctx, store, "default"); err != nil {
 		t.Fatalf("seeding default data: %v", err)
 	}
 
@@ -153,7 +154,7 @@ func TestEnsureTenantProvisioned(t *testing.T) {
 	}
 
 	// 1. Verify user record
-	u, err := store.User().GetUser(ctx, newUID)
+	u, err := store.Users().User(ctx, newUID)
 	if err != nil {
 		t.Fatalf("failed to get provisioned user: %v", err)
 	}
@@ -162,7 +163,7 @@ func TestEnsureTenantProvisioned(t *testing.T) {
 	}
 
 	// 2. Verify profile
-	prof, err := store.Profile().GetProfile(ctx, newUID)
+	prof, err := store.Profiles().Profile(ctx, newUID)
 	if err != nil {
 		t.Fatalf("failed to get provisioned profile: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestEnsureTenantProvisioned(t *testing.T) {
 	}
 
 	// 3. Verify default branch
-	branches, err := store.Branch().ListBranches(ctx, newUID)
+	branches, err := store.Branches().ListBranches(ctx, newUID)
 	if err != nil {
 		t.Fatalf("failed to list branches: %v", err)
 	}
@@ -191,7 +192,7 @@ func TestEnsureTenantProvisioned_Concurrent(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 
-	if err := seed.SeedDefaultData(ctx, store, "default"); err != nil {
+	if err := seed.DefaultData(ctx, store, "default"); err != nil {
 		t.Fatalf("seeding default data: %v", err)
 	}
 
@@ -217,7 +218,7 @@ func TestEnsureTenantProvisioned_Concurrent(t *testing.T) {
 		}
 	}
 
-	branches, err := store.Branch().ListBranches(ctx, newUID)
+	branches, err := store.Branches().ListBranches(ctx, newUID)
 	if err != nil {
 		t.Fatalf("listing branches: %v", err)
 	}
@@ -226,38 +227,39 @@ func TestEnsureTenantProvisioned_Concurrent(t *testing.T) {
 	}
 }
 
-// profileOnlyRepo exposes only core.ProfileRepository so tests can verify SeedDefaultDataRepos
-// does not rely on type-asserting a ProfileRepository into a core.UserRepository.
-type profileOnlyRepo struct {
-	core.ProfileRepository
+// profileOnlyStore exposes only core.ProfileStore so tests can verify DefaultDataStores
+// does not rely on type-asserting a ProfileStore into a core.UserStore.
+type profileOnlyStore struct {
+	core.ProfileStore
 }
 
-// TestSeedDefaultDataRepos_DecoupledUserRepository verifies that SeedDefaultData and SeedDefaultDataRepos
-// provision users through the explicit userRepo parameter even when profileRepo does not implement UserRepository.
-func TestSeedDefaultDataRepos_DecoupledUserRepository(t *testing.T) {
+// TestDefaultDataStores_DecoupledUserStore verifies that DefaultData and DefaultDataStores
+// provision users through the explicit userStore parameter even when profileStore does not implement UserStore.
+func TestDefaultDataStores_DecoupledUserStore(t *testing.T) {
 	ctx := context.Background()
 	backing := memory.New()
-	profileRepo := profileOnlyRepo{ProfileRepository: backing}
+	profileStore := profileOnlyStore{ProfileStore: backing}
 
-	if err := seed.SeedDefaultData(ctx, nil); !errors.Is(err, core.ErrValidation) {
+	if err := seed.DefaultData(ctx, nil); !errors.Is(err, core.ErrValidation) {
 		t.Fatalf("expected ErrValidation for nil store, got %v", err)
 	}
-	if err := seed.SeedDefaultDataRepos(ctx, nil, backing, backing, backing, backing); !errors.Is(err, core.ErrValidation) {
-		t.Fatalf("expected ErrValidation for nil profile repository, got %v", err)
+	if err := seed.DefaultDataStores(ctx, nil, backing, backing, backing, backing, backing); !errors.Is(err, core.ErrValidation) {
+		t.Fatalf("expected ErrValidation for nil profile store, got %v", err)
 	}
 
 	bundle := &core.StoreBundle{
-		ProfileRepo:  profileRepo,
-		BranchRepo:   backing,
-		PresetRepo:   backing,
-		TemplateRepo: backing,
-		UserRepo:     backing,
+		ProfileStore:  profileStore,
+		CareerStore:   backing,
+		BranchStore:   backing,
+		PresetStore:   backing,
+		TemplateStore: backing,
+		UserStore:     backing,
 	}
-	if err := seed.SeedDefaultData(ctx, bundle, "decoupled-user"); err != nil {
-		t.Fatalf("SeedDefaultData with StoreBundle failed: %v", err)
+	if err := seed.DefaultData(ctx, bundle, "decoupled-user"); err != nil {
+		t.Fatalf("DefaultData with StoreBundle failed: %v", err)
 	}
 
-	user1, err := backing.User().GetUser(ctx, "decoupled-user")
+	user1, err := backing.Users().User(ctx, "decoupled-user")
 	if err != nil {
 		t.Fatalf("expected decoupled-user to be provisioned via StoreBundle: %v", err)
 	}
@@ -265,15 +267,60 @@ func TestSeedDefaultDataRepos_DecoupledUserRepository(t *testing.T) {
 		t.Errorf("expected provisioned user ID decoupled-user, got %s", user1.ID)
 	}
 
-	if err := seed.SeedDefaultDataRepos(ctx, profileRepo, backing, backing, backing, backing, "decoupled-user-2"); err != nil {
-		t.Fatalf("SeedDefaultDataRepos failed: %v", err)
+	if err := seed.DefaultDataStores(ctx, profileStore, backing, backing, backing, backing, backing, "decoupled-user-2"); err != nil {
+		t.Fatalf("DefaultDataStores failed: %v", err)
 	}
 
-	user2, err := backing.User().GetUser(ctx, "decoupled-user-2")
+	user2, err := backing.Users().User(ctx, "decoupled-user-2")
 	if err != nil {
-		t.Fatalf("expected decoupled-user-2 to be provisioned via SeedDefaultDataRepos: %v", err)
+		t.Fatalf("expected decoupled-user-2 to be provisioned via DefaultDataStores: %v", err)
 	}
 	if user2.ID != "decoupled-user-2" {
 		t.Errorf("expected provisioned user ID decoupled-user-2, got %s", user2.ID)
+	}
+}
+
+// TestDefaultData_FallbackEscapesHTML verifies renderDefaultFallback escapes HTML special characters in HTMLOutput while keeping Markdown and PlainText unescaped.
+func TestDefaultData_FallbackEscapesHTML(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	userID := "user-html-escape"
+
+	rawName := `Alice <script>alert(1)</script> & Co`
+	rawHeadline := `Lead <b>Architect</b>`
+	if err := store.UpsertProfile(ctx, &core.Profile{
+		ID:       "prof-escape",
+		UserID:   userID,
+		FullName: rawName,
+		Headline: rawHeadline,
+	}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+
+	if err := seed.DefaultData(ctx, store, userID); err != nil {
+		t.Fatalf("DefaultData failed: %v", err)
+	}
+
+	branches, err := store.ListBranches(ctx, userID)
+	if err != nil || len(branches) != 1 || branches[0].ActiveVersionID == nil {
+		t.Fatalf("expected seeded default branch with active version, got err=%v branches=%+v", err, branches)
+	}
+
+	ver, err := store.Version(ctx, branches[0].ID, *branches[0].ActiveVersionID)
+	if err != nil {
+		t.Fatalf("fetch active version: %v", err)
+	}
+
+	if strings.Contains(ver.HTMLOutput, "<script>") || strings.Contains(ver.HTMLOutput, "<b>Architect</b>") {
+		t.Fatalf("expected HTMLOutput to escape markup tags, got: %s", ver.HTMLOutput)
+	}
+	if !strings.Contains(ver.HTMLOutput, "&lt;script&gt;alert(1)&lt;/script&gt; &amp; Co") || !strings.Contains(ver.HTMLOutput, "&lt;b&gt;Architect&lt;/b&gt;") {
+		t.Errorf("expected escaped entities in HTMLOutput, got: %s", ver.HTMLOutput)
+	}
+	if !strings.Contains(ver.MarkdownOutput, rawName) || !strings.Contains(ver.MarkdownOutput, rawHeadline) {
+		t.Errorf("expected unescaped MarkdownOutput, got: %s", ver.MarkdownOutput)
+	}
+	if !strings.Contains(ver.PlainTextOutput, rawName) || !strings.Contains(ver.PlainTextOutput, rawHeadline) {
+		t.Errorf("expected unescaped PlainTextOutput, got: %s", ver.PlainTextOutput)
 	}
 }

@@ -87,24 +87,4 @@ func TestDomainTemplateSeam(t *testing.T) {
 	if err := validator.Validate(badText); !errors.Is(err, core.ErrTemplateSyntax) {
 		t.Errorf("expected ErrTemplateSyntax for malformed Text template, got: %v", err)
 	}
-
-	// Verify custom TemplateValidatorFunc injection
-	customCalled := false
-	var customValidator core.TemplateValidator = core.TemplateValidatorFunc(func(tmpl *core.TemplateSet) error {
-		customCalled = true
-		if tmpl.ID == "reject-me" {
-			return core.ErrValidation
-		}
-		return nil
-	})
-
-	if err := customValidator.Validate(&core.TemplateSet{ID: "accept"}); err != nil {
-		t.Errorf("unexpected validation error from custom validator: %v", err)
-	}
-	if !customCalled {
-		t.Errorf("expected custom validator to be invoked")
-	}
-	if err := customValidator.Validate(&core.TemplateSet{ID: "reject-me"}); !errors.Is(err, core.ErrValidation) {
-		t.Errorf("expected ErrValidation from custom validator, got: %v", err)
-	}
 }

@@ -37,11 +37,7 @@ func (p *sequencedATSProvider) SupportsStructuredOutput(_ string) bool {
 	return false
 }
 
-func (p *sequencedATSProvider) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
-	return &core.GenerationResponse{}, nil
-}
-
-func (p *sequencedATSProvider) CompleteStructured(_ context.Context, _ string, req core.LLMCompletionRequest) (string, core.TokenUsage, error) {
+func (p *sequencedATSProvider) Complete(_ context.Context, req llm.Request) (*llm.Response, error) {
 	idx := p.calls
 	p.calls++
 	p.prompts = append(p.prompts, llm.PromptPayload{
@@ -49,7 +45,7 @@ func (p *sequencedATSProvider) CompleteStructured(_ context.Context, _ string, r
 		UserPrompt:   req.UserPrompt,
 	})
 	if idx < len(p.errs) && p.errs[idx] != nil {
-		return "", core.TokenUsage{}, p.errs[idx]
+		return nil, p.errs[idx]
 	}
 	resp := "{}"
 	if idx < len(p.responses) {
@@ -59,7 +55,12 @@ func (p *sequencedATSProvider) CompleteStructured(_ context.Context, _ string, r
 	if idx < len(p.usages) {
 		u = p.usages[idx]
 	}
-	return resp, u, nil
+	return &llm.Response{
+		Text:       resp,
+		RawBody:    resp,
+		StatusCode: 200,
+		Usage:      u,
+	}, nil
 }
 
 func TestBuildATSExtractionPrompt_ObfuscatesPII(t *testing.T) {
@@ -97,7 +98,7 @@ func TestBuildATSExtractionPrompt_ObfuscatesPII(t *testing.T) {
 	}
 }
 
-func TestServiceAdapter_SimulateATS_TwoStageFlow(t *testing.T) {
+func TestService_SimulateATS_TwoStageFlow(t *testing.T) {
 	prov := &sequencedATSProvider{
 		name:         "gemini",
 		defaultModel: "gemini-2.5-flash",
@@ -138,9 +139,9 @@ func TestServiceAdapter_SimulateATS_TwoStageFlow(t *testing.T) {
 		},
 	}
 
-	reg := llm.NewRegistry(nil)
+	reg := llm.NewRegistry()
 	reg.Register(prov)
-	adapter := llm.NewServiceAdapter(reg)
+	adapter := llm.NewService(reg)
 
 	req := core.ATSSimulationRequest{
 		ResumeText: "# Jane Doe\nSenior Backend Engineer skilled in Go, Kubernetes, and PostgreSQL.",
@@ -257,7 +258,7 @@ func TestBuildATSPrompts_XMLBoundarySanitizationAndFormatValidation(t *testing.T
 	})
 }
 
-func TestServiceAdapter_SimulateATS_ErrorPaths(t *testing.T) {
+func TestService_SimulateATS_ErrorPaths(t *testing.T) {
 	baseReq := core.ATSSimulationRequest{
 		ResumeText: "# Jane Doe\nGo Engineer",
 		FormatUsed: "markdown",
@@ -274,9 +275,9 @@ func TestServiceAdapter_SimulateATS_ErrorPaths(t *testing.T) {
 			defaultModel: "gemini-2.5-flash",
 			errs:         []error{errors.New("stage 1 upstream timeout")},
 		}
-		reg := llm.NewRegistry(nil)
+		reg := llm.NewRegistry()
 		reg.Register(prov)
-		adapter := llm.NewServiceAdapter(reg)
+		adapter := llm.NewService(reg)
 
 		_, err := adapter.SimulateATS(context.Background(), baseReq)
 		if err == nil || !strings.Contains(err.Error(), "ats extraction failed") {
@@ -293,9 +294,9 @@ func TestServiceAdapter_SimulateATS_ErrorPaths(t *testing.T) {
 			defaultModel: "gemini-2.5-flash",
 			responses:    []string{"not valid json at all"},
 		}
-		reg := llm.NewRegistry(nil)
+		reg := llm.NewRegistry()
 		reg.Register(prov)
-		adapter := llm.NewServiceAdapter(reg)
+		adapter := llm.NewService(reg)
 
 		_, err := adapter.SimulateATS(context.Background(), baseReq)
 		if !errors.Is(err, llm.ErrInvalidResponse) {
@@ -313,9 +314,9 @@ func TestServiceAdapter_SimulateATS_ErrorPaths(t *testing.T) {
 			responses:    []string{`{"extraction_confidence_score": 0.9, "extracted_candidate": {"skills": ["Go"]}}`},
 			errs:         []error{nil, errors.New("stage 2 rate limit")},
 		}
-		reg := llm.NewRegistry(nil)
+		reg := llm.NewRegistry()
 		reg.Register(prov)
-		adapter := llm.NewServiceAdapter(reg)
+		adapter := llm.NewService(reg)
 
 		_, err := adapter.SimulateATS(context.Background(), baseReq)
 		if err == nil || !strings.Contains(err.Error(), "ats matching failed") {
@@ -335,9 +336,9 @@ func TestServiceAdapter_SimulateATS_ErrorPaths(t *testing.T) {
 				`{malformed-json`,
 			},
 		}
-		reg := llm.NewRegistry(nil)
+		reg := llm.NewRegistry()
 		reg.Register(prov)
-		adapter := llm.NewServiceAdapter(reg)
+		adapter := llm.NewService(reg)
 
 		_, err := adapter.SimulateATS(context.Background(), baseReq)
 		if !errors.Is(err, llm.ErrInvalidResponse) {
@@ -350,21 +351,21 @@ type transportStubClient struct {
 	name       string
 	structured bool
 	responses  []string
-	reqs       []core.LLMCompletionRequest
+	reqs       []llm.Request
 }
 
 func (c *transportStubClient) Name() string                         { return c.name }
 func (c *transportStubClient) DefaultModel() string                 { return "stub-model" }
 func (c *transportStubClient) Models() []core.ModelOption           { return nil }
 func (c *transportStubClient) SupportsStructuredOutput(string) bool { return c.structured }
-func (c *transportStubClient) Complete(_ context.Context, req core.LLMCompletionRequest) (*core.LLMCompletionResponse, error) {
+func (c *transportStubClient) Complete(_ context.Context, req llm.Request) (*llm.Response, error) {
 	idx := len(c.reqs)
 	c.reqs = append(c.reqs, req)
 	text := "{}"
 	if idx < len(c.responses) {
 		text = c.responses[idx]
 	}
-	return &core.LLMCompletionResponse{
+	return &llm.Response{
 		Text:       text,
 		RawBody:    text,
 		StatusCode: 200,
@@ -372,7 +373,7 @@ func (c *transportStubClient) Complete(_ context.Context, req core.LLMCompletion
 	}, nil
 }
 
-func TestServiceAdapter_SimulateATS_StructuredVsFallbackTransport(t *testing.T) {
+func TestService_SimulateATS_StructuredVsFallbackTransport(t *testing.T) {
 	stageResponses := []string{
 		`{"extraction_confidence_score":0.95,"extraction_summary":"Clean","extracted_candidate":{"summary":"Go dev","skills":["Go"],"experiences":[],"educations":[]}}`,
 		`{"job_matching_score":0.90,"matching_summary":"Great match"}`,
@@ -390,8 +391,8 @@ func TestServiceAdapter_SimulateATS_StructuredVsFallbackTransport(t *testing.T) 
 				responses:  stageResponses,
 			}
 			reg := llm.NewRegistry()
-			reg.RegisterClient(stub)
-			adapter := llm.NewServiceAdapter(reg)
+			reg.Register(stub)
+			adapter := llm.NewService(reg)
 
 			resp, err := adapter.SimulateATS(context.Background(), core.ATSSimulationRequest{
 				ResumeText: "# Jane Doe\nGo Engineer",

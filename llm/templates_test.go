@@ -10,6 +10,11 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
+	"github.com/resumeee-app/resumeee-core/llm/anthropic"
+	"github.com/resumeee-app/resumeee-core/llm/gemini"
+	"github.com/resumeee-app/resumeee-core/llm/ollama"
+	"github.com/resumeee-app/resumeee-core/llm/openai"
+	"github.com/resumeee-app/resumeee-core/llm/openaicompat"
 	"github.com/resumeee-app/resumeee-core/sanitizer"
 )
 
@@ -358,7 +363,7 @@ func TestPromptTemplates_NoHardcodedResponseSchemasAndDynamicOptions(t *testing.
 	tests := []struct {
 		name         string
 		buildPrompt  func(opts llm.PromptOptions) (string, error)
-		schemaGetter func() map[string]any
+		schemaGetter func() *llm.Schema
 		expectedProp string
 	}{
 		{
@@ -475,14 +480,12 @@ func TestPromptTemplates_NoHardcodedResponseSchemasAndDynamicOptions(t *testing.
 
 func TestPromptCompiler_DynamicProviderAndModelCapability(t *testing.T) {
 	reg := llm.NewRegistry()
-	llm.RegisterClients(reg, llm.ProviderConfig{
-		DefaultProvider: llm.ProviderGemini,
-		GeminiAPIKey:    "gem-key",
-		OpenAIAPIKey:    "oai-key",
-		AnthropicAPIKey: "ant-key",
-		OllamaBaseURL:   "http://localhost:11434",
-		CompatBaseURL:   "http://localhost:8000/v1",
-	})
+	reg.Register(gemini.New("gem-key"))
+	reg.Register(openai.New("oai-key"))
+	reg.Register(anthropic.New("ant-key"))
+	reg.Register(ollama.New("http://localhost:11434", ""))
+	reg.Register(openaicompat.New("http://localhost:8000/v1", ""))
+	reg.SetDefault(llm.ProviderGemini, "")
 
 	compiler := llm.NewPromptCompiler(llm.WithPromptRegistry(reg))
 

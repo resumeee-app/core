@@ -106,6 +106,7 @@ var languageAliases = map[string]string{
 	"hindi":                 "Hindi",
 }
 
+// Language validation sentinel errors returned when a requested target language cannot be processed.
 var (
 	// ErrUnsupportedLanguage indicates the requested target language is not supported.
 	ErrUnsupportedLanguage = errors.New("unsupported target language")

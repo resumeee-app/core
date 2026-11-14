@@ -9,26 +9,49 @@ import (
 	"text/template"
 
 	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/branch"
 	"github.com/resumeee-app/resumeee-core/sanitizer"
 )
 
+// templateFS embeds the built-in system and user prompt templates shipped with package llm.
+//
 //go:embed templates/*
 var templateFS embed.FS
 
+// Compiled prompt templates parsed at package initialization from embedded templateFS assets.
 var (
-	tailorSystemTmpl        = template.Must(template.ParseFS(templateFS, "templates/tailor_system.tmpl"))
-	tailorUserTmpl          = template.Must(template.ParseFS(templateFS, "templates/tailor_user.tmpl"))
-	gapAnalysisSystemTmpl   = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_system.tmpl"))
-	gapAnalysisUserTmpl     = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_user.tmpl"))
+	// tailorSystemTmpl renders the system prompt for resume tailoring.
+	tailorSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/tailor_system.tmpl"))
+
+	// tailorUserTmpl renders the user prompt for resume tailoring.
+	tailorUserTmpl = template.Must(template.ParseFS(templateFS, "templates/tailor_user.tmpl"))
+
+	// gapAnalysisSystemTmpl renders the system prompt for qualification gap analysis.
+	gapAnalysisSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_system.tmpl"))
+
+	// gapAnalysisUserTmpl renders the user prompt for qualification gap analysis.
+	gapAnalysisUserTmpl = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_user.tmpl"))
+
+	// resumeExtractSystemTmpl renders the system prompt for raw resume extraction.
 	resumeExtractSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/resume_extract_system.tmpl"))
-	resumeExtractUserTmpl   = template.Must(template.ParseFS(templateFS, "templates/resume_extract_user.tmpl"))
-	atsExtractSystemTmpl    = template.Must(template.ParseFS(templateFS, "templates/ats_extract_system.tmpl"))
-	atsExtractUserTmpl      = template.Must(template.ParseFS(templateFS, "templates/ats_extract_user.tmpl"))
-	atsMatchSystemTmpl      = template.Must(template.ParseFS(templateFS, "templates/ats_match_system.tmpl"))
-	atsMatchUserTmpl        = template.Must(template.ParseFS(templateFS, "templates/ats_match_user.tmpl"))
+
+	// resumeExtractUserTmpl renders the user prompt for raw resume extraction.
+	resumeExtractUserTmpl = template.Must(template.ParseFS(templateFS, "templates/resume_extract_user.tmpl"))
+
+	// atsExtractSystemTmpl renders the system prompt for Stage 1 ATS extraction.
+	atsExtractSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_extract_system.tmpl"))
+
+	// atsExtractUserTmpl renders the user prompt for Stage 1 ATS extraction.
+	atsExtractUserTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_extract_user.tmpl"))
+
+	// atsMatchSystemTmpl renders the system prompt for Stage 2 ATS job matching.
+	atsMatchSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_match_system.tmpl"))
+
+	// atsMatchUserTmpl renders the user prompt for Stage 2 ATS job matching.
+	atsMatchUserTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_match_user.tmpl"))
 )
 
-// ReadTemplateFile reads a template file by name from the embedded templates directory.
+// ReadTemplateFile reads an embedded prompt template file by filename from templates/.
 func ReadTemplateFile(name string) (string, error) {
 	data, err := templateFS.ReadFile("templates/" + name)
 	if err != nil {
@@ -53,7 +76,7 @@ type PromptOptions struct {
 type PromptCompilerOption func(*PromptCompiler)
 
 // WithPromptRegistry binds a provider Registry to PromptCompiler so CompilePrompt dynamically
-// omits or appends <response_schema> according to the resolved provider and model capabilities.
+// omits or appends <response_schema> according to resolved client capabilities.
 func WithPromptRegistry(reg *Registry) PromptCompilerOption {
 	return func(c *PromptCompiler) {
 		c.registry = reg
@@ -68,7 +91,7 @@ func WithNativeStructuredOutput(enabled bool) PromptCompilerOption {
 	}
 }
 
-// PromptCompiler implements core.PromptCompiler using BuildPromptWithOptions.
+// PromptCompiler implements branch.PromptCompiler using capability-aware prompt assembly.
 type PromptCompiler struct {
 	registry               *Registry
 	nativeStructuredOutput bool
@@ -85,17 +108,13 @@ func NewPromptCompiler(opts ...PromptCompilerOption) *PromptCompiler {
 	return c
 }
 
-// CompilePrompt builds the prompt payload and returns a core.PromptPreview.
+// CompilePrompt builds the tailoring prompt payload and returns a core.PromptPreview.
 func (c *PromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.PromptPreview, error) {
 	native := c != nil && c.nativeStructuredOutput
 	if c != nil && c.registry != nil {
-		var profile *core.Profile
-		if req.MainProfile != nil {
-			profile = &req.MainProfile.Profile
-		}
-		provider, model, err := c.registry.Resolve(req, req.Preset, profile)
-		if err == nil && provider != nil {
-			native = provider.SupportsStructuredOutput(model)
+		client, model, err := c.registry.Resolve(req, req.Preset, requestProfile(req))
+		if err == nil && client != nil {
+			native = client.SupportsStructuredOutput(model)
 		} else {
 			native = false
 		}
@@ -111,6 +130,17 @@ func (c *PromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.Prompt
 	}, nil
 }
 
+// renderSystemPrompt renders sysTmpl and appends an inline fallback schema unless NativeStructuredOutput is enabled.
+func renderSystemPrompt(sysTmpl *template.Template, grow int, opts PromptOptions, schemaJSONFn func() (string, error)) (string, error) {
+	var buf strings.Builder
+	buf.Grow(grow)
+	if err := sysTmpl.Execute(&buf, nil); err != nil {
+		return "", err
+	}
+	return appendResponseSchemaIfNeeded(buf.String(), opts, schemaJSONFn)
+}
+
+// appendResponseSchemaIfNeeded appends a serialized fallback schema block when native structured output is off.
 func appendResponseSchemaIfNeeded(baseSystemPrompt string, opts PromptOptions, schemaJSONFn func() (string, error)) (string, error) {
 	trimmed := strings.TrimRight(baseSystemPrompt, "\n")
 	if opts.NativeStructuredOutput {
@@ -120,37 +150,10 @@ func appendResponseSchemaIfNeeded(baseSystemPrompt string, opts PromptOptions, s
 	if err != nil {
 		return "", fmt.Errorf("failed to serialize fallback response schema: %w", err)
 	}
-	return appendRawSchemaBlock(trimmed, schemaJSON), nil
+	return AppendRawSchemaBlock(trimmed, schemaJSON), nil
 }
 
-func containsResponseSchemaDirective(prompt string) bool {
-	lower := strings.ToLower(prompt)
-	return strings.Contains(lower, "<response_schema>") || strings.Contains(lower, "<json_output_schema>")
-}
-
-func appendRawSchemaBlock(systemPrompt, schemaJSON string) string {
-	trimmed := strings.TrimRight(systemPrompt, "\n")
-	block := fmt.Sprintf(
-		"<response_schema>\nThe expected response must be a valid JSON object conforming strictly to the following JSON Schema:\n```json\n%s\n```\n</response_schema>",
-		schemaJSON,
-	)
-	if trimmed == "" {
-		return block
-	}
-	return trimmed + "\n\n" + block
-}
-
-func appendFallbackSchemaIfNeeded(systemPrompt string, schema map[string]any) (string, error) {
-	if schema == nil || containsResponseSchemaDirective(systemPrompt) {
-		return systemPrompt, nil
-	}
-	schemaBytes, err := json.MarshalIndent(schema, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal fallback response schema: %w", err)
-	}
-	return appendRawSchemaBlock(systemPrompt, string(schemaBytes)), nil
-}
-
+// tailorPromptContext holds template substitution fields for tailor_user.tmpl.
 type tailorPromptContext struct {
 	GlobalRules        string
 	PresetInstructions string
@@ -165,6 +168,7 @@ type tailorPromptContext struct {
 	MainProfileJSON    string
 }
 
+// gapAnalysisPromptContext holds template substitution fields for gap_analysis_user.tmpl.
 type gapAnalysisPromptContext struct {
 	TargetRole         string
 	TargetCompany      string
@@ -173,6 +177,7 @@ type gapAnalysisPromptContext struct {
 	MainProfileJSON    string
 }
 
+// recordShortID records mappings from both canonical ID and short ID to shortID in idMap.
 func recordShortID(idMap map[string]string, id, shortID string) {
 	if id != "" {
 		idMap[id] = shortID
@@ -182,12 +187,14 @@ func recordShortID(idMap map[string]string, id, shortID string) {
 	}
 }
 
+// recordSkills adds short ID mappings for every skill in skills.
 func recordSkills(idMap map[string]string, skills []core.Skill) {
 	for _, s := range skills {
 		recordShortID(idMap, s.ID, s.EffectiveShortID())
 	}
 }
 
+// recordFacts adds short ID mappings for every fact and its linked skills in facts.
 func recordFacts(idMap map[string]string, facts []core.Fact) {
 	for _, f := range facts {
 		recordShortID(idMap, f.ID, f.EffectiveShortID())
@@ -195,16 +202,7 @@ func recordFacts(idMap map[string]string, facts []core.Fact) {
 	}
 }
 
-// BuildPrompt constructs a structured prompt payload enforcing the 3-tier rules hierarchy,
-// anti-hallucination grounding constraints ("No Lies" invariant), prior active version continuity (ADR-002),
-// and serialized Main Profile snapshot data projected with compact short identifiers and PII obfuscated.
-//
-// Parameters:
-//   - req: GenerationRequest containing JobDescription, WritingRules, TargetRole, MainProfile,
-//     PriorActiveVersion, PinnedEntityIDs, and ExcludedEntityIDs.
-//
-// Returns:
-//   - PromptPayload with populated SystemPrompt and UserPrompt strings, or an error if generation fails.
+// BuildPrompt constructs a tailoring prompt payload with an inline fallback response schema.
 func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 	return BuildPromptWithOptions(req, PromptOptions{NativeStructuredOutput: false})
 }
@@ -212,79 +210,18 @@ func BuildPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 // BuildPromptWithOptions constructs a tailoring prompt payload and omits the inline <response_schema>
 // block when opts.NativeStructuredOutput is true.
 func BuildPromptWithOptions(req core.GenerationRequest, opts PromptOptions) (*PromptPayload, error) {
-	// Obfuscate candidate contact PII before compiling prompts
 	session := sanitizer.NewSessionFromRequest(req)
 	obfReq := session.ObfuscateRequest(req)
-
-	// 1. Build idMap for projecting snapshot, pinned/excluded entities, and prior version
 	idMap := buildShortIDMap(obfReq.MainProfile)
 
-	// 2. Render System Prompt from template
-	var sysBuilder strings.Builder
-	sysBuilder.Grow(2048)
-	if err := tailorSystemTmpl.Execute(&sysBuilder, nil); err != nil {
+	systemPrompt, err := renderSystemPrompt(tailorSystemTmpl, 2048, opts, GenerationResponseSchemaJSON)
+	if err != nil {
 		return nil, fmt.Errorf("failed to render tailor system prompt template: %w", err)
 	}
-	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, GenerationResponseSchemaJSON)
+
+	ctx, err := buildTailorPromptContext(obfReq, idMap)
 	if err != nil {
 		return nil, err
-	}
-
-	// 3. Prepare data and render User Prompt from template
-	var priorJSONStr string
-	if obfReq.PriorVersion != nil {
-		projectedPrior := projectPriorVersion(obfReq.PriorVersion, idMap)
-		priorJSON, err := json.MarshalIndent(projectedPrior, "", "  ")
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize prior version: %w", err)
-		}
-		priorJSONStr = string(priorJSON)
-	}
-
-	profileJSONStr, err := serializeProjectedMainProfile(obfReq.MainProfile, idMap)
-	if err != nil {
-		return nil, err
-	}
-
-	pinned := ""
-	if len(obfReq.BranchContext.PinnedEntityIDs) > 0 {
-		projectedPinned := make([]string, len(obfReq.BranchContext.PinnedEntityIDs))
-		for i, id := range obfReq.BranchContext.PinnedEntityIDs {
-			projectedPinned[i] = resolveShortID(id, idMap)
-		}
-		pinned = strings.Join(projectedPinned, ", ")
-	}
-
-	excluded := ""
-	if len(obfReq.BranchContext.ExcludedEntityIDs) > 0 {
-		projectedExcluded := make([]string, len(obfReq.BranchContext.ExcludedEntityIDs))
-		for i, id := range obfReq.BranchContext.ExcludedEntityIDs {
-			projectedExcluded[i] = resolveShortID(id, idMap)
-		}
-		excluded = strings.Join(projectedExcluded, ", ")
-	}
-
-	targetLanguage := obfReq.TargetLanguage
-	if strings.TrimSpace(targetLanguage) == "" && obfReq.Preset != nil {
-		targetLanguage = obfReq.Preset.EffectiveLanguage()
-	}
-	validatedLanguage, err := core.ValidateLanguage(targetLanguage)
-	if err != nil {
-		return nil, fmt.Errorf("invalid prompt target language: %w", err)
-	}
-
-	ctx := tailorPromptContext{
-		GlobalRules:        strings.TrimSpace(obfReq.GlobalRules),
-		PresetInstructions: strings.TrimSpace(obfReq.PresetInstructions),
-		TargetLanguage:     validatedLanguage,
-		TargetRole:         strings.TrimSpace(obfReq.BranchContext.TargetRole),
-		TargetCompany:      strings.TrimSpace(obfReq.BranchContext.TargetCompany),
-		TargetRequirements: strings.TrimSpace(obfReq.BranchContext.TargetRequirements),
-		BranchInstructions: strings.TrimSpace(obfReq.BranchContext.BranchInstructions),
-		PinnedEntities:     pinned,
-		ExcludedEntities:   excluded,
-		PriorVersionJSON:   priorJSONStr,
-		MainProfileJSON:    profileJSONStr,
 	}
 
 	var userBuilder strings.Builder
@@ -299,32 +236,84 @@ func BuildPromptWithOptions(req core.GenerationRequest, opts PromptOptions) (*Pr
 	}, nil
 }
 
-// BuildGapAnalysisPrompt constructs a targeted prompt payload designed exclusively for evaluating
-// candidate qualifications against target job requirements, avoiding full resume generation overhead.
+// buildTailorPromptContext prepares the projected profile, prior version, entity hints, and language context.
+func buildTailorPromptContext(obfReq core.GenerationRequest, idMap map[string]string) (tailorPromptContext, error) {
+	priorJSON, err := serializePriorVersion(obfReq.PriorVersion, idMap)
+	if err != nil {
+		return tailorPromptContext{}, err
+	}
+	profileJSON, err := serializeProjectedMainProfile(obfReq.MainProfile, idMap)
+	if err != nil {
+		return tailorPromptContext{}, err
+	}
+
+	targetLanguage := obfReq.TargetLanguage
+	if strings.TrimSpace(targetLanguage) == "" && obfReq.Preset != nil {
+		targetLanguage = obfReq.Preset.EffectiveLanguage()
+	}
+	validatedLanguage, err := core.ValidateLanguage(targetLanguage)
+	if err != nil {
+		return tailorPromptContext{}, fmt.Errorf("invalid prompt target language: %w", err)
+	}
+
+	return tailorPromptContext{
+		GlobalRules:        strings.TrimSpace(obfReq.GlobalRules),
+		PresetInstructions: strings.TrimSpace(obfReq.PresetInstructions),
+		TargetLanguage:     validatedLanguage,
+		TargetRole:         strings.TrimSpace(obfReq.BranchContext.TargetRole),
+		TargetCompany:      strings.TrimSpace(obfReq.BranchContext.TargetCompany),
+		TargetRequirements: strings.TrimSpace(obfReq.BranchContext.TargetRequirements),
+		BranchInstructions: strings.TrimSpace(obfReq.BranchContext.BranchInstructions),
+		PinnedEntities:     projectShortIDList(obfReq.BranchContext.PinnedEntityIDs, idMap),
+		ExcludedEntities:   projectShortIDList(obfReq.BranchContext.ExcludedEntityIDs, idMap),
+		PriorVersionJSON:   priorJSON,
+		MainProfileJSON:    profileJSON,
+	}, nil
+}
+
+// serializePriorVersion projects prior to short IDs and marshals it as formatted JSON.
+func serializePriorVersion(prior *core.TailoredContent, idMap map[string]string) (string, error) {
+	if prior == nil {
+		return "", nil
+	}
+	projected := projectPriorVersion(prior, idMap)
+	raw, err := json.MarshalIndent(projected, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize prior version: %w", err)
+	}
+	return string(raw), nil
+}
+
+// projectShortIDList joins resolved compact short IDs for a list of entity identifiers.
+func projectShortIDList(ids []string, idMap map[string]string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	projected := make([]string, len(ids))
+	for i, id := range ids {
+		projected[i] = resolveShortID(id, idMap)
+	}
+	return strings.Join(projected, ", ")
+}
+
+// BuildGapAnalysisPrompt constructs a targeted prompt payload for evaluating candidate qualifications.
 func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) {
 	return BuildGapAnalysisPromptWithOptions(req, PromptOptions{NativeStructuredOutput: false})
 }
 
-// BuildGapAnalysisPromptWithOptions constructs a targeted gap-analysis prompt payload and omits
+// BuildGapAnalysisPromptWithOptions constructs a gap-analysis prompt payload and omits
 // the inline <response_schema> block when opts.NativeStructuredOutput is true.
 func BuildGapAnalysisPromptWithOptions(req core.GenerationRequest, opts PromptOptions) (*PromptPayload, error) {
-	// Obfuscate only the snapshot and branch fields projected into the gap analysis prompt
 	session := sanitizer.NewSessionFromSnapshot(req.MainProfile)
 	obfProfile := session.ObfuscateSnapshot(req.MainProfile)
-
 	idMap := buildShortIDMap(obfProfile)
 
-	var sysBuilder strings.Builder
-	sysBuilder.Grow(1024)
-	if err := gapAnalysisSystemTmpl.Execute(&sysBuilder, nil); err != nil {
+	systemPrompt, err := renderSystemPrompt(gapAnalysisSystemTmpl, 1024, opts, GapAnalysisResponseSchemaJSON)
+	if err != nil {
 		return nil, fmt.Errorf("failed to render gap analysis system prompt template: %w", err)
 	}
-	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, GapAnalysisResponseSchemaJSON)
-	if err != nil {
-		return nil, err
-	}
 
-	profileJSONStr, err := serializeProjectedMainProfile(obfProfile, idMap)
+	profileJSON, err := serializeProjectedMainProfile(obfProfile, idMap)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +323,7 @@ func BuildGapAnalysisPromptWithOptions(req core.GenerationRequest, opts PromptOp
 		TargetCompany:      strings.TrimSpace(req.BranchContext.TargetCompany),
 		TargetRequirements: session.ObfuscateString(strings.TrimSpace(req.BranchContext.TargetRequirements)),
 		BranchInstructions: session.ObfuscateString(strings.TrimSpace(req.BranchContext.BranchInstructions)),
-		MainProfileJSON:    profileJSONStr,
+		MainProfileJSON:    profileJSON,
 	}
 
 	var userBuilder strings.Builder
@@ -349,27 +338,22 @@ func BuildGapAnalysisPromptWithOptions(req core.GenerationRequest, opts PromptOp
 	}, nil
 }
 
+// resumeExtractPromptContext holds template substitution fields for resume_extract_user.tmpl.
 type resumeExtractPromptContext struct {
 	RawText string
 }
 
-// BuildResumeExtractPrompt constructs structured system and user prompts for extracting unstructured resume text
-// into standard JSON Resume format, rendering prompts from embedded template files.
+// BuildResumeExtractPrompt constructs system and user prompts for extracting unstructured resume text.
 func BuildResumeExtractPrompt(rawText string) (*PromptPayload, error) {
 	return BuildResumeExtractPromptWithOptions(rawText, PromptOptions{NativeStructuredOutput: false})
 }
 
-// BuildResumeExtractPromptWithOptions constructs structured resume-extraction prompts and omits
+// BuildResumeExtractPromptWithOptions constructs resume-extraction prompts and omits
 // the inline <response_schema> block when opts.NativeStructuredOutput is true.
 func BuildResumeExtractPromptWithOptions(rawText string, opts PromptOptions) (*PromptPayload, error) {
-	var sysBuilder strings.Builder
-	sysBuilder.Grow(1024)
-	if err := resumeExtractSystemTmpl.Execute(&sysBuilder, nil); err != nil {
-		return nil, fmt.Errorf("failed to render resume extract system prompt template: %w", err)
-	}
-	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, ResumeExtractResponseSchemaJSON)
+	systemPrompt, err := renderSystemPrompt(resumeExtractSystemTmpl, 1024, opts, ResumeExtractResponseSchemaJSON)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to render resume extract system prompt template: %w", err)
 	}
 
 	ctx := resumeExtractPromptContext{
@@ -388,11 +372,13 @@ func BuildResumeExtractPromptWithOptions(rawText string, opts PromptOptions) (*P
 	}, nil
 }
 
+// atsExtractPromptContext holds template substitution fields for ats_extract_user.tmpl.
 type atsExtractPromptContext struct {
 	FormatUsed string
 	ResumeText string
 }
 
+// atsMatchPromptContext holds template substitution fields for ats_match_user.tmpl.
 type atsMatchPromptContext struct {
 	TargetRole             string
 	TargetCompany          string
@@ -400,9 +386,11 @@ type atsMatchPromptContext struct {
 	ExtractedCandidateJSON string
 }
 
+// atsPromptTagRegex matches internal prompt XML delimiter tags to prevent tag smuggling from untrusted inputs.
 var atsPromptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|response_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
 
-func sanitizeATSPromptValue(content string, stripOuterTag string) string {
+// sanitizeATSPromptValue strips matching outer tags and escapes embedded XML delimiter tags in untrusted text.
+func sanitizeATSPromptValue(content, stripOuterTag string) string {
 	trimmed := strings.TrimSpace(content)
 	if stripOuterTag != "" {
 		openTag := "<" + stripOuterTag + ">"
@@ -419,8 +407,7 @@ func sanitizeATSPromptValue(content string, stripOuterTag string) string {
 	})
 }
 
-// BuildATSExtractionPrompt compiles the Stage 1 ATS extraction system and user prompts,
-// obfuscating any candidate contact PII in the rendered resume text prior to LLM transmission.
+// BuildATSExtractionPrompt compiles Stage 1 ATS extraction prompts with candidate PII obfuscated.
 func BuildATSExtractionPrompt(req core.ATSSimulationRequest) (*PromptPayload, *sanitizer.Session, error) {
 	return BuildATSExtractionPromptWithOptions(req, PromptOptions{NativeStructuredOutput: false})
 }
@@ -436,14 +423,9 @@ func BuildATSExtractionPromptWithOptions(req core.ATSSimulationRequest, opts Pro
 	session := sanitizer.NewSessionFromSnapshot(req.MainProfile)
 	obfResumeText := sanitizeATSPromptValue(session.ObfuscateString(strings.TrimSpace(req.ResumeText)), "resume_document")
 
-	var sysBuilder strings.Builder
-	sysBuilder.Grow(2048)
-	if err := atsExtractSystemTmpl.Execute(&sysBuilder, nil); err != nil {
-		return nil, nil, fmt.Errorf("failed to render ats extract system prompt template: %w", err)
-	}
-	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, ATSExtractionResponseSchemaJSON)
+	systemPrompt, err := renderSystemPrompt(atsExtractSystemTmpl, 2048, opts, ATSExtractionResponseSchemaJSON)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to render ats extract system prompt template: %w", err)
 	}
 
 	ctx := atsExtractPromptContext{
@@ -463,39 +445,27 @@ func BuildATSExtractionPromptWithOptions(req core.ATSSimulationRequest, opts Pro
 	}, session, nil
 }
 
-// BuildATSMatchingPrompt compiles the Stage 2 ATS job matching system and user prompts
-// using exclusively the extracted candidate representation from Stage 1 and the target job description.
-func BuildATSMatchingPrompt(branch core.Branch, extracted *core.ATSExtractedCandidate, session *sanitizer.Session) (*PromptPayload, error) {
-	return BuildATSMatchingPromptWithOptions(branch, extracted, session, PromptOptions{NativeStructuredOutput: false})
+// BuildATSMatchingPrompt compiles Stage 2 ATS job matching prompts from extracted candidate data.
+func BuildATSMatchingPrompt(b core.Branch, extracted *core.ATSExtractedCandidate, session *sanitizer.Session) (*PromptPayload, error) {
+	return BuildATSMatchingPromptWithOptions(b, extracted, session, PromptOptions{NativeStructuredOutput: false})
 }
 
 // BuildATSMatchingPromptWithOptions compiles Stage 2 ATS job matching prompts and omits the inline
 // <response_schema> block when opts.NativeStructuredOutput is true.
-func BuildATSMatchingPromptWithOptions(branch core.Branch, extracted *core.ATSExtractedCandidate, session *sanitizer.Session, opts PromptOptions) (*PromptPayload, error) {
-	var sysBuilder strings.Builder
-	sysBuilder.Grow(1024)
-	if err := atsMatchSystemTmpl.Execute(&sysBuilder, nil); err != nil {
+func BuildATSMatchingPromptWithOptions(b core.Branch, extracted *core.ATSExtractedCandidate, session *sanitizer.Session, opts PromptOptions) (*PromptPayload, error) {
+	systemPrompt, err := renderSystemPrompt(atsMatchSystemTmpl, 1024, opts, ATSMatchingResponseSchemaJSON)
+	if err != nil {
 		return nil, fmt.Errorf("failed to render ats match system prompt template: %w", err)
 	}
-	systemPrompt, err := appendResponseSchemaIfNeeded(sysBuilder.String(), opts, ATSMatchingResponseSchemaJSON)
+
+	candidateJSONBytes, err := serializeExtractedCandidate(extracted)
 	if err != nil {
 		return nil, err
 	}
 
-	candidateToSerialize := extracted
-	if candidateToSerialize == nil {
-		candidateToSerialize = &core.ATSExtractedCandidate{}
-	}
-	candidateToSerialize.Normalize()
-
-	candidateJSONBytes, err := json.MarshalIndent(candidateToSerialize, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize extracted candidate data: %w", err)
-	}
-
-	targetRole := strings.TrimSpace(branch.TargetRole)
-	targetCompany := strings.TrimSpace(branch.TargetCompany)
-	targetReqs := strings.TrimSpace(branch.TargetRequirements)
+	targetRole := strings.TrimSpace(b.TargetRole)
+	targetCompany := strings.TrimSpace(b.TargetCompany)
+	targetReqs := strings.TrimSpace(b.TargetRequirements)
 	if session != nil {
 		targetRole = session.ObfuscateString(targetRole)
 		targetReqs = session.ObfuscateString(targetReqs)
@@ -520,8 +490,22 @@ func BuildATSMatchingPromptWithOptions(branch core.Branch, extracted *core.ATSEx
 	}, nil
 }
 
-// buildShortIDMap builds a fast lookup dictionary mapping canonical UUIDs to compact short IDs
-// for all entities (skills, experiences, projects, education, certifications, facts) in a profile snapshot.
+// serializeExtractedCandidate normalizes and JSON-marshals a Stage 1 extracted candidate payload.
+func serializeExtractedCandidate(extracted *core.ATSExtractedCandidate) ([]byte, error) {
+	candidate := extracted
+	if candidate == nil {
+		candidate = &core.ATSExtractedCandidate{}
+	}
+	candidate.Normalize()
+
+	raw, err := json.MarshalIndent(candidate, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize extracted candidate data: %w", err)
+	}
+	return raw, nil
+}
+
+// buildShortIDMap builds a lookup dictionary mapping canonical UUIDs to compact short IDs.
 func buildShortIDMap(snapshot *core.MainProfileSnapshot) map[string]string {
 	idMap := make(map[string]string)
 	if snapshot == nil {
@@ -547,8 +531,7 @@ func buildShortIDMap(snapshot *core.MainProfileSnapshot) map[string]string {
 	return idMap
 }
 
-// serializeProjectedMainProfile projects the profile snapshot using short IDs into a lean main profile structure
-// and serializes it to formatted JSON, preventing leakage of internal database and multi-tenancy attributes.
+// serializeProjectedMainProfile projects snapshot with short IDs into a LeanMainProfile JSON string.
 func serializeProjectedMainProfile(snapshot *core.MainProfileSnapshot, idMap map[string]string) (string, error) {
 	if snapshot == nil {
 		return "", nil
@@ -561,16 +544,7 @@ func serializeProjectedMainProfile(snapshot *core.MainProfileSnapshot, idMap map
 	return string(profileJSON), nil
 }
 
-// resolveShortID maps a canonical or existing identifier to its compact short equivalent.
-// It checks the provided idMap lookup table first; if not found or empty, it falls back
-// to deterministically deriving a short identifier via core.ShortenID.
-//
-// Parameters:
-//   - id: The canonical UUID or identifier string to resolve.
-//   - idMap: Map associating canonical and short IDs with their effective short ID representation.
-//
-// Returns:
-//   - The resolved short identifier string, or empty string if input is blank.
+// resolveShortID resolves a canonical identifier via idMap or falls back to core.ShortenID.
 func resolveShortID(id string, idMap map[string]string) string {
 	trimmed := strings.TrimSpace(id)
 	if trimmed == "" {
@@ -582,6 +556,18 @@ func resolveShortID(id string, idMap map[string]string) string {
 	return core.ShortenID(trimmed)
 }
 
+// resolveShortIDs maps a slice of canonical entity or citation IDs into compact short identifiers.
+func resolveShortIDs(ids []string, idMap map[string]string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = resolveShortID(id, idMap)
+	}
+	return out
+}
+
 // projectPriorBullets transforms a slice of TailoredBullets to compact short IDs.
 func projectPriorBullets(bullets []core.TailoredBullet, idMap map[string]string) []core.TailoredBullet {
 	if len(bullets) == 0 {
@@ -589,134 +575,126 @@ func projectPriorBullets(bullets []core.TailoredBullet, idMap map[string]string)
 	}
 	res := make([]core.TailoredBullet, len(bullets))
 	for i, b := range bullets {
-		var fids []string
-		if len(b.SourceFactIDs) > 0 {
-			fids = make([]string, len(b.SourceFactIDs))
-			for k, fid := range b.SourceFactIDs {
-				fids[k] = resolveShortID(fid, idMap)
-			}
-		}
-		var sids []string
-		if len(b.SourceSkillIDs) > 0 {
-			sids = make([]string, len(b.SourceSkillIDs))
-			for k, sid := range b.SourceSkillIDs {
-				sids[k] = resolveShortID(sid, idMap)
-			}
-		}
 		res[i] = core.TailoredBullet{
 			Text:           b.Text,
-			SourceFactIDs:  fids,
-			SourceSkillIDs: sids,
+			SourceFactIDs:  resolveShortIDs(b.SourceFactIDs, idMap),
+			SourceSkillIDs: resolveShortIDs(b.SourceSkillIDs, idMap),
 		}
 	}
 	return res
 }
 
-// projectPriorVersion deep-copies and transforms a prior TailoredContent version,
-// stripping all non-tailoring contact, supervisory, and location metadata while rewriting all
-// experience/project/education/certification source entity IDs and bullet fact/skill citations to
-// their corresponding compact short identifiers. Non-tailoring struct and pointer fields are zeroed,
-// taking advantage of omitzero and omitempty tags on core.TailoredContent to prevent data leakage
-// across revisions without maintaining duplicate struct definitions.
-//
-// Parameters:
-//   - prior: The baseline tailored content to project. If nil, returns nil.
-//   - idMap: Lookup map converting canonical UUIDs to short IDs.
-//
-// Returns:
-//   - A new core.TailoredContent instance stripped of non-tailoring data and projected to compact short identifiers.
+// projectPriorVersion projects a baseline TailoredContent version to compact short IDs while
+// zeroing non-tailoring fields so metadata never leaks across prompt revisions.
 func projectPriorVersion(prior *core.TailoredContent, idMap map[string]string) *core.TailoredContent {
 	if prior == nil {
 		return nil
 	}
-	projected := &core.TailoredContent{
-		Summary: prior.Summary,
+	return &core.TailoredContent{
+		Summary:        prior.Summary,
+		SkillGroups:    projectPriorSkillGroups(prior.SkillGroups, idMap),
+		Experiences:    projectPriorExperiences(prior.Experiences, idMap),
+		Projects:       projectPriorProjects(prior.Projects, idMap),
+		Education:      projectPriorEducation(prior.Education, idMap),
+		Certifications: projectPriorCertifications(prior.Certifications, idMap),
 	}
-
-	if len(prior.SkillGroups) > 0 {
-		sgs := make([]core.TailoredSkillGroup, len(prior.SkillGroups))
-		for i, sg := range prior.SkillGroups {
-			sgs[i] = core.TailoredSkillGroup{
-				Category: sg.Category,
-				Skills:   append([]string(nil), sg.Skills...),
-			}
-			if len(sg.SourceSkillIDs) > 0 {
-				sids := make([]string, len(sg.SourceSkillIDs))
-				for j, sid := range sg.SourceSkillIDs {
-					sids[j] = resolveShortID(sid, idMap)
-				}
-				sgs[i].SourceSkillIDs = sids
-			}
-		}
-		projected.SkillGroups = sgs
-	}
-
-	if len(prior.Experiences) > 0 {
-		exps := make([]core.TailoredExperience, len(prior.Experiences))
-		for i, exp := range prior.Experiences {
-			exps[i] = core.TailoredExperience{
-				SourceEntityID: resolveShortID(exp.SourceEntityID, idMap),
-				Company:        exp.Company,
-				RoleTitle:      exp.RoleTitle,
-				StartDate:      exp.StartDate,
-				EndDate:        exp.EndDate,
-				DutiesSummary:  exp.DutiesSummary,
-				Bullets:        projectPriorBullets(exp.Bullets, idMap),
-			}
-		}
-		projected.Experiences = exps
-	}
-
-	if len(prior.Projects) > 0 {
-		projs := make([]core.TailoredProject, len(prior.Projects))
-		for i, proj := range prior.Projects {
-			projs[i] = core.TailoredProject{
-				SourceEntityID: resolveShortID(proj.SourceEntityID, idMap),
-				Name:           proj.Name,
-				Role:           proj.Role,
-				URL:            proj.URL,
-				StartDate:      proj.StartDate,
-				EndDate:        proj.EndDate,
-				Summary:        proj.Summary,
-				Bullets:        projectPriorBullets(proj.Bullets, idMap),
-			}
-		}
-		projected.Projects = projs
-	}
-
-	if len(prior.Education) > 0 {
-		edus := make([]core.TailoredEducation, len(prior.Education))
-		for i, edu := range prior.Education {
-			edus[i] = core.TailoredEducation{
-				SourceEntityID: resolveShortID(edu.SourceEntityID, idMap),
-				Institution:    edu.Institution,
-				Degree:         edu.Degree,
-				Field:          edu.Field,
-				StartDate:      edu.StartDate,
-				EndDate:        edu.EndDate,
-				Score:          edu.Score,
-				Bullets:        projectPriorBullets(edu.Bullets, idMap),
-			}
-		}
-		projected.Education = edus
-	}
-
-	if len(prior.Certifications) > 0 {
-		certs := make([]core.TailoredCert, len(prior.Certifications))
-		for i, cert := range prior.Certifications {
-			certs[i] = core.TailoredCert{
-				SourceEntityID: resolveShortID(cert.SourceEntityID, idMap),
-				Name:           cert.Name,
-				Issuer:         cert.Issuer,
-				Date:           cert.Date,
-				URL:            cert.URL,
-			}
-		}
-		projected.Certifications = certs
-	}
-
-	return projected
 }
 
-// Compile-time interface assertion verifying PromptCompiler satisfies core.PromptCompiler.
-var _ core.PromptCompiler = (*PromptCompiler)(nil)
+// projectPriorSkillGroups projects skill group citations onto short IDs.
+func projectPriorSkillGroups(groups []core.TailoredSkillGroup, idMap map[string]string) []core.TailoredSkillGroup {
+	if len(groups) == 0 {
+		return nil
+	}
+	out := make([]core.TailoredSkillGroup, len(groups))
+	for i, sg := range groups {
+		out[i] = core.TailoredSkillGroup{
+			Category:       sg.Category,
+			Skills:         append([]string(nil), sg.Skills...),
+			SourceSkillIDs: resolveShortIDs(sg.SourceSkillIDs, idMap),
+		}
+	}
+	return out
+}
+
+// projectPriorExperiences projects work experience source IDs and bullets onto short IDs.
+func projectPriorExperiences(exps []core.TailoredExperience, idMap map[string]string) []core.TailoredExperience {
+	if len(exps) == 0 {
+		return nil
+	}
+	out := make([]core.TailoredExperience, len(exps))
+	for i, exp := range exps {
+		out[i] = core.TailoredExperience{
+			SourceEntityID: resolveShortID(exp.SourceEntityID, idMap),
+			Company:        exp.Company,
+			RoleTitle:      exp.RoleTitle,
+			StartDate:      exp.StartDate,
+			EndDate:        exp.EndDate,
+			DutiesSummary:  exp.DutiesSummary,
+			Bullets:        projectPriorBullets(exp.Bullets, idMap),
+		}
+	}
+	return out
+}
+
+// projectPriorProjects projects project source IDs and bullets onto short IDs.
+func projectPriorProjects(projs []core.TailoredProject, idMap map[string]string) []core.TailoredProject {
+	if len(projs) == 0 {
+		return nil
+	}
+	out := make([]core.TailoredProject, len(projs))
+	for i, proj := range projs {
+		out[i] = core.TailoredProject{
+			SourceEntityID: resolveShortID(proj.SourceEntityID, idMap),
+			Name:           proj.Name,
+			Role:           proj.Role,
+			URL:            proj.URL,
+			StartDate:      proj.StartDate,
+			EndDate:        proj.EndDate,
+			Summary:        proj.Summary,
+			Bullets:        projectPriorBullets(proj.Bullets, idMap),
+		}
+	}
+	return out
+}
+
+// projectPriorEducation projects education source IDs and bullets onto short IDs.
+func projectPriorEducation(edus []core.TailoredEducation, idMap map[string]string) []core.TailoredEducation {
+	if len(edus) == 0 {
+		return nil
+	}
+	out := make([]core.TailoredEducation, len(edus))
+	for i, edu := range edus {
+		out[i] = core.TailoredEducation{
+			SourceEntityID: resolveShortID(edu.SourceEntityID, idMap),
+			Institution:    edu.Institution,
+			Degree:         edu.Degree,
+			Field:          edu.Field,
+			StartDate:      edu.StartDate,
+			EndDate:        edu.EndDate,
+			Score:          edu.Score,
+			Bullets:        projectPriorBullets(edu.Bullets, idMap),
+		}
+	}
+	return out
+}
+
+// projectPriorCertifications projects certification source IDs onto short IDs.
+func projectPriorCertifications(certs []core.TailoredCert, idMap map[string]string) []core.TailoredCert {
+	if len(certs) == 0 {
+		return nil
+	}
+	out := make([]core.TailoredCert, len(certs))
+	for i, cert := range certs {
+		out[i] = core.TailoredCert{
+			SourceEntityID: resolveShortID(cert.SourceEntityID, idMap),
+			Name:           cert.Name,
+			Issuer:         cert.Issuer,
+			Date:           cert.Date,
+			URL:            cert.URL,
+		}
+	}
+	return out
+}
+
+// _ enforces at compile time that PromptCompiler implements branch.PromptCompiler.
+var _ branch.PromptCompiler = (*PromptCompiler)(nil)

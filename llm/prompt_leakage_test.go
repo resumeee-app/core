@@ -8,8 +8,8 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/services/renderer"
-	"github.com/resumeee-app/resumeee-core/validator"
+	"github.com/resumeee-app/resumeee-core/provenance"
+	"github.com/resumeee-app/resumeee-core/renderer"
 )
 
 // makeLeakageTestRequest constructs a generation request containing extensive internal multi-tenancy,
@@ -361,7 +361,7 @@ func TestBuildPrompt_PreventsInternalDataLeakage(t *testing.T) {
 		},
 	}
 
-	valResult, valErr := validator.Validate(mockLLMResponse, req.MainProfile, &req.BranchContext)
+	valResult, valErr := provenance.New().Validate(mockLLMResponse, req.MainProfile, &req.BranchContext)
 	if valErr != nil {
 		t.Fatalf("provenance validator failed on short IDs: %v", valErr)
 	}
@@ -432,7 +432,7 @@ func TestNonTailoringFields_PreservedInRenderedOutput(t *testing.T) {
 		},
 	}
 
-	valResult, err := validator.Validate(mockLLMResponse, req.MainProfile, &req.BranchContext)
+	valResult, err := provenance.New().Validate(mockLLMResponse, req.MainProfile, &req.BranchContext)
 	if err != nil {
 		t.Fatalf("validator.Validate returned unexpected error: %v", err)
 	}
@@ -477,7 +477,7 @@ func TestNonTailoringFields_PreservedInRenderedOutput(t *testing.T) {
 {{end}}`,
 	}
 
-	rendered, err := renderer.Render(context.Background(), tmpl, &req.MainProfile.Profile, valResult.SanitizedContent)
+	rendered, err := renderer.New().Render(context.Background(), tmpl, &req.MainProfile.Profile, valResult.SanitizedContent)
 	if err != nil {
 		t.Fatalf("renderer.Render failed: %v", err)
 	}

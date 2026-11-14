@@ -14,14 +14,21 @@ import (
 
 // Canonical deterministic PII placeholder constants.
 const (
-	PlaceholderFullName         = "[John Doe]"
-	PlaceholderEmail            = "candidate@email.com"
-	PlaceholderPhone            = "+1 111 111 1111"
-	PlaceholderWebsite          = "https://candidate.example.com"
-	PlaceholderSocialURLPrefix  = "https://social.example.com/profile-"
+	// PlaceholderFullName replaces the candidate's full name in obfuscated prompts.
+	PlaceholderFullName = "[John Doe]"
+	// PlaceholderEmail replaces the candidate's email address in obfuscated prompts.
+	PlaceholderEmail = "candidate@email.com"
+	// PlaceholderPhone replaces the candidate's phone number in obfuscated prompts.
+	PlaceholderPhone = "+1 111 111 1111"
+	// PlaceholderWebsite replaces personal website URLs in obfuscated prompts.
+	PlaceholderWebsite = "https://candidate.example.com"
+	// PlaceholderSocialURLPrefix prefixes indexed synthetic social profile URLs.
+	PlaceholderSocialURLPrefix = "https://social.example.com/profile-"
+	// PlaceholderSocialUserPrefix prefixes indexed synthetic social handles.
 	PlaceholderSocialUserPrefix = "candidate-social-"
 )
 
+// textRule pairs a compiled regex with its literal or capture-aware replacement.
 type textRule struct {
 	re      *regexp.Regexp
 	replace string
@@ -33,6 +40,7 @@ type Session struct {
 	deobfRules []textRule
 }
 
+// rawMapping captures an uncompiled source-to-placeholder substitution rule.
 type rawMapping struct {
 	source        string
 	replacement   string
@@ -41,10 +49,18 @@ type rawMapping struct {
 	customReplace string
 }
 
+// mappingBuilder accumulates forward and reverse PII replacement rules.
+type mappingBuilder struct {
+	forward []rawMapping
+	reverse []rawMapping
+}
+
+// isWordRune reports whether r behaves as an ASCII/Unicode word boundary character.
 func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
+// isWordBounded reports whether s starts and ends with word runes so \b anchors match safely.
 func isWordBounded(s string) bool {
 	if s == "" {
 		return false
@@ -53,6 +69,7 @@ func isWordBounded(s string) bool {
 	return isWordRune(runes[0]) && isWordRune(runes[len(runes)-1])
 }
 
+// countDigits returns the number of decimal digits in s.
 func countDigits(s string) int {
 	cnt := 0
 	for _, r := range s {
@@ -63,6 +80,7 @@ func countDigits(s string) int {
 	return cnt
 }
 
+// isValidURL performs a lightweight structural check before registering a URL for masking.
 func isValidURL(raw string) bool {
 	s := strings.TrimSpace(raw)
 	if len(s) < 8 {
@@ -81,6 +99,152 @@ func isValidURL(raw string) bool {
 		!strings.HasSuffix(domainPart, ".")
 }
 
+// addPair registers symmetric forward obfuscation and reverse deobfuscation rules.
+func (b *mappingBuilder) addPair(orig, placeholder string, wordBound bool) {
+	orig = strings.TrimSpace(orig)
+	placeholder = strings.TrimSpace(placeholder)
+	if orig == "" || placeholder == "" || strings.EqualFold(orig, placeholder) {
+		return
+	}
+	b.forward = append(b.forward, rawMapping{
+		source:      orig,
+		replacement: placeholder,
+		wordBound:   wordBound,
+	})
+	b.reverse = append(b.reverse, rawMapping{
+		source:      placeholder,
+		replacement: orig,
+		wordBound:   false,
+	})
+}
+
+// addContactRules registers candidate name and email replacement rules.
+func (b *mappingBuilder) addContactRules(profile core.Profile) {
+	if profile.FullName != "" {
+		b.addPair(profile.FullName, PlaceholderFullName, isWordBounded(profile.FullName))
+		// Also support reverse deobfuscation if LLM dropped the brackets.
+		if !strings.EqualFold(profile.FullName, "John Doe") {
+			b.reverse = append(b.reverse, rawMapping{
+				source:      "John Doe",
+				replacement: profile.FullName,
+				wordBound:   true,
+			})
+		}
+	}
+
+	if profile.Email != "" {
+		b.addPair(profile.Email, PlaceholderEmail, false)
+	}
+}
+
+// addPhoneRule registers phone obfuscation while avoiding false positives on short numbers.
+func (b *mappingBuilder) addPhoneRule(phone string) {
+	// Minimum 7 substantive digits prevents masking country codes like "+1".
+	cleanPhone := strings.TrimSpace(phone)
+	if cleanPhone == "" || countDigits(cleanPhone) < 7 {
+		return
+	}
+	if isWordBounded(cleanPhone) {
+		b.addPair(cleanPhone, PlaceholderPhone, true)
+		return
+	}
+	// Phone starts with a non-word rune (e.g. '+' or '('); capture the leading delimiter in ${1}
+	// so surrounding whitespace is preserved.
+	b.forward = append(b.forward, rawMapping{
+		source:        cleanPhone,
+		replacement:   PlaceholderPhone,
+		customPattern: fmt.Sprintf(`(?i)(^|[^\w+])%s\b`, regexp.QuoteMeta(cleanPhone)),
+		customReplace: fmt.Sprintf(`${1}%s`, PlaceholderPhone),
+	})
+	b.reverse = append(b.reverse, rawMapping{
+		source:      PlaceholderPhone,
+		replacement: cleanPhone,
+		wordBound:   false,
+	})
+}
+
+// extractRealWebsite finds the candidate's primary portfolio or website URL.
+func extractRealWebsite(profile core.Profile) string {
+	for _, p := range profile.Profiles {
+		if strings.EqualFold(p.Network, "website") || strings.EqualFold(p.Network, "portfolio") {
+			if trimmed := strings.TrimSpace(p.URL); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	if profile.Metadata != nil {
+		if w, ok := profile.Metadata["website"].(string); ok {
+			return strings.TrimSpace(w)
+		}
+	}
+	return ""
+}
+
+// addWebsiteAndSocialRules registers website URL, social URL, and social handle replacements.
+func (b *mappingBuilder) addWebsiteAndSocialRules(profile core.Profile) {
+	realWebsite := extractRealWebsite(profile)
+	if realWebsite != "" && isValidURL(realWebsite) {
+		b.addPair(realWebsite, PlaceholderWebsite, false)
+	}
+
+	for i, p := range profile.Profiles {
+		idx := strconv.Itoa(i + 1)
+		placeholderURL := PlaceholderSocialURLPrefix + idx
+		placeholderUser := PlaceholderSocialUserPrefix + idx
+
+		cleanURL := strings.TrimSpace(p.URL)
+		if cleanURL != "" && cleanURL != realWebsite && isValidURL(cleanURL) {
+			b.addPair(cleanURL, placeholderURL, false)
+		}
+
+		// Usernames shorter than 3 characters (e.g. "go", "ai", "c") are excluded to prevent
+		// corrupting technical terms and common words.
+		cleanUser := strings.TrimSpace(p.Username)
+		if len(cleanUser) >= 3 {
+			b.addPair(cleanUser, placeholderUser, isWordBounded(cleanUser))
+		}
+	}
+}
+
+// compileMappings sorts raw mappings longest-first and compiles unique regexp rules.
+func compileMappings(mappings []rawMapping) []textRule {
+	// Sort by source length descending to prevent partial prefix collision.
+	sort.Slice(mappings, func(i, j int) bool {
+		return len(mappings[i].source) > len(mappings[j].source)
+	})
+
+	var rules []textRule
+	seen := make(map[string]bool)
+	for _, m := range mappings {
+		key := fmt.Sprintf("%t:%s:%s:%s", m.wordBound, m.source, m.replacement, m.customPattern)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		pattern := m.customPattern
+		replace := m.customReplace
+		if pattern == "" {
+			pattern = regexp.QuoteMeta(m.source)
+			if m.wordBound {
+				pattern = fmt.Sprintf(`(?i)\b%s\b`, pattern)
+			} else {
+				pattern = fmt.Sprintf(`(?i)%s`, pattern)
+			}
+			replace = m.replacement
+		}
+
+		re, err := regexp.Compile(pattern)
+		if err == nil {
+			rules = append(rules, textRule{
+				re:      re,
+				replace: replace,
+			})
+		}
+	}
+	return rules
+}
+
 // NewSession constructs a Session from a Profile.
 func NewSession(profile *core.Profile) *Session {
 	var targetProfile core.Profile
@@ -88,150 +252,14 @@ func NewSession(profile *core.Profile) *Session {
 		targetProfile = *profile
 	}
 
-	var forwardMappings []rawMapping
-	var reverseMappings []rawMapping
-
-	addPair := func(orig, placeholder string, wordBound bool) {
-		orig = strings.TrimSpace(orig)
-		placeholder = strings.TrimSpace(placeholder)
-		if orig == "" || placeholder == "" || strings.EqualFold(orig, placeholder) {
-			return
-		}
-		forwardMappings = append(forwardMappings, rawMapping{
-			source:      orig,
-			replacement: placeholder,
-			wordBound:   wordBound,
-		})
-		reverseMappings = append(reverseMappings, rawMapping{
-			source:      placeholder,
-			replacement: orig,
-			wordBound:   false,
-		})
-	}
-
-	// 1. Full Name
-	if targetProfile.FullName != "" {
-		addPair(targetProfile.FullName, PlaceholderFullName, isWordBounded(targetProfile.FullName))
-		// Also support reverse deobfuscation if LLM dropped the brackets
-		if !strings.EqualFold(targetProfile.FullName, "John Doe") {
-			reverseMappings = append(reverseMappings, rawMapping{
-				source:      "John Doe",
-				replacement: targetProfile.FullName,
-				wordBound:   true,
-			})
-		}
-	}
-
-	// 2. Email
-	if targetProfile.Email != "" {
-		addPair(targetProfile.Email, PlaceholderEmail, false)
-	}
-
-	// 3. Phone (minimum 7 substantive digits required to avoid false positives on country codes like "+1")
-	cleanPhone := strings.TrimSpace(targetProfile.Phone)
-	if cleanPhone != "" && countDigits(cleanPhone) >= 7 {
-		if isWordBounded(cleanPhone) {
-			addPair(cleanPhone, PlaceholderPhone, true)
-		} else {
-			// Phone starts with non-word rune (e.g. '+' or '(').
-			// Require leading boundary (^ or non-word, non-'+' character) and trailing word boundary \b.
-			// Delimiter character is captured in ${1} to prevent stripping preceding whitespace.
-			forwardMappings = append(forwardMappings, rawMapping{
-				source:        cleanPhone,
-				replacement:   PlaceholderPhone,
-				customPattern: fmt.Sprintf(`(?i)(^|[^\w+])%s\b`, regexp.QuoteMeta(cleanPhone)),
-				customReplace: fmt.Sprintf(`${1}%s`, PlaceholderPhone),
-			})
-			reverseMappings = append(reverseMappings, rawMapping{
-				source:      PlaceholderPhone,
-				replacement: cleanPhone,
-				wordBound:   false,
-			})
-		}
-	}
-
-	// 4. Website
-	var realWebsite string
-	for _, p := range targetProfile.Profiles {
-		if strings.EqualFold(p.Network, "website") || strings.EqualFold(p.Network, "portfolio") {
-			realWebsite = strings.TrimSpace(p.URL)
-			break
-		}
-	}
-	if realWebsite == "" && targetProfile.Metadata != nil {
-		if w, ok := targetProfile.Metadata["website"].(string); ok {
-			realWebsite = strings.TrimSpace(w)
-		}
-	}
-	if realWebsite != "" && isValidURL(realWebsite) {
-		addPair(realWebsite, PlaceholderWebsite, false)
-	}
-
-	// 5. Social Links (Profiles)
-	for i, p := range targetProfile.Profiles {
-		idx := strconv.Itoa(i + 1)
-		placeholderURL := PlaceholderSocialURLPrefix + idx
-		placeholderUser := PlaceholderSocialUserPrefix + idx
-
-		cleanURL := strings.TrimSpace(p.URL)
-		if cleanURL != "" && cleanURL != realWebsite && isValidURL(cleanURL) {
-			addPair(cleanURL, placeholderURL, false)
-		}
-
-		// Usernames shorter than 3 characters (e.g. "go", "ai", "c") are excluded to prevent
-		// corrupting technical terms and common words.
-		cleanUser := strings.TrimSpace(p.Username)
-		if len(cleanUser) >= 3 {
-			addPair(cleanUser, placeholderUser, isWordBounded(cleanUser))
-		}
-	}
-
-	// Sort forward mappings by source length descending to prevent partial prefix collision
-	sort.Slice(forwardMappings, func(i, j int) bool {
-		return len(forwardMappings[i].source) > len(forwardMappings[j].source)
-	})
-
-	// Sort reverse mappings by source length descending
-	sort.Slice(reverseMappings, func(i, j int) bool {
-		return len(reverseMappings[i].source) > len(reverseMappings[j].source)
-	})
-
-	compileRules := func(mappings []rawMapping) []textRule {
-		var rules []textRule
-		seen := make(map[string]bool)
-		for _, m := range mappings {
-			key := fmt.Sprintf("%t:%s:%s:%s", m.wordBound, m.source, m.replacement, m.customPattern)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-
-			pattern := m.customPattern
-			replace := m.customReplace
-			if pattern == "" {
-				pattern = regexp.QuoteMeta(m.source)
-				if m.wordBound {
-					pattern = fmt.Sprintf(`(?i)\b%s\b`, pattern)
-				} else {
-					pattern = fmt.Sprintf(`(?i)%s`, pattern)
-				}
-				replace = m.replacement
-			}
-
-			re, err := regexp.Compile(pattern)
-			if err == nil {
-				rules = append(rules, textRule{
-					re:      re,
-					replace: replace,
-				})
-			}
-		}
-		return rules
-	}
+	var builder mappingBuilder
+	builder.addContactRules(targetProfile)
+	builder.addPhoneRule(targetProfile.Phone)
+	builder.addWebsiteAndSocialRules(targetProfile)
 
 	return &Session{
-		obfRules:   compileRules(forwardMappings),
-		deobfRules: compileRules(reverseMappings),
+		obfRules:   compileMappings(builder.forward),
+		deobfRules: compileMappings(builder.reverse),
 	}
 }
 
@@ -272,6 +300,17 @@ func (s *Session) DeobfuscateString(input string) string {
 	return res
 }
 
+// cloneSlice returns a nil-preserving shallow copy of items.
+func cloneSlice[T any](items []T) []T {
+	if items == nil {
+		return nil
+	}
+	out := make([]T, len(items))
+	copy(out, items)
+	return out
+}
+
+// cloneSnapshot returns a copy-on-write clone of snap for ObfuscateSnapshot.
 func cloneSnapshot(snap *core.MainProfileSnapshot) *core.MainProfileSnapshot {
 	if snap == nil {
 		return nil
@@ -281,36 +320,24 @@ func cloneSnapshot(snap *core.MainProfileSnapshot) *core.MainProfileSnapshot {
 		res.Experiences = make([]core.WorkExperience, len(snap.Experiences))
 		for i, exp := range snap.Experiences {
 			res.Experiences[i] = exp
-			if exp.Facts != nil {
-				res.Experiences[i].Facts = make([]core.Fact, len(exp.Facts))
-				copy(res.Experiences[i].Facts, exp.Facts)
-			}
+			res.Experiences[i].Facts = cloneSlice(exp.Facts)
 		}
 	}
 	if snap.Projects != nil {
 		res.Projects = make([]core.Project, len(snap.Projects))
 		for i, proj := range snap.Projects {
 			res.Projects[i] = proj
-			if proj.Facts != nil {
-				res.Projects[i].Facts = make([]core.Fact, len(proj.Facts))
-				copy(res.Projects[i].Facts, proj.Facts)
-			}
+			res.Projects[i].Facts = cloneSlice(proj.Facts)
 		}
 	}
 	if snap.Education != nil {
 		res.Education = make([]core.Education, len(snap.Education))
 		for i, edu := range snap.Education {
 			res.Education[i] = edu
-			if edu.Facts != nil {
-				res.Education[i].Facts = make([]core.Fact, len(edu.Facts))
-				copy(res.Education[i].Facts, edu.Facts)
-			}
+			res.Education[i].Facts = cloneSlice(edu.Facts)
 		}
 	}
-	if snap.Facts != nil {
-		res.Facts = make([]core.Fact, len(snap.Facts))
-		copy(res.Facts, snap.Facts)
-	}
+	res.Facts = cloneSlice(snap.Facts)
 	return &res
 }
 
@@ -365,6 +392,7 @@ func (s *Session) ObfuscateSnapshot(snap *core.MainProfileSnapshot) *core.MainPr
 	return res
 }
 
+// cloneTailoredContent returns a copy-on-write clone of tc for ObfuscatePriorVersion.
 func cloneTailoredContent(tc *core.TailoredContent) *core.TailoredContent {
 	if tc == nil {
 		return nil
@@ -374,30 +402,21 @@ func cloneTailoredContent(tc *core.TailoredContent) *core.TailoredContent {
 		res.Experiences = make([]core.TailoredExperience, len(tc.Experiences))
 		for i, exp := range tc.Experiences {
 			res.Experiences[i] = exp
-			if exp.Bullets != nil {
-				res.Experiences[i].Bullets = make([]core.TailoredBullet, len(exp.Bullets))
-				copy(res.Experiences[i].Bullets, exp.Bullets)
-			}
+			res.Experiences[i].Bullets = cloneSlice(exp.Bullets)
 		}
 	}
 	if tc.Projects != nil {
 		res.Projects = make([]core.TailoredProject, len(tc.Projects))
 		for i, proj := range tc.Projects {
 			res.Projects[i] = proj
-			if proj.Bullets != nil {
-				res.Projects[i].Bullets = make([]core.TailoredBullet, len(proj.Bullets))
-				copy(res.Projects[i].Bullets, proj.Bullets)
-			}
+			res.Projects[i].Bullets = cloneSlice(proj.Bullets)
 		}
 	}
 	if tc.Education != nil {
 		res.Education = make([]core.TailoredEducation, len(tc.Education))
 		for i, edu := range tc.Education {
 			res.Education[i] = edu
-			if edu.Bullets != nil {
-				res.Education[i].Bullets = make([]core.TailoredBullet, len(edu.Bullets))
-				copy(res.Education[i].Bullets, edu.Bullets)
-			}
+			res.Education[i].Bullets = cloneSlice(edu.Bullets)
 		}
 	}
 	return &res
@@ -463,7 +482,7 @@ func (s *Session) ObfuscateRequest(req core.GenerationRequest) core.GenerationRe
 
 // DeobfuscateTailoredContent restores original contact details into LLM-authored narrative and
 // bullet fields of TailoredContent. Structured entity headers (company, role title, project
-// identity, education, certifications) are canonically populated by validator.Validate.
+// identity, education, certifications) are canonically populated by provenance.Validate.
 func (s *Session) DeobfuscateTailoredContent(content *core.TailoredContent) {
 	if s == nil || content == nil || len(s.deobfRules) == 0 {
 		return
@@ -485,6 +504,7 @@ func (s *Session) DeobfuscateTailoredContent(content *core.TailoredContent) {
 	}
 }
 
+// deobfuscateGapItems restores original contact details across every GapItem in items.
 func (s *Session) deobfuscateGapItems(items []core.GapItem) {
 	for i := range items {
 		items[i].Requirement = s.DeobfuscateString(items[i].Requirement)

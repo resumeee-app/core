@@ -18,30 +18,33 @@ func setupTestStore(t *testing.T) *memory.Store {
 	return memory.New()
 }
 
-// TestMemoryStore_Interfaces verifies that memory.Store satisfies domain and repository interfaces.
+// TestMemoryStore_Interfaces verifies that memory.Store satisfies domain store interfaces.
 func TestMemoryStore_Interfaces(t *testing.T) {
 	store := setupTestStore(t)
 
-	// Compile-time interface assertions verifying that memory.Store directly satisfies core.Store and all individual repository interfaces.
+	// Compile-time interface assertions verifying that memory.Store directly satisfies core.Store and all individual store interfaces.
 	var (
-		_ core.Store                 = store
-		_ core.ProfileRepository     = store
-		_ core.BranchRepository      = store
-		_ core.TemplateRepository    = store
-		_ core.PresetRepository      = store
-		_ core.PDFParseJobRepository = store
+		_ core.Store         = store
+		_ core.ProfileStore  = store
+		_ core.CareerStore   = store
+		_ core.BranchStore   = store
+		_ core.TemplateStore = store
+		_ core.PresetStore   = store
+		_ core.PDFJobStore   = store
+		_ core.QuotaStore    = store
+		_ core.UserStore     = store
 	)
 
-	if store.Profile() == nil || store.Branch() == nil || store.Preset() == nil || store.Template() == nil || store.PDFJob() == nil {
-		t.Fatal("expected non-nil repositories from store getters")
+	if store.Profiles() == nil || store.Career() == nil || store.Branches() == nil || store.Presets() == nil || store.Templates() == nil || store.PDFJobs() == nil || store.Quotas() == nil || store.Users() == nil {
+		t.Fatal("expected non-nil store handles from core.Store accessors")
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("expected clean close: %v", err)
 	}
 }
 
-// TestProfileRepository_MainRevisionIncrements asserts that profile mutations increment main revision.
-func TestProfileRepository_MainRevisionIncrements(t *testing.T) {
+// TestProfileStore_MainRevisionIncrements asserts that profile mutations increment main revision.
+func TestProfileStore_MainRevisionIncrements(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-rev-test"
@@ -69,7 +72,7 @@ func TestProfileRepository_MainRevisionIncrements(t *testing.T) {
 		t.Fatalf("failed to create experience: %v", err)
 	}
 
-	p, err := store.GetProfile(ctx, userID)
+	p, err := store.Profile(ctx, userID)
 	if err != nil {
 		t.Fatalf("failed to get profile: %v", err)
 	}
@@ -86,8 +89,8 @@ func TestProfileRepository_MainRevisionIncrements(t *testing.T) {
 	}
 }
 
-// TestProfileRepository_FactsAndSnapshot verifies facts association and snapshot generation.
-func TestProfileRepository_FactsAndSnapshot(t *testing.T) {
+// TestProfileStore_FactsAndSnapshot verifies facts association and snapshot generation.
+func TestProfileStore_FactsAndSnapshot(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-facts-test"
@@ -137,7 +140,7 @@ func TestProfileRepository_FactsAndSnapshot(t *testing.T) {
 		t.Errorf("expected statement %q, got %q", fact.Statement, facts[0].Statement)
 	}
 
-	snap, err := store.GetSnapshot(ctx, userID)
+	snap, err := store.Snapshot(ctx, userID)
 	if err != nil {
 		t.Fatalf("get snapshot: %v", err)
 	}
@@ -149,8 +152,8 @@ func TestProfileRepository_FactsAndSnapshot(t *testing.T) {
 	}
 }
 
-// TestProfileRepository_ReplaceCareerGraph verifies atomic replacement of career records.
-func TestProfileRepository_ReplaceCareerGraph(t *testing.T) {
+// TestProfileStore_ReplaceCareerGraph verifies atomic replacement of career records.
+func TestProfileStore_ReplaceCareerGraph(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-replace-test"
@@ -212,8 +215,8 @@ func TestProfileRepository_ReplaceCareerGraph(t *testing.T) {
 	}
 }
 
-// TestPresetRepository_Immutability verifies built-in preset protection.
-func TestPresetRepository_Immutability(t *testing.T) {
+// TestPresetStore_Immutability verifies built-in preset protection.
+func TestPresetStore_Immutability(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-preset-test"
@@ -257,8 +260,8 @@ func TestPresetRepository_Immutability(t *testing.T) {
 	}
 }
 
-// TestPresetRepository_LanguageDefaulting verifies that empty language strings default to DefaultLanguage on Create and Update.
-func TestPresetRepository_LanguageDefaulting(t *testing.T) {
+// TestPresetStore_LanguageDefaulting verifies that empty language strings default to DefaultLanguage on Create and Update.
+func TestPresetStore_LanguageDefaulting(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-lang-test"
@@ -274,7 +277,7 @@ func TestPresetRepository_LanguageDefaulting(t *testing.T) {
 		t.Fatalf("create preset: %v", err)
 	}
 
-	fetched, err := store.GetPreset(ctx, userID, preset.ID)
+	fetched, err := store.Preset(ctx, userID, preset.ID)
 	if err != nil {
 		t.Fatalf("get preset: %v", err)
 	}
@@ -287,7 +290,7 @@ func TestPresetRepository_LanguageDefaulting(t *testing.T) {
 	if err := store.UpdatePreset(ctx, fetched); err != nil {
 		t.Fatalf("update preset with Spanish: %v", err)
 	}
-	fetched2, err := store.GetPreset(ctx, userID, preset.ID)
+	fetched2, err := store.Preset(ctx, userID, preset.ID)
 	if err != nil {
 		t.Fatalf("get preset after update: %v", err)
 	}
@@ -300,7 +303,7 @@ func TestPresetRepository_LanguageDefaulting(t *testing.T) {
 	if err := store.UpdatePreset(ctx, fetched2); err != nil {
 		t.Fatalf("update preset with empty language: %v", err)
 	}
-	fetched3, err := store.GetPreset(ctx, userID, preset.ID)
+	fetched3, err := store.Preset(ctx, userID, preset.ID)
 	if err != nil {
 		t.Fatalf("get preset after empty language update: %v", err)
 	}
@@ -309,8 +312,8 @@ func TestPresetRepository_LanguageDefaulting(t *testing.T) {
 	}
 }
 
-// TestTemplateRepository_Validation verifies template validation on persistence.
-func TestTemplateRepository_Validation(t *testing.T) {
+// TestTemplateStore_Validation verifies template validation on persistence.
+func TestTemplateStore_Validation(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-tmpl-test"
@@ -344,7 +347,7 @@ func TestTemplateRepository_Validation(t *testing.T) {
 		t.Fatalf("create valid template: %v", err)
 	}
 
-	fetched, err := store.GetTemplate(ctx, userID, validTmpl.ID)
+	fetched, err := store.Template(ctx, userID, validTmpl.ID)
 	if err != nil {
 		t.Fatalf("get template: %v", err)
 	}
@@ -353,8 +356,8 @@ func TestTemplateRepository_Validation(t *testing.T) {
 	}
 }
 
-// TestBranchRepository_LifecycleAndVersions verifies version sequencing and completion logic.
-func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
+// TestBranchStore_LifecycleAndVersions verifies version sequencing and completion logic.
+func TestBranchStore_LifecycleAndVersions(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-branch-test"
@@ -375,7 +378,7 @@ func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
 		t.Fatalf("create branch: %v", err)
 	}
 
-	fetchedBranch, err := store.GetBranch(ctx, userID, branch.ID)
+	fetchedBranch, err := store.Branch(ctx, userID, branch.ID)
 	if err != nil {
 		t.Fatalf("get branch: %v", err)
 	}
@@ -414,7 +417,7 @@ func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
 		t.Fatalf("complete version 2: %v", err)
 	}
 
-	updatedBranch, err := store.GetBranch(ctx, userID, branch.ID)
+	updatedBranch, err := store.Branch(ctx, userID, branch.ID)
 	if err != nil {
 		t.Fatalf("get branch after completion: %v", err)
 	}
@@ -431,7 +434,7 @@ func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
 	if err := store.FailInterruptedVersions(ctx, "server reboot"); err != nil {
 		t.Fatalf("fail interrupted: %v", err)
 	}
-	interruptedV1, err := store.GetVersion(ctx, branch.ID, v1.ID)
+	interruptedV1, err := store.Version(ctx, branch.ID, v1.ID)
 	if err != nil {
 		t.Fatalf("get v1: %v", err)
 	}
@@ -443,8 +446,8 @@ func TestBranchRepository_LifecycleAndVersions(t *testing.T) {
 	}
 }
 
-// TestPDFParseJobRepository_Lifecycle verifies PDF parse job status updates and crash recovery.
-func TestPDFParseJobRepository_Lifecycle(t *testing.T) {
+// TestPDFJobStore_Lifecycle verifies PDF parse job status updates and crash recovery.
+func TestPDFJobStore_Lifecycle(t *testing.T) {
 	store := setupTestStore(t)
 	ctx := context.Background()
 	userID := "user-pdf-test"
@@ -461,7 +464,7 @@ func TestPDFParseJobRepository_Lifecycle(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 
-	got, err := store.GetJob(ctx, userID, job.ID)
+	got, err := store.Job(ctx, userID, job.ID)
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
@@ -477,7 +480,7 @@ func TestPDFParseJobRepository_Lifecycle(t *testing.T) {
 		t.Fatalf("fail interrupted jobs: %v", err)
 	}
 
-	crashed, err := store.GetJob(ctx, userID, job.ID)
+	crashed, err := store.Job(ctx, userID, job.ID)
 	if err != nil {
 		t.Fatalf("get job after crash: %v", err)
 	}
@@ -497,7 +500,7 @@ func TestNewSeeded_DefaultData(t *testing.T) {
 		t.Fatalf("NewSeeded failed: %v", err)
 	}
 
-	prof, err := store.GetProfile(ctx, "test-user")
+	prof, err := store.Profile(ctx, "test-user")
 	if err != nil {
 		t.Fatalf("get seeded profile: %v", err)
 	}
@@ -565,7 +568,7 @@ func TestMemoryStore_ConcurrentAccess(t *testing.T) {
 				if err := store.CreateExperience(ctx, exp); err != nil {
 					errCh <- fmt.Errorf("create experience error: %w", err)
 				}
-				if _, err := store.GetSnapshot(ctx, userID); err != nil {
+				if _, err := store.Snapshot(ctx, userID); err != nil {
 					errCh <- fmt.Errorf("get snapshot error: %w", err)
 				}
 				if err := store.DeleteExperience(ctx, userID, expID); err != nil {
@@ -582,7 +585,7 @@ func TestMemoryStore_ConcurrentAccess(t *testing.T) {
 		t.Fatalf("unexpected concurrent error: %v", err)
 	}
 
-	snap, err := store.GetSnapshot(ctx, userID)
+	snap, err := store.Snapshot(ctx, userID)
 	if err != nil {
 		t.Fatalf("failed to retrieve snapshot after concurrent operations: %v", err)
 	}
@@ -608,7 +611,7 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 		t.Fatalf("upsert profile: %v", err)
 	}
 	prof.Metadata["role"] = "tampered"
-	fetchedProf, err := store.GetProfile(ctx, userID)
+	fetchedProf, err := store.Profile(ctx, userID)
 	if err != nil {
 		t.Fatalf("get profile: %v", err)
 	}
@@ -616,7 +619,7 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 		t.Errorf("store metadata was mutated by external caller mutation: got %v", fetchedProf.Metadata["role"])
 	}
 	fetchedProf.Metadata["role"] = "tampered-again"
-	fetchedProf2, _ := store.GetProfile(ctx, userID)
+	fetchedProf2, _ := store.Profile(ctx, userID)
 	if fetchedProf2.Metadata["role"] != "staff" {
 		t.Errorf("store metadata was mutated by caller mutating return value: got %v", fetchedProf2.Metadata["role"])
 	}
@@ -632,7 +635,7 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 		t.Fatalf("create skill: %v", err)
 	}
 	skill.Keywords[0] = "mutated"
-	fetchedSkill, err := store.GetSkill(ctx, userID, skill.ID)
+	fetchedSkill, err := store.Skill(ctx, userID, skill.ID)
 	if err != nil {
 		t.Fatalf("get skill: %v", err)
 	}
@@ -640,7 +643,7 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 		t.Errorf("skill keywords mutated after write: got %s", fetchedSkill.Keywords[0])
 	}
 	fetchedSkill.Keywords[0] = "mutated-2"
-	fetchedSkill2, _ := store.GetSkill(ctx, userID, skill.ID)
+	fetchedSkill2, _ := store.Skill(ctx, userID, skill.ID)
 	if fetchedSkill2.Keywords[0] != "backend" {
 		t.Errorf("skill keywords mutated after read: got %s", fetchedSkill2.Keywords[0])
 	}
@@ -656,7 +659,7 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 		t.Fatalf("create branch: %v", err)
 	}
 	branch.PinnedEntityIDs[0] = "tampered"
-	fetchedBranch, err := store.GetBranch(ctx, userID, branch.ID)
+	fetchedBranch, err := store.Branch(ctx, userID, branch.ID)
 	if err != nil {
 		t.Fatalf("get branch: %v", err)
 	}
@@ -669,17 +672,17 @@ func TestMemoryStore_DeepCopyIsolation(t *testing.T) {
 		ID:     "job-dc",
 		UserID: userID,
 		Status: core.PDFParseJobStatusPending,
-		Result: map[string]any{"summary": "original text"},
+		Result: &core.JSONResume{Basics: core.JSONResumeBasics{Summary: "original text"}},
 	}
 	if err := store.CreateJob(ctx, job); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	job.Result.(map[string]any)["summary"] = "tampered text"
-	fetchedJob, err := store.GetJob(ctx, userID, job.ID)
+	job.Result.Basics.Summary = "tampered text"
+	fetchedJob, err := store.Job(ctx, userID, job.ID)
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
-	if fetchedJob.Result.(map[string]any)["summary"] != "original text" {
+	if fetchedJob.Result == nil || fetchedJob.Result.Basics.Summary != "original text" {
 		t.Errorf("pdf job result mutated: got %v", fetchedJob.Result)
 	}
 }
@@ -695,38 +698,38 @@ func TestMemoryStore_ErrorSentinels(t *testing.T) {
 			name string
 			call func() error
 		}{
-			{"GetProfile", func() error { _, err := store.GetProfile(ctx, "nonexistent"); return err }},
-			{"GetSkill", func() error { _, err := store.GetSkill(ctx, userID, "nonexistent"); return err }},
+			{"Profile", func() error { _, err := store.Profile(ctx, "nonexistent"); return err }},
+			{"Skill", func() error { _, err := store.Skill(ctx, userID, "nonexistent"); return err }},
 			{"UpdateSkill", func() error { return store.UpdateSkill(ctx, &core.Skill{ID: "none", UserID: userID}) }},
 			{"DeleteSkill", func() error { return store.DeleteSkill(ctx, userID, "none") }},
-			{"GetExperience", func() error { _, err := store.GetExperience(ctx, userID, "none"); return err }},
+			{"Experience", func() error { _, err := store.Experience(ctx, userID, "none"); return err }},
 			{"UpdateExperience", func() error { return store.UpdateExperience(ctx, &core.WorkExperience{ID: "none", UserID: userID}) }},
 			{"DeleteExperience", func() error { return store.DeleteExperience(ctx, userID, "none") }},
-			{"GetProject", func() error { _, err := store.GetProject(ctx, userID, "none"); return err }},
+			{"Project", func() error { _, err := store.Project(ctx, userID, "none"); return err }},
 			{"UpdateProject", func() error { return store.UpdateProject(ctx, &core.Project{ID: "none", UserID: userID}) }},
 			{"DeleteProject", func() error { return store.DeleteProject(ctx, userID, "none") }},
-			{"GetEducation", func() error { _, err := store.GetEducation(ctx, userID, "none"); return err }},
+			{"Education", func() error { _, err := store.Education(ctx, userID, "none"); return err }},
 			{"UpdateEducation", func() error { return store.UpdateEducation(ctx, &core.Education{ID: "none", UserID: userID}) }},
 			{"DeleteEducation", func() error { return store.DeleteEducation(ctx, userID, "none") }},
-			{"GetCertification", func() error { _, err := store.GetCertification(ctx, userID, "none"); return err }},
+			{"Certification", func() error { _, err := store.Certification(ctx, userID, "none"); return err }},
 			{"UpdateCertification", func() error { return store.UpdateCertification(ctx, &core.Certification{ID: "none", UserID: userID}) }},
 			{"DeleteCertification", func() error { return store.DeleteCertification(ctx, userID, "none") }},
-			{"GetFact", func() error { _, err := store.GetFact(ctx, userID, "none"); return err }},
+			{"Fact", func() error { _, err := store.Fact(ctx, userID, "none"); return err }},
 			{"UpdateFact", func() error { return store.UpdateFact(ctx, &core.Fact{ID: "none", UserID: userID}) }},
 			{"DeleteFact", func() error { return store.DeleteFact(ctx, userID, "none") }},
-			{"GetPreset", func() error { _, err := store.GetPreset(ctx, userID, "none"); return err }},
+			{"Preset", func() error { _, err := store.Preset(ctx, userID, "none"); return err }},
 			{"UpdatePreset", func() error { return store.UpdatePreset(ctx, &core.Preset{ID: "none", UserID: userID}) }},
 			{"DeletePreset", func() error { return store.DeletePreset(ctx, userID, "none") }},
-			{"GetTemplate", func() error { _, err := store.GetTemplate(ctx, userID, "none"); return err }},
+			{"Template", func() error { _, err := store.Template(ctx, userID, "none"); return err }},
 			{"DeleteTemplate", func() error { return store.DeleteTemplate(ctx, userID, "none") }},
-			{"GetBranch", func() error { _, err := store.GetBranch(ctx, userID, "none"); return err }},
+			{"Branch", func() error { _, err := store.Branch(ctx, userID, "none"); return err }},
 			{"UpdateBranch", func() error { return store.UpdateBranch(ctx, &core.Branch{ID: "none", UserID: userID}) }},
 			{"DeleteBranch", func() error { return store.DeleteBranch(ctx, userID, "none") }},
-			{"GetVersion", func() error { _, err := store.GetVersion(ctx, "none", "none"); return err }},
-			{"GetVersionByNumber", func() error { _, err := store.GetVersionByNumber(ctx, "none", 1); return err }},
+			{"Version", func() error { _, err := store.Version(ctx, "none", "none"); return err }},
+			{"VersionByNumber", func() error { _, err := store.VersionByNumber(ctx, "none", 1); return err }},
 			{"UpdateVersionStatus", func() error { return store.UpdateVersionStatus(ctx, "none", core.VersionStatusCompleted, "") }},
 			{"CompleteVersion", func() error { return store.CompleteVersion(ctx, &core.BranchVersion{ID: "none", BranchID: "none"}) }},
-			{"GetJob", func() error { _, err := store.GetJob(ctx, userID, "none"); return err }},
+			{"Job", func() error { _, err := store.Job(ctx, userID, "none"); return err }},
 			{"UpdateJobStatus", func() error { return store.UpdateJobStatus(ctx, "none", core.PDFParseJobStatusCompleted, nil, "") }},
 		}
 		for _, tc := range tests {
@@ -775,8 +778,8 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	ctx := context.Background()
 	userID := "quota-user-1"
 
-	// 1. Initial GetQuota creates default quota
-	q, err := store.GetQuota(ctx, userID)
+	// 1. Initial Quota creates default quota
+	q, err := store.Quota(ctx, userID)
 	if err != nil {
 		t.Fatalf("failed to get quota: %v", err)
 	}
@@ -951,17 +954,17 @@ func TestMemoryStore_CleanupCompletedJobs(t *testing.T) {
 	}
 
 	// Old pending and recent completed must remain
-	if _, err := store.GetJob(ctx, "user-1", "job-old-pending"); err != nil {
+	if _, err := store.Job(ctx, "user-1", "job-old-pending"); err != nil {
 		t.Errorf("expected old pending job to be preserved, got error: %v", err)
 	}
-	if _, err := store.GetJob(ctx, "user-1", "job-recent-completed"); err != nil {
+	if _, err := store.Job(ctx, "user-1", "job-recent-completed"); err != nil {
 		t.Errorf("expected recent completed job to be preserved, got error: %v", err)
 	}
 	// Old completed and failed must be gone
-	if _, err := store.GetJob(ctx, "user-1", "job-old-completed"); !errors.Is(err, core.ErrNotFound) {
+	if _, err := store.Job(ctx, "user-1", "job-old-completed"); !errors.Is(err, core.ErrNotFound) {
 		t.Errorf("expected old completed job to be purged, got %v", err)
 	}
-	if _, err := store.GetJob(ctx, "user-1", "job-old-failed"); !errors.Is(err, core.ErrNotFound) {
+	if _, err := store.Job(ctx, "user-1", "job-old-failed"); !errors.Is(err, core.ErrNotFound) {
 		t.Errorf("expected old failed job to be purged, got %v", err)
 	}
 }
@@ -1028,7 +1031,7 @@ func TestMemoryStore_TemplateImmutability(t *testing.T) {
 	})
 }
 
-func TestMemoryStore_UserRepository(t *testing.T) {
+func TestMemoryStore_UserStore(t *testing.T) {
 	ctx := context.Background()
 	store := setupTestStore(t)
 
@@ -1041,8 +1044,8 @@ func TestMemoryStore_UserRepository(t *testing.T) {
 		}
 	})
 
-	t.Run("GetUser not found returns ErrNotFound", func(t *testing.T) {
-		_, err := store.GetUser(ctx, "non-existent")
+	t.Run("User not found returns ErrNotFound", func(t *testing.T) {
+		_, err := store.User(ctx, "non-existent")
 		if !errors.Is(err, core.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
@@ -1061,7 +1064,7 @@ func TestMemoryStore_UserRepository(t *testing.T) {
 			t.Fatalf("failed to upsert user: %v", err)
 		}
 
-		retrieved, err := store.GetUser(ctx, "mem-user-1")
+		retrieved, err := store.User(ctx, "mem-user-1")
 		if err != nil {
 			t.Fatalf("failed to get user: %v", err)
 		}
@@ -1098,7 +1101,7 @@ func TestMemoryStore_UserRepository(t *testing.T) {
 			t.Fatalf("failed to upsert user: %v", err)
 		}
 
-		retrieved, err := store.GetUser(ctx, "admin-user-mem")
+		retrieved, err := store.User(ctx, "admin-user-mem")
 		if err != nil {
 			t.Fatalf("failed to retrieve user: %v", err)
 		}
@@ -1151,7 +1154,7 @@ func TestMemoryStore_GapReportPropagation(t *testing.T) {
 			t.Fatalf("failed to complete version: %v", err)
 		}
 
-		fetched, err := store.GetBranch(ctx, userID, b.ID)
+		fetched, err := store.Branch(ctx, userID, b.ID)
 		if err != nil {
 			t.Fatalf("failed to get branch: %v", err)
 		}
@@ -1188,7 +1191,7 @@ func TestMemoryStore_GapReportPropagation(t *testing.T) {
 			t.Fatalf("failed to complete version: %v", err)
 		}
 
-		fetched, err := store.GetBranch(ctx, userID, b.ID)
+		fetched, err := store.Branch(ctx, userID, b.ID)
 		if err != nil {
 			t.Fatalf("failed to get branch: %v", err)
 		}
@@ -1239,7 +1242,7 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 			t.Fatalf("failed to update version ATS score: %v", err)
 		}
 
-		fetchedV1, err := store.GetVersion(ctx, b.ID, v1.ID)
+		fetchedV1, err := store.Version(ctx, b.ID, v1.ID)
 		if err != nil {
 			t.Fatalf("failed to get v1: %v", err)
 		}
@@ -1247,7 +1250,7 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 			t.Fatalf("expected v1 ATSScore (94.0, 86.0), got %+v", fetchedV1.ATSScore)
 		}
 
-		fetchedBranch, err := store.GetBranch(ctx, userID, b.ID)
+		fetchedBranch, err := store.Branch(ctx, userID, b.ID)
 		if err != nil {
 			t.Fatalf("failed to get branch: %v", err)
 		}
@@ -1273,7 +1276,7 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 			t.Fatalf("failed to complete v2: %v", err)
 		}
 
-		fetchedBranchAfterV2, err := store.GetBranch(ctx, userID, b.ID)
+		fetchedBranchAfterV2, err := store.Branch(ctx, userID, b.ID)
 		if err != nil {
 			t.Fatalf("failed to get branch after v2: %v", err)
 		}
@@ -1288,4 +1291,157 @@ func TestMemoryStore_ATSScorePropagation(t *testing.T) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
+}
+
+// TestBranchStore_UpdateBranchRejectsForeignUser verifies store-level tenant ownership enforcement on UpdateBranch.
+func TestBranchStore_UpdateBranchRejectsForeignUser(t *testing.T) {
+	ctx := context.Background()
+	store := setupTestStore(t)
+
+	br := &core.Branch{
+		ID:            "br-owner-only",
+		UserID:        "owner-1",
+		Name:          "Original Branch Name",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
+	if err := store.CreateBranch(ctx, br); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+
+	err := store.UpdateBranch(ctx, &core.Branch{
+		ID:            br.ID,
+		UserID:        "attacker-2",
+		Name:          "Hijacked Name",
+		TemplateSetID: core.TemplateStandardCleanID,
+	})
+	if !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when foreign tenant updates branch, got %v", err)
+	}
+
+	fetched, err := store.Branch(ctx, "owner-1", br.ID)
+	if err != nil {
+		t.Fatalf("fetch owner branch: %v", err)
+	}
+	if fetched.Name != "Original Branch Name" {
+		t.Errorf("expected original branch name to be preserved, got %q", fetched.Name)
+	}
+}
+
+// TestCareerStore_InlineFactsSingleSourceOfTruth verifies inline entity facts stay synchronized with s.facts across reads, updates, and deletes.
+func TestCareerStore_InlineFactsSingleSourceOfTruth(t *testing.T) {
+	ctx := context.Background()
+	store := setupTestStore(t)
+	userID := "user-inline-facts"
+
+	if err := store.UpsertProfile(ctx, &core.Profile{ID: "prof-if", UserID: userID, FullName: "Inline Engineer"}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+
+	exp := &core.WorkExperience{
+		ID:        "exp-inline-1",
+		UserID:    userID,
+		Company:   "FactCo",
+		RoleTitle: "Principal Engineer",
+		StartDate: core.NewDate(2023, 1, 1),
+		Facts: []core.Fact{
+			{ID: "fact-inline-1", Statement: "Built zero-downtime migration engine"},
+			{ID: "fact-inline-2", Statement: "Cut p99 latency by 45%"},
+		},
+	}
+	if err := store.CreateExperience(ctx, exp); err != nil {
+		t.Fatalf("create experience with inline facts: %v", err)
+	}
+
+	proj := &core.Project{
+		ID:     "proj-inline-1",
+		UserID: userID,
+		Name:   "OpenRouter",
+		Facts:  []core.Fact{{ID: "fact-proj-1", Statement: "Shipped deterministic routing SDK"}},
+	}
+	if err := store.CreateProject(ctx, proj); err != nil {
+		t.Fatalf("create project with inline facts: %v", err)
+	}
+
+	edu := &core.Education{
+		ID:          "edu-inline-1",
+		UserID:      userID,
+		Institution: "State Tech",
+		Degree:      "B.S. CS",
+		Facts:       []core.Fact{{ID: "fact-edu-1", Statement: "Summa Cum Laude"}},
+	}
+	if err := store.CreateEducation(ctx, edu); err != nil {
+		t.Fatalf("create education with inline facts: %v", err)
+	}
+
+	// Single-entity getters, list getters, and Snapshot must hydrate inline facts from s.facts.
+	fetchedExp, err := store.Experience(ctx, userID, exp.ID)
+	if err != nil {
+		t.Fatalf("get experience: %v", err)
+	}
+	if len(fetchedExp.Facts) != 2 {
+		t.Fatalf("expected 2 hydrated experience facts, got %d", len(fetchedExp.Facts))
+	}
+
+	fetchedProj, err := store.Project(ctx, userID, proj.ID)
+	if err != nil || len(fetchedProj.Facts) != 1 {
+		t.Fatalf("expected 1 hydrated project fact, got err=%v facts=%+v", err, fetchedProj)
+	}
+
+	fetchedEdu, err := store.Education(ctx, userID, edu.ID)
+	if err != nil || len(fetchedEdu.Facts) != 1 {
+		t.Fatalf("expected 1 hydrated education fact, got err=%v facts=%+v", err, fetchedEdu)
+	}
+
+	// Mutating and deleting facts via Fact CRUD must reflect immediately in Experience, ListExperiences, and Snapshot.
+	if err := store.UpdateFact(ctx, &core.Fact{
+		ID:        "fact-inline-1",
+		UserID:    userID,
+		OwnerID:   exp.ID,
+		OwnerType: core.OwnerTypeWorkExperience,
+		Statement: "Built multi-region zero-downtime migration engine",
+	}); err != nil {
+		t.Fatalf("update fact: %v", err)
+	}
+	if err := store.DeleteFact(ctx, userID, "fact-inline-2"); err != nil {
+		t.Fatalf("delete fact: %v", err)
+	}
+
+	// Updating parent experience metadata with nil Facts must preserve remaining facts in s.facts.
+	if err := store.UpdateExperience(ctx, &core.WorkExperience{
+		ID:        exp.ID,
+		UserID:    userID,
+		Company:   "FactCo Global",
+		RoleTitle: "Distinguished Engineer",
+		StartDate: exp.StartDate,
+	}); err != nil {
+		t.Fatalf("update experience metadata: %v", err)
+	}
+
+	exps, err := store.ListExperiences(ctx, userID)
+	if err != nil {
+		t.Fatalf("list experiences: %v", err)
+	}
+	if len(exps) != 1 || len(exps[0].Facts) != 1 || exps[0].Facts[0].Statement != "Built multi-region zero-downtime migration engine" {
+		t.Fatalf("expected updated single fact on listed experience, got %+v", exps)
+	}
+
+	snap, err := store.Snapshot(ctx, userID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(snap.Experiences) != 1 || len(snap.Experiences[0].Facts) != 1 {
+		t.Fatalf("expected 1 fact on snapshot experience, got %+v", snap.Experiences)
+	}
+
+	// Deleting parent experience must clean up its child facts.
+	if err := store.DeleteExperience(ctx, userID, exp.ID); err != nil {
+		t.Fatalf("delete experience: %v", err)
+	}
+	remainingExpFacts, err := store.ListFactsByOwner(ctx, userID, string(core.OwnerTypeWorkExperience), exp.ID)
+	if err != nil {
+		t.Fatalf("list facts by owner: %v", err)
+	}
+	if len(remainingExpFacts) != 0 {
+		t.Errorf("expected 0 experience facts after parent deletion, got %+v", remainingExpFacts)
+	}
 }

@@ -11,17 +11,11 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// TestDomainPurity_ZeroGORMImports verifies that internal/domain contains zero imports of gorm.io/gorm.
+// TestDomainPurity_ZeroGORMImports verifies that root package core contains zero imports of gorm.io/gorm.
 func TestDomainPurity_ZeroGORMImports(t *testing.T) {
-	wd, err := os.Getwd()
+	domainDir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("failed to get current working directory: %v", err)
-	}
-
-	// Find core root dir (or internal/domain in monorepo)
-	domainDir := wd
-	if _, err := os.Stat(filepath.Join(domainDir, "core.go")); err != nil && filepath.Base(domainDir) != "domain" {
-		domainDir = filepath.Join(wd, "internal", "domain")
 	}
 
 	entries, err := os.ReadDir(domainDir)
@@ -51,7 +45,7 @@ func TestDomainPurity_ZeroGORMImports(t *testing.T) {
 }
 
 // TestNormalizableInterface verifies that domain entities implement core.Normalizable.
-func TestNormalizableInterface(t *testing.T) {
+func TestNormalizableInterface(_ *testing.T) {
 	// Compile-time interface assertions ensuring domain entities with alias fields implement core.Normalizable for pre-persistence normalization hooks.
 	var (
 		_ core.Normalizable = (*core.Preset)(nil)
@@ -60,39 +54,39 @@ func TestNormalizableInterface(t *testing.T) {
 	)
 }
 
-// TestTailoringStrategy_Normalize verifies pure Go normalization for TailoringStrategy.
-func TestTailoringStrategy_Normalize(t *testing.T) {
+// TestPreset_Normalize verifies pure Go normalization for Preset.
+func TestPreset_Normalize(t *testing.T) {
 	theme := "theme-1"
-	strat := &core.Preset{
+	preset := &core.Preset{
 		Language:         "",
 		SuggestedThemeID: &theme,
 	}
 
-	if err := strat.Normalize(); err != nil {
+	if err := preset.Normalize(); err != nil {
 		t.Fatalf("unexpected normalization error: %v", err)
 	}
 
-	if strat.Language != core.DefaultLanguage {
-		t.Errorf("expected language %s, got %s", core.DefaultLanguage, strat.Language)
+	if preset.Language != core.DefaultLanguage {
+		t.Errorf("expected language %s, got %s", core.DefaultLanguage, preset.Language)
 	}
-	if strat.TemplateSetID != "theme-1" {
-		t.Errorf("expected TemplateSetID 'theme-1', got %s", strat.TemplateSetID)
+	if preset.TemplateSetID != "theme-1" {
+		t.Errorf("expected TemplateSetID 'theme-1', got %s", preset.TemplateSetID)
 	}
 
 	// Reverse sync
-	strat2 := &core.Preset{
+	preset2 := &core.Preset{
 		TemplateSetID: "theme-2",
 	}
-	if err := strat2.Normalize(); err != nil {
+	if err := preset2.Normalize(); err != nil {
 		t.Fatalf("unexpected normalization error: %v", err)
 	}
-	if strat2.SuggestedThemeID == nil || *strat2.SuggestedThemeID != "theme-2" {
-		t.Errorf("expected SuggestedThemeID 'theme-2', got %v", strat2.SuggestedThemeID)
+	if preset2.SuggestedThemeID == nil || *preset2.SuggestedThemeID != "theme-2" {
+		t.Errorf("expected SuggestedThemeID 'theme-2', got %v", preset2.SuggestedThemeID)
 	}
 }
 
-// TestTargetResume_Normalize verifies pure Go normalization for TargetResume.
-func TestTargetResume_Normalize(t *testing.T) {
+// TestBranch_Normalize verifies pure Go normalization for Branch.
+func TestBranch_Normalize(t *testing.T) {
 	presetID := "preset-1"
 	resume := &core.Branch{
 		PresetID:           &presetID,
@@ -111,24 +105,24 @@ func TestTargetResume_Normalize(t *testing.T) {
 	}
 
 	// Reverse sync
-	stratID := "strat-2"
+	presetID2 := "preset-2"
 	resume2 := &core.Branch{
-		TailoringStrategyID: &stratID,
+		TailoringStrategyID: &presetID2,
 		CustomDirectives:    "Directives 2",
 	}
 	if err := resume2.Normalize(); err != nil {
 		t.Fatalf("unexpected normalization error: %v", err)
 	}
-	if resume2.PresetID == nil || *resume2.PresetID != "strat-2" {
-		t.Errorf("expected PresetID 'strat-2', got %v", resume2.PresetID)
+	if resume2.PresetID == nil || *resume2.PresetID != "preset-2" {
+		t.Errorf("expected PresetID 'preset-2', got %v", resume2.PresetID)
 	}
 	if resume2.BranchInstructions != "Directives 2" {
 		t.Errorf("expected BranchInstructions 'Directives 2', got %s", resume2.BranchInstructions)
 	}
 }
 
-// TestResumeVersion_Normalize verifies pure Go normalization for ResumeVersion.
-func TestResumeVersion_Normalize(t *testing.T) {
+// TestBranchVersion_Normalize verifies pure Go normalization for BranchVersion.
+func TestBranchVersion_Normalize(t *testing.T) {
 	ver := &core.BranchVersion{
 		BranchID: "branch-1",
 	}

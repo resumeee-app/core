@@ -421,24 +421,24 @@ func TestDomainErrors(t *testing.T) {
 
 func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	// 1. Assert TailoringStrategy.IsBuiltIn()
-	builtinStrat := core.Preset{ID: "builtin-1-page-swe"}
-	customStrat := core.Preset{ID: "strat-custom-1"}
-	if !builtinStrat.IsBuiltIn() {
+	builtinPreset := core.Preset{ID: "builtin-1-page-swe"}
+	customPreset := core.Preset{ID: "preset-custom-1"}
+	if !builtinPreset.IsBuiltIn() {
 		t.Errorf("expected builtin-1-page-swe to be built-in")
 	}
-	if customStrat.IsBuiltIn() {
-		t.Errorf("expected strat-custom-1 to NOT be built-in")
+	if customPreset.IsBuiltIn() {
+		t.Errorf("expected preset-custom-1 to NOT be built-in")
 	}
 
 	// 2. Assert SuggestedThemeID serializes to null in JSON when omitted
-	stratNoTheme := core.Preset{
-		ID:                 "strat-1",
+	presetNoTheme := core.Preset{
+		ID:                 "preset-1",
 		UserID:             "user-1",
 		Name:               "1-Page SWE",
 		SystemInstructions: "Focus on latency",
 		SuggestedThemeID:   nil,
 	}
-	bytesNoTheme, err := json.Marshal(stratNoTheme)
+	bytesNoTheme, err := json.Marshal(presetNoTheme)
 	if err != nil {
 		t.Fatalf("failed to marshal strategy: %v", err)
 	}
@@ -447,14 +447,14 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 	}
 
 	themeID := "builtin-standard-clean"
-	stratWithTheme := core.Preset{
-		ID:                 "strat-2",
+	presetWithTheme := core.Preset{
+		ID:                 "preset-2",
 		UserID:             "user-1",
 		Name:               "1-Page SWE",
 		SystemInstructions: "Focus on latency",
 		SuggestedThemeID:   &themeID,
 	}
-	bytesWithTheme, err := json.Marshal(stratWithTheme)
+	bytesWithTheme, err := json.Marshal(presetWithTheme)
 	if err != nil {
 		t.Fatalf("failed to marshal strategy with theme: %v", err)
 	}

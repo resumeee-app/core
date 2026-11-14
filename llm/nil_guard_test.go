@@ -6,47 +6,51 @@ import (
 	"testing"
 
 	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/worker"
 )
 
-// failingResumeExtractor is a core.ResumeExtractor that always fails while reporting zero usage.
+// failingResumeExtractor is a worker.ResumeExtractor that always fails while reporting zero usage.
 type failingResumeExtractor struct {
 	err error
 }
 
-// ExtractResume returns the configured error.
-func (f failingResumeExtractor) ExtractResume(_ context.Context, _, _, _ string) (*core.JSONResume, error) {
-	return nil, f.err
-}
-
-// ExtractResumeWithUsage returns the configured error with zero token usage.
-func (f failingResumeExtractor) ExtractResumeWithUsage(_ context.Context, _, _, _ string) (*core.JSONResume, core.TokenUsage, error) {
+// ExtractResume returns the configured error with zero token usage.
+func (f failingResumeExtractor) ExtractResume(_ context.Context, _, _, _ string) (*core.JSONResume, core.TokenUsage, error) {
 	return nil, core.TokenUsage{}, f.err
 }
 
-// TestNilGuards_ClientProvider verifies a nil *ClientProvider or nil transport client returns
-// zero values or ErrNoProviders instead of panicking.
-func TestNilGuards_ClientProvider(t *testing.T) {
+var _ worker.ResumeExtractor = failingResumeExtractor{}
+
+// TestNilGuards_RegistryAndService verifies nil receivers and nil clients fail closed with ErrNoProviders.
+func TestNilGuards_RegistryAndService(t *testing.T) {
 	ctx := context.Background()
-	providers := map[string]*ClientProvider{
-		"nil receiver":         nil,
-		"nil transport client": NewClientProvider(nil),
+
+	var nilReg *Registry
+	if got, err := nilReg.Client("openai"); !errors.Is(err, ErrNoProviders) || got != nil {
+		t.Errorf("expected nil Client and ErrNoProviders from nil *Registry, got (%+v, %v)", got, err)
+	}
+	if _, err := nilReg.Complete(ctx, nil, "op", Request{}); !errors.Is(err, ErrNoProviders) {
+		t.Errorf("expected nilReg.Complete ErrNoProviders, got %v", err)
+	}
+	if _, _, err := nilReg.CompleteStructured(ctx, nil, "op", Request{}); !errors.Is(err, ErrNoProviders) {
+		t.Errorf("expected nilReg.CompleteStructured ErrNoProviders, got %v", err)
 	}
 
-	for name, p := range providers {
+	reg := NewRegistry()
+	if _, err := reg.Complete(ctx, nil, "op", Request{}); !errors.Is(err, ErrNoProviders) {
+		t.Errorf("expected reg.Complete(nil) ErrNoProviders, got %v", err)
+	}
+	if _, _, err := reg.CompleteStructured(ctx, nil, "op", Request{}); !errors.Is(err, ErrNoProviders) {
+		t.Errorf("expected reg.CompleteStructured(nil) ErrNoProviders, got %v", err)
+	}
+
+	services := map[string]*Service{
+		"nil receiver": nil,
+		"nil registry": NewService(nil),
+	}
+	for name, svc := range services {
 		t.Run(name, func(t *testing.T) {
-			if got := p.Name(); got != "" {
-				t.Errorf("expected empty Name, got %q", got)
-			}
-			if got := p.Models(); got != nil {
-				t.Errorf("expected nil Models, got %+v", got)
-			}
-			if p.SupportsStructuredOutput("any-model") {
-				t.Error("expected SupportsStructuredOutput=false")
-			}
-			if _, _, err := p.CompleteStructured(ctx, "op", core.LLMCompletionRequest{}); !errors.Is(err, ErrNoProviders) {
-				t.Errorf("expected CompleteStructured ErrNoProviders, got %v", err)
-			}
-			if resp, err := p.GenerateTailoredResume(ctx, core.GenerationRequest{}); !errors.Is(err, ErrNoProviders) || resp != nil {
+			if resp, err := svc.GenerateTailoredResume(ctx, core.GenerationRequest{}); !errors.Is(err, ErrNoProviders) || resp != nil {
 				t.Errorf("expected GenerateTailoredResume (nil, ErrNoProviders), got (%v, %v)", resp, err)
 			}
 		})
@@ -69,7 +73,13 @@ func TestNilGuards_RegistryCompleter(t *testing.T) {
 			if rc.SupportsStructuredCompletion("p", "m") {
 				t.Error("expected SupportsStructuredCompletion=false")
 			}
-			if _, _, err := rc.Complete(context.Background(), "op", "sys", "usr", "p", "m", "", nil); !errors.Is(err, ErrNoProviders) {
+			if _, _, err := rc.Complete(context.Background(), CompletionRequest{
+				Operation:    "op",
+				SystemPrompt: "sys",
+				UserPrompt:   "usr",
+				Provider:     "p",
+				Model:        "m",
+			}); !errors.Is(err, ErrNoProviders) {
 				t.Errorf("expected ErrNoProviders, got %v", err)
 			}
 		})
@@ -81,23 +91,29 @@ func TestNilGuards_RegistryCompleter(t *testing.T) {
 func TestNilGuards_ResumeExtraction(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("nil *ResumeExtractor and nil Completer return ErrValidation", func(t *testing.T) {
-		extractors := map[string]*ResumeExtractor{
+	t.Run("nil *Extractor and nil Completer return ErrValidation", func(t *testing.T) {
+		extractors := map[string]*Extractor{
 			"nil receiver":  nil,
-			"nil completer": NewResumeExtractor(nil),
+			"nil completer": NewExtractor(nil),
 		}
 		for name, e := range extractors {
 			if got := e.AvailableModels(); got != nil {
 				t.Errorf("%s: expected nil AvailableModels, got %+v", name, got)
 			}
-			if res, _, err := e.ExtractResumeWithUsage(ctx, "resume text", "p", "m"); !errors.Is(err, core.ErrValidation) || res != nil {
+			if res, _, err := e.ExtractResume(ctx, "resume text", "p", "m"); !errors.Is(err, core.ErrValidation) || res != nil {
 				t.Errorf("%s: expected (nil, ErrValidation), got (%v, %v)", name, res, err)
 			}
 		}
 	})
 
 	t.Run("nil CompleterFunc returns ErrValidation", func(t *testing.T) {
-		if _, _, err := CompleterFunc(nil).Complete(ctx, "op", "sys", "usr", "p", "m", "", nil); !errors.Is(err, core.ErrValidation) {
+		if _, _, err := CompleterFunc(nil).Complete(ctx, CompletionRequest{
+			Operation:    "op",
+			SystemPrompt: "sys",
+			UserPrompt:   "usr",
+			Provider:     "p",
+			Model:        "m",
+		}); !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation, got %v", err)
 		}
 	})

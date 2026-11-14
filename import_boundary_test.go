@@ -9,17 +9,26 @@ import (
 	"testing"
 )
 
-// allowedCoreSubpackages lists the relative subpackages permitted within the resumeee-core package set.
-var allowedCoreSubpackages = []string{
+// coreDomainPackageDirs enumerates all core domain packages subject to strict
+// infrastructure, HTTP, database, and vendor LLM SDK isolation guarantees.
+var coreDomainPackageDirs = []string{
+	".",
 	"seed",
-	"validator",
+	"provenance",
 	"sanitizer",
 	"branch",
 	"profile",
 	"renderer",
+	"worker",
+	"llm",
+	"memory",
+	"pdf",
 }
 
-// forbiddenDependencyPrefixes lists external dependency import paths strictly prohibited in the core package set.
+// llmSubpackageImportPrefix identifies vendor transport and internal HTTP helpers under llm/.
+const llmSubpackageImportPrefix = "github.com/resumeee-app/resumeee-core/llm/"
+
+// forbiddenDependencyPrefixes lists external dependency import paths prohibited across core domain packages.
 var forbiddenDependencyPrefixes = []string{
 	"gorm.io/",
 	"github.com/glebarez/sqlite",
@@ -35,53 +44,22 @@ var forbiddenDependencyPrefixes = []string{
 	"github.com/anthropics/anthropic-sdk-go",
 }
 
-// TestCorePackageSet_ImportBoundaries verifies that no file (production or test) in the
-// resumeee-core package set imports packages outside the core set or forbidden external SDKs.
+// TestCorePackageSet_ImportBoundaries verifies that core domain packages remain decoupled from
+// database drivers, ORMs, net/http, vendor LLM SDKs, and (in production code) llm/* transport subpackages.
 func TestCorePackageSet_ImportBoundaries(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-
-	// Detect if running inside monorepo or extracted core repository
-	var coreDirs []string
-	if _, err := os.Stat(filepath.Join(repoRoot, "internal", "domain")); err == nil {
-		// Monorepo layout
-		for _, pkg := range allowedCoreSubpackages {
-			dir := filepath.Join(repoRoot, "internal", pkg)
-			if _, err := os.Stat(dir); err == nil {
-				coreDirs = append(coreDirs, dir)
-			}
-		}
-	} else if _, err := os.Stat(filepath.Join(repoRoot, "core.go")); err == nil {
-		// Extracted core repo layout: root (.), validator, sanitizer, services/branch, services/profile, services/renderer
-		extractedSubdirs := []string{
-			".",
-			"seed",
-			"validator",
-			"sanitizer",
-			filepath.Join("services", "branch"),
-			filepath.Join("services", "profile"),
-			filepath.Join("services", "renderer"),
-		}
-		for _, sub := range extractedSubdirs {
-			dir := filepath.Join(repoRoot, sub)
-			if _, err := os.Stat(dir); err == nil {
-				coreDirs = append(coreDirs, dir)
-			}
-		}
-	} else {
-		t.Fatalf("could not determine repository layout from root: %s", repoRoot)
-	}
-
-	if len(coreDirs) == 0 {
-		t.Fatalf("no core package directories found under repo root: %s", repoRoot)
+	if _, err := os.Stat(filepath.Join(repoRoot, "core.go")); err != nil {
+		t.Fatalf("could not locate core.go at repository root %s: %v", repoRoot, err)
 	}
 
 	fset := token.NewFileSet()
 	var violations []string
 
-	for _, dir := range coreDirs {
-		relDir, err := filepath.Rel(repoRoot, dir)
-		if err != nil {
-			relDir = dir
+	for _, relDir := range coreDomainPackageDirs {
+		dir := filepath.Join(repoRoot, relDir)
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			t.Fatalf("expected core domain directory %s to exist at %s", relDir, dir)
 		}
 
 		entries, err := os.ReadDir(dir)
@@ -94,6 +72,7 @@ func TestCorePackageSet_ImportBoundaries(t *testing.T) {
 				continue
 			}
 
+			isTestFile := strings.HasSuffix(entry.Name(), "_test.go")
 			filePath := filepath.Join(dir, entry.Name())
 			relPath := filepath.Join(relDir, entry.Name())
 
@@ -105,23 +84,19 @@ func TestCorePackageSet_ImportBoundaries(t *testing.T) {
 			for _, imp := range f.Imports {
 				importPath := strings.Trim(imp.Path.Value, `"`)
 
-				// 1. Check for monorepo internal imports outside core package set
-				monorepoRoot := "resumeee" + "/"
-				if strings.HasPrefix(importPath, monorepoRoot) {
-					isAllowedCore := false
-					for _, pkg := range allowedCoreSubpackages {
-						prefix := "resumeee" + "/internal/" + pkg
-						if importPath == prefix || strings.HasPrefix(importPath, prefix+"/") {
-							isAllowedCore = true
-							break
-						}
-					}
-					if !isAllowedCore {
-						violations = append(violations, relPath+": imports out-of-core package "+importPath)
-					}
+				// Ban exact database/sql while allowing database/sql/driver in value objects like date.go.
+				if importPath == "database/sql" {
+					violations = append(violations, relPath+": imports forbidden standard library package database/sql")
 				}
 
-				// 2. Check for forbidden external dependencies (ORMs, SQL drivers, Firebase, MCP, LLM SDKs)
+				if importPath == "net/http" || strings.HasPrefix(importPath, "net/http/") {
+					violations = append(violations, relPath+": imports forbidden HTTP package "+importPath)
+				}
+
+				if !isTestFile && strings.HasPrefix(importPath, llmSubpackageImportPrefix) {
+					violations = append(violations, relPath+": non-test core domain file imports vendor/internal llm subpackage "+importPath)
+				}
+
 				for _, forbidden := range forbiddenDependencyPrefixes {
 					if strings.HasPrefix(importPath, forbidden) || importPath == strings.TrimSuffix(forbidden, "/") {
 						violations = append(violations, relPath+": imports forbidden external dependency "+importPath)

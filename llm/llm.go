@@ -1,5 +1,5 @@
 // Package llm provides client adapters, prompt engineering pipelines, schema enforcement,
-// and provider registry resolution for generative AI model providers.
+// debugging mechanisms, and provider registry resolution for generative AI model providers.
 //
 // Supported model provider backends include:
 //   - Google Gemini (gemini-2.5-pro, gemini-2.5-flash, gemini-1.5-pro, gemini-1.5-flash)
@@ -8,7 +8,7 @@
 //   - OpenAI-compatible endpoints (LocalAI, Ollama, vLLM, DeepSeek)
 //
 // The package enforces structured JSON outputs conforming to core.TailoredContent
-// schemas.
+// schemas and records prompt/response traces when debugging is enabled.
 package llm
 
 import (
@@ -19,6 +19,9 @@ import (
 
 	"github.com/resumeee-app/resumeee-core"
 )
+
+// DefaultLLMDebugDir is the default directory for writing prompt debug artifacts.
+const DefaultLLMDebugDir = "data/llm"
 
 // ProviderConfig holds credentials and endpoint configuration for initializing transport clients.
 type ProviderConfig struct {
@@ -86,14 +89,17 @@ type Registry struct {
 	defaultProvider string
 	defaultModel    string
 	explicitDefault bool
+	debugger        PromptDebugger
 	opts            []Option
 }
 
 // NewRegistry constructs an injectable LLM provider Registry.
 // Providers are registered via RegisterClient, RegisterClients, or Register.
 func NewRegistry(opts ...Option) *Registry {
+	baseOpts := applyOptions(opts, "", "")
 	return &Registry{
 		providers: make(map[string]core.LLMProvider),
+		debugger:  baseOpts.promptDebugger,
 		opts:      opts,
 	}
 }
@@ -203,6 +209,13 @@ func (r *Registry) DefaultModel() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.defaultModel
+}
+
+// PromptDebugger returns the configured PromptDebugger instance, or nil if prompt debugging is disabled.
+func (r *Registry) PromptDebugger() PromptDebugger {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.debugger
 }
 
 // SetDefault explicitly overrides the default provider and model.

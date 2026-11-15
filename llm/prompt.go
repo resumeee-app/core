@@ -66,17 +66,20 @@ type PromptPayload struct {
 	UserPrompt   string
 }
 
-// PromptOptions configures whether compiled prompts rely on provider-native structured output
-// enforcement or append an inline <response_schema> fallback block to the system prompt.
+// PromptOptions configures capability-aware prompt compilation behavior for both preview
+// compilation and live outbound LLM completion requests.
 type PromptOptions struct {
+	// NativeStructuredOutput omits the inline <response_schema> fallback block when true.
 	NativeStructuredOutput bool
+	// CompactJSON omits whitespace indentation in serialized candidate and prior-version JSON payloads.
+	CompactJSON bool
 }
 
 // PromptCompilerOption configures a PromptCompiler instance.
 type PromptCompilerOption func(*PromptCompiler)
 
-// WithPromptRegistry binds a provider Registry to PromptCompiler so CompilePrompt dynamically
-// omits or appends <response_schema> according to resolved client capabilities.
+// WithPromptRegistry binds a provider Registry to PromptCompiler so preview compilation methods
+// dynamically omit or append <response_schema> according to resolved client capabilities.
 func WithPromptRegistry(reg *Registry) PromptCompilerOption {
 	return func(c *PromptCompiler) {
 		c.registry = reg
@@ -108,8 +111,9 @@ func NewPromptCompiler(opts ...PromptCompilerOption) *PromptCompiler {
 	return c
 }
 
-// CompilePrompt builds the tailoring prompt payload and returns a core.PromptPreview.
-func (c *PromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.PromptPreview, error) {
+// resolveNativeStructuredOutput determines whether prompts should omit fallback JSON schemas
+// based on resolved registry client capabilities or the compiler's default option.
+func (c *PromptCompiler) resolveNativeStructuredOutput(req core.GenerationRequest) bool {
 	native := c != nil && c.nativeStructuredOutput
 	if c != nil && c.registry != nil {
 		client, model, err := c.registry.Resolve(req, req.Preset, requestProfile(req))
@@ -119,15 +123,89 @@ func (c *PromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.Prompt
 			native = false
 		}
 	}
+	return native
+}
 
-	payload, err := BuildPromptWithOptions(req, PromptOptions{NativeStructuredOutput: native})
-	if err != nil {
-		return nil, err
+// toPromptPreview converts an internal PromptPayload into a domain core.PromptPreview.
+func toPromptPreview(payload *PromptPayload) *core.PromptPreview {
+	if payload == nil {
+		return nil
 	}
 	return &core.PromptPreview{
 		SystemPrompt: payload.SystemPrompt,
 		UserPrompt:   payload.UserPrompt,
-	}, nil
+	}
+}
+
+// CompilePrompt builds the tailoring prompt payload and returns a core.PromptPreview.
+func (c *PromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.PromptPreview, error) {
+	payload, err := BuildPromptWithOptions(req, PromptOptions{
+		NativeStructuredOutput: c.resolveNativeStructuredOutput(req),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toPromptPreview(payload), nil
+}
+
+// CompileGapAnalysisPrompt builds the qualification gap-analysis prompt payload and returns a core.PromptPreview.
+func (c *PromptCompiler) CompileGapAnalysisPrompt(req core.GenerationRequest) (*core.PromptPreview, error) {
+	payload, err := BuildGapAnalysisPromptWithOptions(req, PromptOptions{
+		NativeStructuredOutput: c.resolveNativeStructuredOutput(req),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toPromptPreview(payload), nil
+}
+
+// CompileATSExtractionPrompt builds Stage 1 ATS extraction prompts and returns a core.PromptPreview.
+func (c *PromptCompiler) CompileATSExtractionPrompt(req core.ATSSimulationRequest) (*core.PromptPreview, error) {
+	payload, _, err := BuildATSExtractionPromptWithOptions(req, PromptOptions{
+		NativeStructuredOutput: c.resolveNativeStructuredOutput(atsToGenerationRequest(req)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toPromptPreview(payload), nil
+}
+
+// CompileATSMatchingPrompt builds Stage 2 ATS job matching prompts and returns a core.PromptPreview.
+func (c *PromptCompiler) CompileATSMatchingPrompt(branch core.Branch, profile *core.MainProfileSnapshot, extracted *core.ATSExtractedCandidate) (*core.PromptPreview, error) {
+	req := core.GenerationRequest{
+		Model:          branch.ModelOverride,
+		ReasoningLevel: branch.ReasoningLevel,
+		MainProfile:    profile,
+		BranchContext:  branch,
+	}
+	payload, err := BuildATSMatchingPromptWithOptions(branch, extracted, sanitizer.NewSessionFromSnapshot(profile), PromptOptions{
+		NativeStructuredOutput: c.resolveNativeStructuredOutput(req),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toPromptPreview(payload), nil
+}
+
+// CompileResumeExtractPrompt builds raw-resume extraction prompts and returns a core.PromptPreview.
+func (c *PromptCompiler) CompileResumeExtractPrompt(rawText string) (*core.PromptPreview, error) {
+	payload, err := BuildResumeExtractPromptWithOptions(rawText, PromptOptions{
+		NativeStructuredOutput: c.resolveNativeStructuredOutput(core.GenerationRequest{}),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toPromptPreview(payload), nil
+}
+
+// atsToGenerationRequest maps ATS simulation configuration fields into a GenerationRequest for provider resolution.
+func atsToGenerationRequest(req core.ATSSimulationRequest) core.GenerationRequest {
+	return core.GenerationRequest{
+		Model:          req.Model,
+		ReasoningLevel: req.ReasoningLevel,
+		MainProfile:    req.MainProfile,
+		BranchContext:  req.BranchContext,
+	}
 }
 
 // renderSystemPrompt renders sysTmpl and appends an inline fallback schema unless NativeStructuredOutput is enabled.
@@ -219,7 +297,7 @@ func BuildPromptWithOptions(req core.GenerationRequest, opts PromptOptions) (*Pr
 		return nil, fmt.Errorf("failed to render tailor system prompt template: %w", err)
 	}
 
-	ctx, err := buildTailorPromptContext(obfReq, idMap)
+	ctx, err := buildTailorPromptContext(obfReq, idMap, opts.CompactJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -237,12 +315,12 @@ func BuildPromptWithOptions(req core.GenerationRequest, opts PromptOptions) (*Pr
 }
 
 // buildTailorPromptContext prepares the projected profile, prior version, entity hints, and language context.
-func buildTailorPromptContext(obfReq core.GenerationRequest, idMap map[string]string) (tailorPromptContext, error) {
-	priorJSON, err := serializePriorVersion(obfReq.PriorVersion, idMap)
+func buildTailorPromptContext(obfReq core.GenerationRequest, idMap map[string]string, compactJSON bool) (tailorPromptContext, error) {
+	priorJSON, err := serializePriorVersion(obfReq.PriorVersion, idMap, compactJSON)
 	if err != nil {
 		return tailorPromptContext{}, err
 	}
-	profileJSON, err := serializeProjectedMainProfile(obfReq.MainProfile, idMap)
+	profileJSON, err := serializeProjectedMainProfile(obfReq.MainProfile, idMap, compactJSON)
 	if err != nil {
 		return tailorPromptContext{}, err
 	}
@@ -257,27 +335,27 @@ func buildTailorPromptContext(obfReq core.GenerationRequest, idMap map[string]st
 	}
 
 	return tailorPromptContext{
-		GlobalRules:        strings.TrimSpace(obfReq.GlobalRules),
-		PresetInstructions: strings.TrimSpace(obfReq.PresetInstructions),
+		GlobalRules:        sanitizePromptValue(obfReq.GlobalRules, ""),
+		PresetInstructions: sanitizePromptValue(obfReq.PresetInstructions, ""),
 		TargetLanguage:     validatedLanguage,
-		TargetRole:         strings.TrimSpace(obfReq.BranchContext.TargetRole),
-		TargetCompany:      strings.TrimSpace(obfReq.BranchContext.TargetCompany),
-		TargetRequirements: strings.TrimSpace(obfReq.BranchContext.TargetRequirements),
-		BranchInstructions: strings.TrimSpace(obfReq.BranchContext.BranchInstructions),
-		PinnedEntities:     projectShortIDList(obfReq.BranchContext.PinnedEntityIDs, idMap),
-		ExcludedEntities:   projectShortIDList(obfReq.BranchContext.ExcludedEntityIDs, idMap),
+		TargetRole:         sanitizePromptValue(obfReq.BranchContext.TargetRole, ""),
+		TargetCompany:      sanitizePromptValue(obfReq.BranchContext.TargetCompany, ""),
+		TargetRequirements: sanitizePromptValue(obfReq.BranchContext.TargetRequirements, ""),
+		BranchInstructions: sanitizePromptValue(obfReq.BranchContext.BranchInstructions, ""),
+		PinnedEntities:     sanitizePromptValue(projectShortIDList(obfReq.BranchContext.PinnedEntityIDs, idMap), ""),
+		ExcludedEntities:   sanitizePromptValue(projectShortIDList(obfReq.BranchContext.ExcludedEntityIDs, idMap), ""),
 		PriorVersionJSON:   priorJSON,
 		MainProfileJSON:    profileJSON,
 	}, nil
 }
 
-// serializePriorVersion projects prior to short IDs and marshals it as formatted JSON.
-func serializePriorVersion(prior *core.TailoredContent, idMap map[string]string) (string, error) {
+// serializePriorVersion projects prior to short IDs and marshals it as compact or indented JSON.
+func serializePriorVersion(prior *core.TailoredContent, idMap map[string]string, compact bool) (string, error) {
 	if prior == nil {
 		return "", nil
 	}
 	projected := projectPriorVersion(prior, idMap)
-	raw, err := json.MarshalIndent(projected, "", "  ")
+	raw, err := marshalPromptJSON(projected, compact)
 	if err != nil {
 		return "", fmt.Errorf("failed to serialize prior version: %w", err)
 	}
@@ -301,11 +379,12 @@ func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) 
 	return BuildGapAnalysisPromptWithOptions(req, PromptOptions{NativeStructuredOutput: false})
 }
 
-// BuildGapAnalysisPromptWithOptions constructs a gap-analysis prompt payload and omits
+// BuildGapAnalysisPromptWithOptions constructs a qualification gap-analysis prompt and omits
 // the inline <response_schema> block when opts.NativeStructuredOutput is true.
 func BuildGapAnalysisPromptWithOptions(req core.GenerationRequest, opts PromptOptions) (*PromptPayload, error) {
-	session := sanitizer.NewSessionFromSnapshot(req.MainProfile)
+	session := sanitizer.NewSessionFromRequest(req)
 	obfProfile := session.ObfuscateSnapshot(req.MainProfile)
+	obfBranch := session.ObfuscateBranchContext(req.BranchContext)
 	idMap := buildShortIDMap(obfProfile)
 
 	systemPrompt, err := renderSystemPrompt(gapAnalysisSystemTmpl, 1024, opts, GapAnalysisResponseSchemaJSON)
@@ -313,16 +392,16 @@ func BuildGapAnalysisPromptWithOptions(req core.GenerationRequest, opts PromptOp
 		return nil, fmt.Errorf("failed to render gap analysis system prompt template: %w", err)
 	}
 
-	profileJSON, err := serializeProjectedMainProfile(obfProfile, idMap)
+	profileJSON, err := serializeProjectedMainProfile(obfProfile, idMap, opts.CompactJSON)
 	if err != nil {
 		return nil, err
 	}
 
 	ctx := gapAnalysisPromptContext{
-		TargetRole:         session.ObfuscateString(strings.TrimSpace(req.BranchContext.TargetRole)),
-		TargetCompany:      strings.TrimSpace(req.BranchContext.TargetCompany),
-		TargetRequirements: session.ObfuscateString(strings.TrimSpace(req.BranchContext.TargetRequirements)),
-		BranchInstructions: session.ObfuscateString(strings.TrimSpace(req.BranchContext.BranchInstructions)),
+		TargetRole:         sanitizePromptValue(obfBranch.TargetRole, ""),
+		TargetCompany:      sanitizePromptValue(obfBranch.TargetCompany, ""),
+		TargetRequirements: sanitizePromptValue(obfBranch.TargetRequirements, ""),
+		BranchInstructions: sanitizePromptValue(obfBranch.BranchInstructions, ""),
 		MainProfileJSON:    profileJSON,
 	}
 
@@ -356,12 +435,13 @@ func BuildResumeExtractPromptWithOptions(rawText string, opts PromptOptions) (*P
 		return nil, fmt.Errorf("failed to render resume extract system prompt template: %w", err)
 	}
 
+	sanitizedRawText := sanitizePromptValue(rawText, "raw_resume_text")
 	ctx := resumeExtractPromptContext{
-		RawText: strings.TrimSpace(rawText),
+		RawText: sanitizedRawText,
 	}
 
 	var userBuilder strings.Builder
-	userBuilder.Grow(2048 + len(rawText))
+	userBuilder.Grow(2048 + len(sanitizedRawText))
 	if err := resumeExtractUserTmpl.Execute(&userBuilder, ctx); err != nil {
 		return nil, fmt.Errorf("failed to render resume extract user prompt template: %w", err)
 	}
@@ -386,22 +466,23 @@ type atsMatchPromptContext struct {
 	ExtractedCandidateJSON string
 }
 
-// atsPromptTagRegex matches internal prompt XML delimiter tags to prevent tag smuggling from untrusted inputs.
-var atsPromptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|response_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
+// promptTagRegex matches internal prompt XML delimiter tags across all prompt templates
+// to prevent embedded tag smuggling from untrusted inputs.
+var promptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|raw_resume_text|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|instructions|json_schema_hints|grounding_and_provenance_rules|gap_analysis_guidelines|schema_and_tailoring_hints|language_and_localization_rules|target_context|main_profile_data|prior_active_version|response_schema|json_output_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
 
-// sanitizeATSPromptValue strips matching outer tags and escapes embedded XML delimiter tags in untrusted text.
-func sanitizeATSPromptValue(content, stripOuterTag string) string {
+// sanitizePromptValue strips matching outer wrapper tags and escapes embedded XML delimiter tags in untrusted text.
+func sanitizePromptValue(content, stripOuterTag string) string {
 	trimmed := strings.TrimSpace(content)
 	if stripOuterTag != "" {
 		openTag := "<" + stripOuterTag + ">"
 		closeTag := "</" + stripOuterTag + ">"
-		if strings.HasPrefix(strings.ToLower(trimmed), strings.ToLower(openTag)) &&
-			strings.HasSuffix(strings.ToLower(trimmed), strings.ToLower(closeTag)) &&
-			len(trimmed) >= len(openTag)+len(closeTag) {
+		if len(trimmed) >= len(openTag)+len(closeTag) &&
+			strings.EqualFold(trimmed[:len(openTag)], openTag) &&
+			strings.EqualFold(trimmed[len(trimmed)-len(closeTag):], closeTag) {
 			trimmed = strings.TrimSpace(trimmed[len(openTag) : len(trimmed)-len(closeTag)])
 		}
 	}
-	return atsPromptTagRegex.ReplaceAllStringFunc(trimmed, func(m string) string {
+	return promptTagRegex.ReplaceAllStringFunc(trimmed, func(m string) string {
 		escaped := strings.ReplaceAll(m, "<", "&lt;")
 		return strings.ReplaceAll(escaped, ">", "&gt;")
 	})
@@ -421,7 +502,7 @@ func BuildATSExtractionPromptWithOptions(req core.ATSSimulationRequest, opts Pro
 	}
 
 	session := sanitizer.NewSessionFromSnapshot(req.MainProfile)
-	obfResumeText := sanitizeATSPromptValue(session.ObfuscateString(strings.TrimSpace(req.ResumeText)), "resume_document")
+	obfResumeText := sanitizePromptValue(session.ObfuscateString(strings.TrimSpace(req.ResumeText)), "resume_document")
 
 	systemPrompt, err := renderSystemPrompt(atsExtractSystemTmpl, 2048, opts, ATSExtractionResponseSchemaJSON)
 	if err != nil {
@@ -458,24 +539,18 @@ func BuildATSMatchingPromptWithOptions(b core.Branch, extracted *core.ATSExtract
 		return nil, fmt.Errorf("failed to render ats match system prompt template: %w", err)
 	}
 
-	candidateJSONBytes, err := serializeExtractedCandidate(extracted)
+	candidateJSONBytes, err := serializeExtractedCandidate(extracted, session, opts.CompactJSON)
 	if err != nil {
 		return nil, err
 	}
 
-	targetRole := strings.TrimSpace(b.TargetRole)
-	targetCompany := strings.TrimSpace(b.TargetCompany)
-	targetReqs := strings.TrimSpace(b.TargetRequirements)
-	if session != nil {
-		targetRole = session.ObfuscateString(targetRole)
-		targetReqs = session.ObfuscateString(targetReqs)
-	}
+	obfBranch := session.ObfuscateBranchContext(b)
 
 	ctx := atsMatchPromptContext{
-		TargetRole:             sanitizeATSPromptValue(targetRole, ""),
-		TargetCompany:          sanitizeATSPromptValue(targetCompany, ""),
-		TargetRequirements:     sanitizeATSPromptValue(targetReqs, "target_job_description"),
-		ExtractedCandidateJSON: sanitizeATSPromptValue(string(candidateJSONBytes), "extracted_candidate_data"),
+		TargetRole:             sanitizePromptValue(obfBranch.TargetRole, ""),
+		TargetCompany:          sanitizePromptValue(obfBranch.TargetCompany, ""),
+		TargetRequirements:     sanitizePromptValue(obfBranch.TargetRequirements, "target_job_description"),
+		ExtractedCandidateJSON: sanitizePromptValue(string(candidateJSONBytes), "extracted_candidate_data"),
 	}
 
 	var userBuilder strings.Builder
@@ -490,15 +565,15 @@ func BuildATSMatchingPromptWithOptions(b core.Branch, extracted *core.ATSExtract
 	}, nil
 }
 
-// serializeExtractedCandidate normalizes and JSON-marshals a Stage 1 extracted candidate payload.
-func serializeExtractedCandidate(extracted *core.ATSExtractedCandidate) ([]byte, error) {
-	candidate := extracted
+// serializeExtractedCandidate clones, obfuscates PII, normalizes, and JSON-marshals a Stage 1 extracted candidate payload.
+func serializeExtractedCandidate(extracted *core.ATSExtractedCandidate, session *sanitizer.Session, compact bool) ([]byte, error) {
+	candidate := session.ObfuscateExtractedCandidate(extracted)
 	if candidate == nil {
 		candidate = &core.ATSExtractedCandidate{}
 	}
 	candidate.Normalize()
 
-	raw, err := json.MarshalIndent(candidate, "", "  ")
+	raw, err := marshalPromptJSON(candidate, compact)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize extracted candidate data: %w", err)
 	}
@@ -532,16 +607,25 @@ func buildShortIDMap(snapshot *core.MainProfileSnapshot) map[string]string {
 }
 
 // serializeProjectedMainProfile projects snapshot with short IDs into a LeanMainProfile JSON string.
-func serializeProjectedMainProfile(snapshot *core.MainProfileSnapshot, idMap map[string]string) (string, error) {
+func serializeProjectedMainProfile(snapshot *core.MainProfileSnapshot, idMap map[string]string, compact bool) (string, error) {
 	if snapshot == nil {
 		return "", nil
 	}
 	leanProfile := ProjectLeanMainProfile(snapshot, idMap)
-	profileJSON, err := json.MarshalIndent(leanProfile, "", "  ")
+	profileJSON, err := marshalPromptJSON(leanProfile, compact)
 	if err != nil {
 		return "", fmt.Errorf("failed to serialize main profile snapshot: %w", err)
 	}
 	return string(profileJSON), nil
+}
+
+// marshalPromptJSON encodes structured prompt payloads compactly for live LLM requests
+// or with two-space indentation for readable prompt previews.
+func marshalPromptJSON(v any, compact bool) ([]byte, error) {
+	if compact {
+		return json.Marshal(v)
+	}
+	return json.MarshalIndent(v, "", "  ")
 }
 
 // resolveShortID resolves a canonical identifier via idMap or falls back to core.ShortenID.

@@ -835,6 +835,37 @@ func (f *fakePromptCompiler) CompilePrompt(req core.GenerationRequest) (*core.Pr
 	}, nil
 }
 
+func (f *fakePromptCompiler) CompileGapAnalysisPrompt(req core.GenerationRequest) (*core.PromptPreview, error) {
+	session := sanitizer.NewSessionFromRequest(req)
+	obfBranch := session.ObfuscateBranchContext(req.BranchContext)
+	return &core.PromptPreview{
+		SystemPrompt: fmt.Sprintf("Workflow: %s\nLanguage: %s", core.PromptWorkflowGapAnalysis, req.TargetLanguage),
+		UserPrompt:   fmt.Sprintf("Target Role: %s\nRequirements: %s", obfBranch.TargetRole, obfBranch.TargetRequirements),
+	}, nil
+}
+
+func (f *fakePromptCompiler) CompileATSExtractionPrompt(req core.ATSSimulationRequest) (*core.PromptPreview, error) {
+	session := sanitizer.NewSessionFromSnapshot(req.MainProfile)
+	return &core.PromptPreview{
+		SystemPrompt: fmt.Sprintf("Workflow: %s\nFormat: %s", core.PromptWorkflowATSExtraction, req.FormatUsed),
+		UserPrompt:   session.ObfuscateString(req.ResumeText),
+	}, nil
+}
+
+func (f *fakePromptCompiler) CompileATSMatchingPrompt(b core.Branch, profile *core.MainProfileSnapshot, extracted *core.ATSExtractedCandidate) (*core.PromptPreview, error) {
+	session := sanitizer.NewSessionFromSnapshot(profile)
+	obfBranch := session.ObfuscateBranchContext(b)
+	obfExtracted := session.ObfuscateExtractedCandidate(extracted)
+	var summary string
+	if obfExtracted != nil {
+		summary = obfExtracted.Summary
+	}
+	return &core.PromptPreview{
+		SystemPrompt: fmt.Sprintf("Workflow: %s", core.PromptWorkflowATSMatching),
+		UserPrompt:   fmt.Sprintf("Target Role: %s\nRequirements: %s\nSummary: %s", obfBranch.TargetRole, obfBranch.TargetRequirements, summary),
+	}, nil
+}
+
 // Compile-time interface assertions ensuring test fakes satisfy the core store and branch consumer contracts.
 var (
 	_ core.BranchStore      = (*fakeBranchStore)(nil)

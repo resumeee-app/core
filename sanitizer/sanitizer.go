@@ -463,6 +463,19 @@ func (s *Session) ObfuscatePriorVersion(prior *core.TailoredContent) *core.Tailo
 	return res
 }
 
+// ObfuscateBranchContext returns a copy of branch with candidate contact PII scrubbed from
+// free-text prompt fields while intentionally preserving TargetCompany as non-PII entity metadata.
+func (s *Session) ObfuscateBranchContext(branch core.Branch) core.Branch {
+	if s == nil {
+		return branch
+	}
+	res := branch
+	res.TargetRole = s.ObfuscateString(res.TargetRole)
+	res.TargetRequirements = s.ObfuscateString(res.TargetRequirements)
+	res.BranchInstructions = s.ObfuscateString(res.BranchInstructions)
+	return res
+}
+
 // ObfuscateRequest returns a shallow copy of req with copy-on-write clones of MainProfile and
 // PriorVersion and PII scrubbed from free-text prompt fields. Unscrubbed slices and pointers on
 // req (such as Preset and BranchContext.PinnedEntityIDs) share backing storage with req.
@@ -472,10 +485,7 @@ func (s *Session) ObfuscateRequest(req core.GenerationRequest) core.GenerationRe
 	res.PriorVersion = s.ObfuscatePriorVersion(req.PriorVersion)
 	res.GlobalRules = s.ObfuscateString(req.GlobalRules)
 	res.PresetInstructions = s.ObfuscateString(req.PresetInstructions)
-
-	res.BranchContext.TargetRole = s.ObfuscateString(res.BranchContext.TargetRole)
-	res.BranchContext.TargetRequirements = s.ObfuscateString(res.BranchContext.TargetRequirements)
-	res.BranchContext.BranchInstructions = s.ObfuscateString(res.BranchContext.BranchInstructions)
+	res.BranchContext = s.ObfuscateBranchContext(res.BranchContext)
 
 	return res
 }
@@ -561,4 +571,43 @@ func (s *Session) DeobfuscateATSScore(score *core.ATSScore) {
 			}
 		}
 	}
+}
+
+// ObfuscateExtractedCandidate returns a deep clone of candidate with contact PII scrubbed from
+// narrative fields (Summary, Experiences[].Title, Experiences[].Highlights), leaving caller slices
+// unmutated and preserving non-PII Company, Educations, Skills, and Certifications metadata.
+func (s *Session) ObfuscateExtractedCandidate(candidate *core.ATSExtractedCandidate) *core.ATSExtractedCandidate {
+	if candidate == nil {
+		return nil
+	}
+	res := &core.ATSExtractedCandidate{
+		Summary: s.ObfuscateString(candidate.Summary),
+	}
+	if candidate.Skills != nil {
+		res.Skills = make([]string, len(candidate.Skills))
+		copy(res.Skills, candidate.Skills)
+	}
+	if candidate.Experiences != nil {
+		res.Experiences = make([]core.ATSExtractedExperience, len(candidate.Experiences))
+		for i, exp := range candidate.Experiences {
+			clonedExp := exp
+			clonedExp.Title = s.ObfuscateString(exp.Title)
+			if exp.Highlights != nil {
+				clonedExp.Highlights = make([]string, len(exp.Highlights))
+				for j, h := range exp.Highlights {
+					clonedExp.Highlights[j] = s.ObfuscateString(h)
+				}
+			}
+			res.Experiences[i] = clonedExp
+		}
+	}
+	if candidate.Educations != nil {
+		res.Educations = make([]core.ATSExtractedEducation, len(candidate.Educations))
+		copy(res.Educations, candidate.Educations)
+	}
+	if candidate.Certifications != nil {
+		res.Certifications = make([]string, len(candidate.Certifications))
+		copy(res.Certifications, candidate.Certifications)
+	}
+	return res
 }

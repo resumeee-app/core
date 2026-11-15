@@ -1341,6 +1341,290 @@ func TestService_GetPromptPreview_UnconfiguredCompiler(t *testing.T) {
 	}
 }
 
+func TestService_PromptPreview_WorkflowsBeyondTailoring(t *testing.T) {
+	ctx := context.Background()
+	env := setupTestBranchEnv(t, 10)
+
+	renderedMD := "# Ada Lovelace\n- Built analytical engines in Go"
+	v1, err := env.svc.Version(ctx, env.branchID, env.v1ID)
+	if err != nil {
+		t.Fatalf("Version v1 failed: %v", err)
+	}
+	v1.MarkdownOutput = renderedMD
+	v1.ATSScore = &core.ATSScore{JobMatchingScore: 0.88}
+	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+		t.Fatalf("CompleteVersion v1 failed: %v", err)
+	}
+
+	pendingVer := &core.BranchVersion{
+		ID:       "ver-pending-preview",
+		BranchID: env.branchID,
+		Status:   core.VersionStatusPending,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, pendingVer); err != nil {
+		t.Fatalf("CreateVersion(pending) failed: %v", err)
+	}
+
+	explicitVer := &core.BranchVersion{
+		ID:            "ver-explicit-preview",
+		BranchID:      env.branchID,
+		VersionNumber: 2,
+		Status:        core.VersionStatusCompleted,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, explicitVer); err != nil {
+		t.Fatalf("CreateVersion(explicit) failed: %v", err)
+	}
+	explicitVer.PlainTextOutput = "Explicit plain text resume"
+	explicitVer.HTMLOutput = "<h1>HTML resume output</h1>"
+	if err := env.branchRepo.CompleteVersion(ctx, explicitVer); err != nil {
+		t.Fatalf("CompleteVersion(explicit) failed: %v", err)
+	}
+
+	b, err := env.svc.Branch(ctx, env.defaultUser, env.branchID)
+	if err != nil {
+		t.Fatalf("Branch failed: %v", err)
+	}
+	b.ActiveVersionID = &v1.ID
+	if _, err := env.svc.UpdateBranch(ctx, b); err != nil {
+		t.Fatalf("UpdateBranch failed: %v", err)
+	}
+
+	// Update candidate name in profile so ATS matching preview test asserts PII scrubbing too.
+	prof, err := env.profileRepo.Profile(ctx, env.defaultUser)
+	if err != nil {
+		t.Fatalf("Profile failed: %v", err)
+	}
+	prof.FullName = "Ada Lovelace"
+	if err := env.profileRepo.UpsertProfile(ctx, prof); err != nil {
+		t.Fatalf("UpsertProfile failed: %v", err)
+	}
+
+	noVersionBranch, err := env.svc.CreateBranch(ctx, &core.Branch{
+		UserID:        env.defaultUser,
+		Name:          "No Version Branch",
+		TargetRole:    "Staff Engineer",
+		TemplateSetID: core.TemplateStandardCleanID,
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch(noVersionBranch) failed: %v", err)
+	}
+
+	draftRole := "Principal Systems Engineer"
+	draftReqs := "Strong Go concurrency experience"
+	missingPresetID := "preset-does-not-exist"
+	callerExtracted := &core.ATSExtractedCandidate{
+		Summary: "Ada Lovelace engineered distributed systems",
+		Skills:  nil,
+	}
+
+	cases := []struct {
+		name           string
+		branchID       string
+		opts           *core.PromptPreviewOptions
+		wantSysSub     string
+		wantUserSub    string
+		wantUserNotSub string
+		wantErr        error
+	}{
+		{
+			name:     "gap analysis workflow compiles with draft overrides",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:           core.PromptWorkflowGapAnalysis,
+				TargetRole:         &draftRole,
+				TargetRequirements: &draftReqs,
+			},
+			wantSysSub:  "Workflow: gap_analysis",
+			wantUserSub: draftRole,
+		},
+		{
+			name:     "ats extraction workflow compiles from completed branch version even when already scored",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow: core.PromptWorkflowATSExtraction,
+				Format:   string(core.OutputFormatMarkdown),
+			},
+			wantSysSub:  "Workflow: ats_extraction",
+			wantUserSub: "Built analytical engines in Go",
+		},
+		{
+			name:     "ats extraction workflow supports explicit VersionID override",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:  core.PromptWorkflowATSExtraction,
+				VersionID: explicitVer.ID,
+				Format:    string(core.OutputFormatPlainText),
+			},
+			wantSysSub:  "Format: text",
+			wantUserSub: "Explicit plain text resume",
+		},
+		{
+			name:     "ats extraction workflow normalizes format aliases on saved versions",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:  core.PromptWorkflowATSExtraction,
+				VersionID: explicitVer.ID,
+				Format:    "txt",
+			},
+			wantSysSub:  "Format: text",
+			wantUserSub: "Explicit plain text resume",
+		},
+		{
+			name:     "ats extraction workflow normalizes HTML format case on saved versions",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:  core.PromptWorkflowATSExtraction,
+				VersionID: explicitVer.ID,
+				Format:    "HTML",
+			},
+			wantSysSub:  "Format: html",
+			wantUserSub: "<h1>HTML resume output</h1>",
+		},
+		{
+			name:     "ats extraction workflow rejects unsupported format on saved versions",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow: core.PromptWorkflowATSExtraction,
+				Format:   "docx",
+			},
+			wantErr: core.ErrValidation,
+		},
+		{
+			name:     "ats extraction workflow compiles from draft resume text",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:   core.PromptWorkflowATSExtraction,
+				Format:     string(core.OutputFormatPlainText),
+				ResumeText: "Draft resume plain text",
+			},
+			wantSysSub:  "Format: text",
+			wantUserSub: "Draft resume plain text",
+		},
+		{
+			name:     "ats extraction workflow rejects pending version",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:  core.PromptWorkflowATSExtraction,
+				VersionID: pendingVer.ID,
+			},
+			wantErr: core.ErrValidation,
+		},
+		{
+			name:     "ats extraction workflow rejects branch missing both version and draft text",
+			branchID: noVersionBranch.ID,
+			opts: &core.PromptPreviewOptions{
+				Workflow: core.PromptWorkflowATSExtraction,
+			},
+			wantErr: core.ErrValidation,
+		},
+		{
+			name:     "ats extraction workflow rejects unsupported draft format",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:   core.PromptWorkflowATSExtraction,
+				Format:     "docx",
+				ResumeText: "Draft resume text",
+			},
+			wantErr: core.ErrValidation,
+		},
+		{
+			name:     "ats matching workflow compiles and scrubs PII without mutating caller",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:           core.PromptWorkflowATSMatching,
+				TargetRequirements: &draftReqs,
+				ExtractedCandidate: callerExtracted,
+			},
+			wantSysSub:     "Workflow: ats_matching",
+			wantUserSub:    sanitizer.PlaceholderFullName + " engineered distributed systems",
+			wantUserNotSub: "Ada Lovelace",
+		},
+		{
+			name:     "explicit missing preset override returns error",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				PresetID: &missingPresetID,
+			},
+			wantErr: core.ErrNotFound,
+		},
+		{
+			name:     "unsupported workflow returns validation error",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow: "unsupported",
+			},
+			wantErr: core.ErrValidation,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prev, err := env.svc.PromptPreview(ctx, env.defaultUser, tc.branchID, tc.opts)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PromptPreview failed: %v", err)
+			}
+			if !strings.Contains(prev.SystemPrompt, tc.wantSysSub) {
+				t.Errorf("SystemPrompt missing %q:\n%s", tc.wantSysSub, prev.SystemPrompt)
+			}
+			if !strings.Contains(prev.UserPrompt, tc.wantUserSub) {
+				t.Errorf("UserPrompt missing %q:\n%s", tc.wantUserSub, prev.UserPrompt)
+			}
+			if tc.wantUserNotSub != "" && strings.Contains(prev.UserPrompt, tc.wantUserNotSub) {
+				t.Errorf("UserPrompt unexpectedly contained %q:\n%s", tc.wantUserNotSub, prev.UserPrompt)
+			}
+		})
+	}
+
+	if callerExtracted.Skills != nil || callerExtracted.Summary != "Ada Lovelace engineered distributed systems" {
+		t.Errorf("PromptPreview mutated caller ExtractedCandidate: %+v", callerExtracted)
+	}
+}
+
+type crossTenantPresetReader struct {
+	preset core.Preset
+}
+
+func (r *crossTenantPresetReader) Preset(_ context.Context, _, _ string) (*core.Preset, error) {
+	cp := r.preset
+	return &cp, nil
+}
+
+func TestService_PromptPreview_RejectsCrossTenantPreset(t *testing.T) {
+	ctx := context.Background()
+	store := newSeededBranchStore(ctx, "user-preset")
+	b := &core.Branch{
+		ID:            "branch-preset-check",
+		UserID:        "user-preset",
+		Name:          "Branch Preset Check",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
+	if err := store.CreateBranch(ctx, b); err != nil {
+		t.Fatalf("CreateBranch failed: %v", err)
+	}
+	otherPresetID := "preset-other-tenant"
+	svc := branch.New(branch.Config{
+		Branches:       store,
+		Profiles:       store,
+		Presets:        &crossTenantPresetReader{preset: core.Preset{ID: otherPresetID, UserID: "other-user", SystemInstructions: "SECRET"}},
+		Templates:      store,
+		Quotas:         store,
+		PromptCompiler: &fakePromptCompiler{},
+	})
+
+	_, err := svc.PromptPreview(ctx, "user-preset", b.ID, &core.PromptPreviewOptions{
+		PresetID: &otherPresetID,
+	})
+	if !errors.Is(err, core.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for cross-tenant preset, got %v", err)
+	}
+}
+
 type spyQuotaRepo struct {
 	mu           sync.Mutex
 	reservations []struct {

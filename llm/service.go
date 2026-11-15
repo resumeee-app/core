@@ -40,7 +40,10 @@ func (s *Service) GenerateTailoredResume(ctx context.Context, req core.Generatio
 // generateTailoredWithClient compiles the tailoring prompt, executes completion, and deobfuscates PII placeholders.
 func (s *Service) generateTailoredWithClient(ctx context.Context, client Client, model string, req core.GenerationRequest) (*core.GenerationResponse, error) {
 	supportsStructured := client.SupportsStructuredOutput(model)
-	prompts, err := BuildPromptWithOptions(req, PromptOptions{NativeStructuredOutput: supportsStructured})
+	prompts, err := BuildPromptWithOptions(req, PromptOptions{
+		NativeStructuredOutput: supportsStructured,
+		CompactJSON:            true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to build prompt: %w", err)
 	}
@@ -99,6 +102,7 @@ func (s *Service) GenerateGapAnalysis(ctx context.Context, req core.GenerationRe
 
 	prompts, err := BuildGapAnalysisPromptWithOptions(req, PromptOptions{
 		NativeStructuredOutput: client.SupportsStructuredOutput(model),
+		CompactJSON:            true,
 	})
 	if err != nil {
 		return nil, err
@@ -192,7 +196,10 @@ func (s *Service) SimulateATS(ctx context.Context, req core.ATSSimulationRequest
 	if err != nil {
 		return nil, err
 	}
-	promptOpts := PromptOptions{NativeStructuredOutput: client.SupportsStructuredOutput(model)}
+	promptOpts := PromptOptions{
+		NativeStructuredOutput: client.SupportsStructuredOutput(model),
+		CompactJSON:            true,
+	}
 
 	extractOut, session, usage1, err := s.runATSExtractionStage(ctx, client, model, req, promptOpts)
 	if err != nil {
@@ -216,17 +223,8 @@ func (s *Service) SimulateATS(ctx context.Context, req core.ATSSimulationRequest
 
 // resolveATSClient selects the Client and model identifier for an ATS simulation request.
 func (s *Service) resolveATSClient(req core.ATSSimulationRequest) (Client, string, error) {
-	var profile *core.Profile
-	if req.MainProfile != nil {
-		profile = &req.MainProfile.Profile
-	}
-	genReq := core.GenerationRequest{
-		Model:          req.Model,
-		ReasoningLevel: req.ReasoningLevel,
-		MainProfile:    req.MainProfile,
-		BranchContext:  req.BranchContext,
-	}
-	return s.registry.Resolve(genReq, nil, profile)
+	genReq := atsToGenerationRequest(req)
+	return s.registry.Resolve(genReq, nil, requestProfile(genReq))
 }
 
 // runATSExtractionStage compiles Stage 1 prompts and extracts candidate attributes from resume text.

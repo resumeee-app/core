@@ -938,3 +938,124 @@ func TestSession_BlankProfileWebsiteFallsBackToMetadata(t *testing.T) {
 		t.Errorf("expected round-trip deobfuscation %q, got %q", input, deobf)
 	}
 }
+
+func TestSession_ObfuscateBranchContext_Consistency(t *testing.T) {
+	realWeb := "https://jordanvance.dev"
+	prof := &core.Profile{
+		FullName: "Jordan Vance",
+		Email:    "jordan.vance@example.org",
+		Phone:    "+1 415 555 0199",
+		Profiles: []core.SocialLink{
+			{Network: "website", URL: realWeb},
+		},
+	}
+	branch := core.Branch{
+		ID:                 "branch-1",
+		Name:               "Jordan Vance Systems Role",
+		TargetRole:         "Lead Engineer for Jordan Vance",
+		TargetCompany:      "Jordan Vance Corp",
+		TargetRequirements: "Contact jordan.vance@example.org or +1 415 555 0199; portfolio " + realWeb,
+		BranchInstructions: "Emphasize Jordan Vance achievements",
+	}
+
+	session := sanitizer.NewSession(prof)
+	obfBranch := session.ObfuscateBranchContext(branch)
+	obfReq := session.ObfuscateRequest(core.GenerationRequest{
+		MainProfile:   &core.MainProfileSnapshot{Profile: *prof},
+		BranchContext: branch,
+	})
+
+	if obfBranch.TargetRole != obfReq.BranchContext.TargetRole {
+		t.Errorf("TargetRole mismatch: ObfuscateBranchContext=%q, ObfuscateRequest=%q", obfBranch.TargetRole, obfReq.BranchContext.TargetRole)
+	}
+	if obfBranch.TargetCompany != branch.TargetCompany || obfReq.BranchContext.TargetCompany != branch.TargetCompany {
+		t.Errorf("TargetCompany should stay preserved: branch=%q, req=%q", obfBranch.TargetCompany, obfReq.BranchContext.TargetCompany)
+	}
+	if obfBranch.TargetRequirements != obfReq.BranchContext.TargetRequirements {
+		t.Errorf("TargetRequirements mismatch: ObfuscateBranchContext=%q, ObfuscateRequest=%q", obfBranch.TargetRequirements, obfReq.BranchContext.TargetRequirements)
+	}
+	if obfBranch.BranchInstructions != obfReq.BranchContext.BranchInstructions {
+		t.Errorf("BranchInstructions mismatch: ObfuscateBranchContext=%q, ObfuscateRequest=%q", obfBranch.BranchInstructions, obfReq.BranchContext.BranchInstructions)
+	}
+	if strings.Contains(obfBranch.TargetRequirements, prof.Email) || strings.Contains(obfBranch.TargetRequirements, prof.Phone) || strings.Contains(obfBranch.TargetRequirements, realWeb) {
+		t.Errorf("TargetRequirements leaked candidate contact PII: %q", obfBranch.TargetRequirements)
+	}
+	if strings.Contains(obfBranch.BranchInstructions, prof.FullName) {
+		t.Errorf("BranchInstructions leaked candidate FullName: %q", obfBranch.BranchInstructions)
+	}
+
+	var nilSession *sanitizer.Session
+	if gotNil := nilSession.ObfuscateBranchContext(branch); gotNil.TargetRole != branch.TargetRole || gotNil.TargetRequirements != branch.TargetRequirements {
+		t.Errorf("nil session mutated branch context: %+v", gotNil)
+	}
+}
+
+func TestSession_ObfuscateExtractedCandidate(t *testing.T) {
+	realName := "Jordan Vance"
+	realEmail := "jordan.vance@example.org"
+	realPhone := "+1 415 555 0199"
+	realWeb := "https://jordanvance.dev"
+
+	prof := &core.Profile{
+		FullName: realName,
+		Email:    realEmail,
+		Phone:    realPhone,
+		Profiles: []core.SocialLink{
+			{Network: "website", URL: realWeb},
+		},
+	}
+	session := sanitizer.NewSession(prof)
+
+	orig := &core.ATSExtractedCandidate{
+		Summary: realName + " (" + realEmail + ") builds reliable systems at " + realWeb + ".",
+		Skills:  nil, // intentionally nil to verify caller slice is never mutated in-place
+		Experiences: []core.ATSExtractedExperience{
+			{
+				Company: realName + " Systems",
+				Title:   "Principal Engineer for " + realName,
+				Highlights: []string{
+					"Contact " + realPhone + " for " + realName + " architecture review.",
+				},
+			},
+		},
+	}
+
+	got := session.ObfuscateExtractedCandidate(orig)
+	if got == nil || got == orig {
+		t.Fatalf("expected non-nil cloned ATSExtractedCandidate")
+	}
+
+	// Verify caller struct and slices are completely unmutated.
+	if orig.Skills != nil || orig.Educations != nil || orig.Certifications != nil {
+		t.Errorf("caller nil slices mutated: %+v", orig)
+	}
+	if !strings.Contains(orig.Summary, realName) {
+		t.Errorf("caller Summary mutated: %q", orig.Summary)
+	}
+
+	// Verify candidate PII is scrubbed across Summary, Title, and Highlights while preserving Company.
+	for _, pii := range []string{realName, realEmail, realPhone, realWeb} {
+		if strings.Contains(got.Summary, pii) {
+			t.Errorf("obfuscated Summary leaked %q: %q", pii, got.Summary)
+		}
+		if strings.Contains(got.Experiences[0].Highlights[0], pii) {
+			t.Errorf("obfuscated Highlight leaked %q: %q", pii, got.Experiences[0].Highlights[0])
+		}
+	}
+	if strings.Contains(got.Experiences[0].Title, realName) {
+		t.Errorf("obfuscated Experience Title leaked name: %q", got.Experiences[0].Title)
+	}
+	if got.Experiences[0].Company != realName+" Systems" {
+		t.Errorf("expected non-PII Company preserved, got %q", got.Experiences[0].Company)
+	}
+
+	// Nil safety and copy-on-write cloning even on nil session.
+	var nilSession *sanitizer.Session
+	if nilSession.ObfuscateExtractedCandidate(nil) != nil {
+		t.Errorf("expected nil candidate to remain nil")
+	}
+	nilGot := nilSession.ObfuscateExtractedCandidate(orig)
+	if nilGot == orig || nilGot.Summary != orig.Summary {
+		t.Errorf("expected nil session to clone candidate unchanged, got %+v", nilGot)
+	}
+}

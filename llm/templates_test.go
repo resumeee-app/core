@@ -643,3 +643,115 @@ func TestPromptCompiler_WithNativeStructuredOutputAndEmptyRegistryFallback(t *te
 		t.Errorf("expected empty-registry resolution failure to fall back to <response_schema>")
 	}
 }
+
+// extractTaggedSection extracts the body between <tag> and </tag> and fails the test if missing.
+func extractTaggedSection(t *testing.T, content, tag string) string {
+	t.Helper()
+	openTag := "<" + tag + ">"
+	closeTag := "</" + tag + ">"
+	start := strings.Index(content, openTag)
+	end := strings.Index(content, closeTag)
+	if start == -1 || end == -1 || end <= start {
+		t.Fatalf("missing or malformed <%s> block in:\n%s", tag, content)
+	}
+	return content[start+len(openTag) : end]
+}
+
+// TestBuildResumeExtractPrompt_AchievementGuidanceAndNativeMode verifies achievement extraction
+// instructions, section coverage, and native vs fallback schema behavior.
+func TestBuildResumeExtractPrompt_AchievementGuidanceAndNativeMode(t *testing.T) {
+	rawResume := "  Jane Doe\nStaff Engineer\n- Cut p99 latency by 45%\n  "
+
+	modes := []struct {
+		name   string
+		native bool
+	}{
+		{name: "native structured output", native: true},
+		{name: "fallback inline schema", native: false},
+	}
+
+	for _, tc := range modes {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := llm.BuildResumeExtractPromptWithOptions(rawResume, llm.PromptOptions{
+				NativeStructuredOutput: tc.native,
+			})
+			if err != nil {
+				t.Fatalf("BuildResumeExtractPromptWithOptions(native=%v) failed: %v", tc.native, err)
+			}
+
+			if tc.native {
+				if strings.Contains(payload.SystemPrompt, "<response_schema>") || strings.Contains(payload.SystemPrompt, "```json") {
+					t.Errorf("native mode must omit <response_schema> and ```json fences, got:\n%s", payload.SystemPrompt)
+				}
+			} else {
+				if strings.Count(payload.SystemPrompt, "<response_schema>") != 1 {
+					t.Fatalf("fallback mode must contain single <response_schema>, got:\n%s", payload.SystemPrompt)
+				}
+				var parsedSchema llm.Schema
+				if err := json.Unmarshal([]byte(llm.ExtractJSON(payload.SystemPrompt)), &parsedSchema); err != nil {
+					t.Fatalf("fallback <response_schema> contains invalid JSON: %v", err)
+				}
+				eduSchema := parsedSchema.Properties["education"]
+				if eduSchema == nil || eduSchema.Items == nil || eduSchema.Items.Properties["highlights"] == nil {
+					t.Errorf("fallback <response_schema> missing education[].highlights property")
+				}
+			}
+
+			if !strings.Contains(payload.SystemPrompt, "expert resume parsing engine") {
+				t.Errorf("system prompt missing parser persona")
+			}
+			if !strings.Contains(payload.SystemPrompt, "basics: { name, label, email, phone, url, summary") {
+				t.Errorf("system prompt missing basics outline in <json_schema_hints>")
+			}
+
+			instructions := strings.ToLower(extractTaggedSection(t, payload.SystemPrompt, "instructions"))
+			for _, term := range []string{
+				"highlights",
+				"work",
+				"projects",
+				"education",
+				"volunteer",
+				"awards",
+				"summary",
+				"description",
+				"metrics",
+				"honors",
+				"[]",
+				"hallucinat",
+			} {
+				if !strings.Contains(instructions, term) {
+					t.Errorf("<instructions> missing expected term %q in:\n%s", term, instructions)
+				}
+			}
+
+			hints := extractTaggedSection(t, payload.SystemPrompt, "json_schema_hints")
+			if !strings.Contains(hints, "volunteer:") {
+				t.Errorf("<json_schema_hints> missing volunteer section:\n%s", hints)
+			}
+			if !strings.Contains(hints, "awards:") {
+				t.Errorf("<json_schema_hints> missing awards section:\n%s", hints)
+			}
+			eduLineStart := strings.Index(hints, "- education:")
+			if eduLineStart == -1 {
+				t.Fatalf("<json_schema_hints> missing education line:\n%s", hints)
+			}
+			eduLine := hints[eduLineStart:]
+			if nl := strings.Index(eduLine, "\n"); nl != -1 {
+				eduLine = eduLine[:nl]
+			}
+			if !strings.Contains(eduLine, "highlights: [string]") {
+				t.Errorf("<json_schema_hints> education line missing highlights: [string]: %s", eduLine)
+			}
+
+			if !strings.Contains(payload.UserPrompt, "<raw_resume_text>\n"+strings.TrimSpace(rawResume)+"\n</raw_resume_text>") {
+				t.Errorf("user prompt missing trimmed <raw_resume_text> block, got:\n%s", payload.UserPrompt)
+			}
+			lowerUser := strings.ToLower(payload.UserPrompt)
+			for _, term := range []string{"basics", "work", "volunteer", "education", "awards", "highlights", "[]"} {
+				if !strings.Contains(lowerUser, term) {
+					t.Errorf("user prompt missing expected guidance term %q:\n%s", term, payload.UserPrompt)
+				}
+			}
+		})
+	}
+}

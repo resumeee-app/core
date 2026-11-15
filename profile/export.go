@@ -16,15 +16,15 @@ func FromSnapshot(snapshot *core.MainProfileSnapshot) (*core.JSONResume, error) 
 		return nil, core.ErrValidation
 	}
 
-	expFactsMap, projFactsMap := indexSnapshotFacts(snapshot.Facts)
+	factIndex := indexSnapshotFacts(snapshot.Facts)
 	res := &core.JSONResume{
 		Schema:       defaultSchemaURL,
 		Basics:       basicsFromProfile(&snapshot.Profile),
-		Work:         workFromSnapshot(snapshot.Experiences, expFactsMap),
-		Education:    educationFromSnapshot(snapshot.Education),
+		Work:         workFromSnapshot(snapshot.Experiences, factIndex.experiences),
+		Education:    educationFromSnapshot(snapshot.Education, factIndex.education),
 		Certificates: certsFromSnapshot(snapshot.Certifications),
 		Skills:       skillsFromSnapshot(snapshot.AllSkills()),
-		Projects:     projectsFromSnapshot(snapshot.Projects, projFactsMap),
+		Projects:     projectsFromSnapshot(snapshot.Projects, factIndex.projects),
 	}
 
 	applyUnmappedMetadata(snapshot.Profile.Metadata, res)
@@ -68,19 +68,46 @@ func basicsFromProfile(profile *core.Profile) core.JSONResumeBasics {
 	return basics
 }
 
+// snapshotFactIndex groups standalone snapshot fact statements by polymorphic owner type and owner ID.
+type snapshotFactIndex struct {
+	experiences map[string][]string
+	projects    map[string][]string
+	education   map[string][]string
+}
+
 // indexSnapshotFacts groups standalone fact statements by owner ID as a fallback for empty nested Facts slices.
-func indexSnapshotFacts(facts []core.Fact) (map[string][]string, map[string][]string) {
-	expFacts := make(map[string][]string)
-	projFacts := make(map[string][]string)
+func indexSnapshotFacts(facts []core.Fact) snapshotFactIndex {
+	idx := snapshotFactIndex{
+		experiences: make(map[string][]string),
+		projects:    make(map[string][]string),
+		education:   make(map[string][]string),
+	}
 	for _, f := range facts {
 		switch f.OwnerType {
 		case core.OwnerTypeWorkExperience:
-			expFacts[f.OwnerID] = append(expFacts[f.OwnerID], f.Statement)
+			idx.experiences[f.OwnerID] = append(idx.experiences[f.OwnerID], f.Statement)
 		case core.OwnerTypeProject:
-			projFacts[f.OwnerID] = append(projFacts[f.OwnerID], f.Statement)
+			idx.projects[f.OwnerID] = append(idx.projects[f.OwnerID], f.Statement)
+		case core.OwnerTypeEducation:
+			idx.education[f.OwnerID] = append(idx.education[f.OwnerID], f.Statement)
 		}
 	}
-	return expFacts, projFacts
+	return idx
+}
+
+// collectHighlights extracts statement strings from inline facts, falling back to snapshot-level statements when inline facts are empty.
+func collectHighlights(facts []core.Fact, fallback []string) []string {
+	if len(facts) == 0 {
+		if len(fallback) == 0 {
+			return nil
+		}
+		return fallback
+	}
+	highlights := make([]string, len(facts))
+	for i, f := range facts {
+		highlights[i] = f.Statement
+	}
+	return highlights
 }
 
 // formatOptionalDate returns the serialized date string or "" when d is nil or zero.
@@ -100,14 +127,7 @@ func workFromSnapshot(experiences []core.WorkExperience, expFactsMap map[string]
 			endDate = formatOptionalDate(exp.EndDate)
 		}
 
-		var highlights []string
-		if len(exp.Facts) > 0 {
-			for _, f := range exp.Facts {
-				highlights = append(highlights, f.Statement)
-			}
-		} else {
-			highlights = expFactsMap[exp.ID]
-		}
+		highlights := collectHighlights(exp.Facts, expFactsMap[exp.ID])
 
 		urlStr := ""
 		locStr := exp.Location.City
@@ -139,14 +159,7 @@ func workFromSnapshot(experiences []core.WorkExperience, expFactsMap map[string]
 func projectsFromSnapshot(projects []core.Project, projFactsMap map[string][]string) []core.JSONResumeProject {
 	projList := make([]core.JSONResumeProject, len(projects))
 	for i, proj := range projects {
-		var highlights []string
-		if len(proj.Facts) > 0 {
-			for _, f := range proj.Facts {
-				highlights = append(highlights, f.Statement)
-			}
-		} else {
-			highlights = projFactsMap[proj.ID]
-		}
+		highlights := collectHighlights(proj.Facts, projFactsMap[proj.ID])
 
 		var roles, keywords []string
 		var entity, pType string
@@ -181,7 +194,7 @@ func projectsFromSnapshot(projects []core.Project, projFactsMap map[string][]str
 }
 
 // educationFromSnapshot exports snapshot Education items as JSON Resume education entries.
-func educationFromSnapshot(edus []core.Education) []core.JSONResumeEducation {
+func educationFromSnapshot(edus []core.Education, eduFactsMap map[string][]string) []core.JSONResumeEducation {
 	eduList := make([]core.JSONResumeEducation, len(edus))
 	for i, edu := range edus {
 		urlStr := ""
@@ -202,6 +215,7 @@ func educationFromSnapshot(edus []core.Education) []core.JSONResumeEducation {
 			EndDate:     formatOptionalDate(edu.EndDate),
 			Score:       edu.Score,
 			Courses:     courses,
+			Highlights:  collectHighlights(edu.Facts, eduFactsMap[edu.ID]),
 		}
 	}
 	return eduList

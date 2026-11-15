@@ -35,6 +35,8 @@ func ToSnapshotWithGlobalSkills(resume *core.JSONResume, userID string, existing
 	allFacts = append(allFacts, expFacts...)
 	projects, projFacts := buildProjectsFromResume(resume.Projects, userID, matcher, now)
 	allFacts = append(allFacts, projFacts...)
+	educations, eduFacts := buildEducationFromResume(resume.Education, userID, matcher, now)
+	allFacts = append(allFacts, eduFacts...)
 
 	return &core.MainProfileSnapshot{
 		Profile:        prof,
@@ -42,7 +44,7 @@ func ToSnapshotWithGlobalSkills(resume *core.JSONResume, userID string, existing
 		Skills:         skills,
 		Experiences:    experiences,
 		Projects:       projects,
-		Education:      buildEducationFromResume(resume.Education, userID, now),
+		Education:      educations,
 		Certifications: buildCertsFromResume(resume.Certificates, userID, now),
 		Facts:          allFacts,
 		ExportedAt:     now,
@@ -324,10 +326,13 @@ func buildProjectsFromResume(rawProjects []core.JSONResumeProject, userID string
 	return projects, allFacts
 }
 
-// buildEducationFromResume maps JSON Resume education items into domain Education entries.
-func buildEducationFromResume(rawEdu []core.JSONResumeEducation, userID string, now time.Time) []core.Education {
+// buildEducationFromResume maps JSON Resume education items into domain Education entries and child facts.
+func buildEducationFromResume(rawEdu []core.JSONResumeEducation, userID string, matcher *skillMatcher, now time.Time) ([]core.Education, []core.Fact) {
 	educations := make([]core.Education, len(rawEdu))
+	var allFacts []core.Fact
+
 	for i, e := range rawEdu {
+		eduID := core.GenerateID("edu")
 		endDate, _ := parseEndDate(e.EndDate)
 		eduMeta := make(map[string]any)
 		if e.URL != "" {
@@ -337,8 +342,11 @@ func buildEducationFromResume(rawEdu []core.JSONResumeEducation, userID string, 
 			eduMeta["courses"] = e.Courses
 		}
 
+		eduFacts := buildFactsForHighlights(e.Highlights, userID, eduID, core.OwnerTypeEducation, matcher, now)
+		allFacts = append(allFacts, eduFacts...)
+
 		educations[i] = core.Education{
-			ID:          core.GenerateID("edu"),
+			ID:          eduID,
 			ShortID:     core.GenerateShortID("edu"),
 			UserID:      userID,
 			Institution: e.Institution,
@@ -347,12 +355,13 @@ func buildEducationFromResume(rawEdu []core.JSONResumeEducation, userID string, 
 			StartDate:   parseOptionalDate(e.StartDate),
 			EndDate:     endDate,
 			Score:       e.Score,
+			Facts:       eduFacts,
 			Metadata:    eduMeta,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
 	}
-	return educations
+	return educations, allFacts
 }
 
 // buildCertsFromResume maps JSON Resume certificate entries into domain Certifications.

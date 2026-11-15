@@ -29,15 +29,22 @@ func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*core.
 	return res, nil
 }
 
+// bulletTexts extracts plain text strings from tailored bullets, returning nil when bullets is empty.
+func bulletTexts(bullets []core.TailoredBullet) []string {
+	if len(bullets) == 0 {
+		return nil
+	}
+	texts := make([]string, len(bullets))
+	for i, b := range bullets {
+		texts[i] = b.Text
+	}
+	return texts
+}
+
 // workFromTailored maps tailored experiences into JSON Resume work entries.
 func workFromTailored(experiences []core.TailoredExperience) []core.JSONResumeWork {
 	workList := make([]core.JSONResumeWork, len(experiences))
 	for i, exp := range experiences {
-		var highlights []string
-		for _, b := range exp.Bullets {
-			highlights = append(highlights, b.Text)
-		}
-
 		loc := exp.Location.City
 		if loc == "" {
 			loc = exp.CompanyLocation.City
@@ -50,7 +57,7 @@ func workFromTailored(experiences []core.TailoredExperience) []core.JSONResumeWo
 			StartDate:  exp.StartDate.String(),
 			EndDate:    formatOptionalDate(exp.EndDate),
 			Summary:    exp.DutiesSummary,
-			Highlights: highlights,
+			Highlights: bulletTexts(exp.Bullets),
 			Location:   loc,
 		}
 	}
@@ -61,10 +68,6 @@ func workFromTailored(experiences []core.TailoredExperience) []core.JSONResumeWo
 func projectsFromTailored(projects []core.TailoredProject) []core.JSONResumeProject {
 	projList := make([]core.JSONResumeProject, len(projects))
 	for i, proj := range projects {
-		var highlights []string
-		for _, b := range proj.Bullets {
-			highlights = append(highlights, b.Text)
-		}
 		var roles []string
 		if proj.Role != "" {
 			roles = []string{proj.Role}
@@ -73,7 +76,7 @@ func projectsFromTailored(projects []core.TailoredProject) []core.JSONResumeProj
 		projList[i] = core.JSONResumeProject{
 			Name:        proj.Name,
 			Description: proj.Summary,
-			Highlights:  highlights,
+			Highlights:  bulletTexts(proj.Bullets),
 			StartDate:   formatOptionalDate(proj.StartDate),
 			EndDate:     formatOptionalDate(proj.EndDate),
 			URL:         proj.URL,
@@ -94,6 +97,7 @@ func educationFromTailored(edus []core.TailoredEducation) []core.JSONResumeEduca
 			StartDate:   formatOptionalDate(edu.StartDate),
 			EndDate:     formatOptionalDate(edu.EndDate),
 			Score:       edu.Score,
+			Highlights:  bulletTexts(edu.Bullets),
 		}
 	}
 	return eduList

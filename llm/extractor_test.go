@@ -2,7 +2,9 @@ package llm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -412,4 +414,173 @@ func (c *unstructuredCatalogCompleter) Complete(_ context.Context, req llm.Compl
 	c.lastSysPrompt = req.SystemPrompt
 	c.lastSchema = req.Schema
 	return c.response, core.TokenUsage{PromptTokens: 12, CompletionTokens: 7, TotalTokens: 19}, nil
+}
+
+// assertSchemaSectionHasNonNullableHighlights verifies section[].highlights exists and is non-nullable when checkStrict is true.
+func assertSchemaSectionHasNonNullableHighlights(t *testing.T, schema *llm.Schema, section string, checkStrict bool) {
+	t.Helper()
+	if schema == nil {
+		t.Fatalf("schema is nil checking %s[].highlights", section)
+	}
+	sec := schema.Properties[section]
+	if sec == nil || sec.Items == nil {
+		t.Fatalf("schema missing %s array items", section)
+	}
+	hl := sec.Items.Properties["highlights"]
+	if hl == nil {
+		t.Fatalf("schema missing %s[].highlights property", section)
+	}
+	if !hl.Type.Contains(llm.TypeArray) {
+		t.Errorf("%s[].highlights expected array type, got %v", section, hl.Type)
+	}
+	if checkStrict && isPropertyNullable(hl) {
+		t.Errorf("%s[].highlights must remain non-nullable in Strict() schema, got %+v", section, hl)
+	}
+}
+
+// TestResumeExtractor_ExtractsSectionHighlights verifies structured and fallback extraction paths
+// preserve highlight extraction prompts, schema contracts, and decoded section highlights.
+func TestResumeExtractor_ExtractsSectionHighlights(t *testing.T) {
+	rawResumeText := `Alex Mercer - Staff Engineer
+Work: CloudScale Inc (2021-Present)
+- Reduced p99 replication latency by 45%
+Projects: MiniRaft
+- Passed Jepsen deterministic fault-injection suite
+Education: University of Washington, B.S. Computer Science
+- Summa Cum Laude
+- Senior thesis on Byzantine quorum reconfiguration
+Volunteer: CodeForAll Mentor
+- Coached 12 first-generation engineering students`
+
+	fullResumeJSON := `{
+		"basics": {"name": "Alex Mercer", "summary": "Staff systems engineer."},
+		"work": [{
+			"name": "CloudScale Inc",
+			"position": "Staff Engineer",
+			"summary": "Distributed storage engineering.",
+			"highlights": ["Reduced p99 replication latency by 45%"]
+		}],
+		"projects": [{
+			"name": "MiniRaft",
+			"description": "Educational Raft implementation in Go.",
+			"highlights": ["Passed Jepsen deterministic fault-injection suite"],
+			"keywords": ["Go", "Raft"]
+		}],
+		"education": [{
+			"institution": "University of Washington",
+			"area": "Computer Science",
+			"studyType": "B.S.",
+			"courses": ["Distributed Systems"],
+			"highlights": ["Summa Cum Laude", "Senior thesis on Byzantine quorum reconfiguration"]
+		}],
+		"volunteer": [{
+			"organization": "CodeForAll",
+			"position": "Mentor",
+			"summary": "Community engineering mentorship.",
+			"highlights": ["Coached 12 first-generation engineering students"]
+		}]
+	}`
+
+	highlightedSections := []string{"work", "projects", "education", "volunteer"}
+
+	t.Run("structured registry provider OpenAI", func(t *testing.T) {
+		stub := &transportStubClient{
+			name:       llm.ProviderOpenAI,
+			structured: true,
+			responses:  []string{fullResumeJSON},
+		}
+		reg := llm.NewRegistry()
+		reg.Register(stub)
+		ext := llm.NewRegistryExtractor(reg)
+
+		res, _, err := ext.ExtractResume(context.Background(), rawResumeText, llm.ProviderOpenAI, "gpt-4o")
+		if err != nil {
+			t.Fatalf("ExtractResume failed: %v", err)
+		}
+		if len(stub.reqs) != 1 {
+			t.Fatalf("expected 1 transport request, got %d", len(stub.reqs))
+		}
+
+		req := stub.reqs[0]
+		if strings.Contains(req.SystemPrompt, "<response_schema>") {
+			t.Errorf("structured provider must omit inline <response_schema>")
+		}
+		for _, term := range []string{"<instructions>", "<json_schema_hints>", "highlights", "volunteer", "education", "awards"} {
+			if !strings.Contains(strings.ToLower(req.SystemPrompt), term) {
+				t.Errorf("structured system prompt missing %q", term)
+			}
+		}
+		if !strings.Contains(strings.ToLower(req.UserPrompt), "highlights") {
+			t.Errorf("structured user prompt missing highlights guidance")
+		}
+
+		if req.ResponseSchema == nil {
+			t.Fatal("expected ResponseSchema attached for structured provider")
+		}
+		strict := req.ResponseSchema.Strict()
+		for _, section := range highlightedSections {
+			assertSchemaSectionHasNonNullableHighlights(t, strict, section, true)
+		}
+
+		assertDecodedSectionHighlights(t, res)
+	})
+
+	t.Run("unstructured fallback registry provider Compat", func(t *testing.T) {
+		stub := &transportStubClient{
+			name:       llm.ProviderCompat,
+			structured: false,
+			responses:  []string{fullResumeJSON},
+		}
+		reg := llm.NewRegistry()
+		reg.Register(stub)
+		ext := llm.NewRegistryExtractor(reg)
+
+		res, _, err := ext.ExtractResume(context.Background(), rawResumeText, llm.ProviderCompat, "local-model")
+		if err != nil {
+			t.Fatalf("ExtractResume failed: %v", err)
+		}
+		if len(stub.reqs) != 1 {
+			t.Fatalf("expected 1 transport request, got %d", len(stub.reqs))
+		}
+
+		req := stub.reqs[0]
+		if req.ResponseSchema != nil {
+			t.Errorf("fallback provider must leave ResponseSchema nil, got %+v", req.ResponseSchema)
+		}
+		if strings.Count(req.SystemPrompt, "<response_schema>") != 1 {
+			t.Fatalf("fallback provider must append single <response_schema>")
+		}
+		var embeddedSchema llm.Schema
+		if err := json.Unmarshal([]byte(llm.ExtractJSON(req.SystemPrompt)), &embeddedSchema); err != nil {
+			t.Fatalf("failed to parse fallback <response_schema>: %v", err)
+		}
+		for _, section := range highlightedSections {
+			assertSchemaSectionHasNonNullableHighlights(t, &embeddedSchema, section, false)
+		}
+		if !strings.Contains(strings.ToLower(req.UserPrompt), "highlights") {
+			t.Errorf("fallback user prompt missing highlights guidance")
+		}
+
+		assertDecodedSectionHighlights(t, res)
+	})
+}
+
+// assertDecodedSectionHighlights verifies decoded JSONResume retains section highlights across work, projects, education, and volunteer.
+func assertDecodedSectionHighlights(t *testing.T, res *core.JSONResume) {
+	t.Helper()
+	if res == nil {
+		t.Fatal("expected non-nil decoded JSONResume")
+	}
+	if len(res.Work) != 1 || !slices.Equal(res.Work[0].Highlights, []string{"Reduced p99 replication latency by 45%"}) {
+		t.Errorf("unexpected Work highlights: %+v", res.Work)
+	}
+	if len(res.Projects) != 1 || !slices.Equal(res.Projects[0].Highlights, []string{"Passed Jepsen deterministic fault-injection suite"}) {
+		t.Errorf("unexpected Projects highlights: %+v", res.Projects)
+	}
+	if len(res.Education) != 1 || !slices.Equal(res.Education[0].Highlights, []string{"Summa Cum Laude", "Senior thesis on Byzantine quorum reconfiguration"}) {
+		t.Errorf("unexpected Education highlights: %+v", res.Education)
+	}
+	if len(res.Volunteer) != 1 || !slices.Equal(res.Volunteer[0].Highlights, []string{"Coached 12 first-generation engineering students"}) {
+		t.Errorf("unexpected Volunteer highlights: %+v", res.Volunteer)
+	}
 }

@@ -728,3 +728,38 @@ func TestDomain_TenantQuota_Methods(t *testing.T) {
 		}
 	})
 }
+
+func TestNormalizePromptWorkflow(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   core.PromptWorkflow
+		want    core.PromptWorkflow
+		wantErr bool
+	}{
+		{name: "empty defaults to tailoring", input: "", want: core.PromptWorkflowTailoring},
+		{name: "tailor alias normalizes", input: " Tailor ", want: core.PromptWorkflowTailoring},
+		{name: "tailoring canonical", input: core.PromptWorkflowTailoring, want: core.PromptWorkflowTailoring},
+		{name: "gap analysis", input: "GAP_ANALYSIS", want: core.PromptWorkflowGapAnalysis},
+		{name: "ats extraction", input: core.PromptWorkflowATSExtraction, want: core.PromptWorkflowATSExtraction},
+		{name: "ats matching", input: core.PromptWorkflowATSMatching, want: core.PromptWorkflowATSMatching},
+		{name: "unknown fails validation", input: "unknown_workflow", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := core.NormalizePromptWorkflow(tc.input)
+			if tc.wantErr {
+				if !errors.Is(err, core.ErrValidation) {
+					t.Fatalf("expected ErrValidation for %q, got %v", tc.input, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -1341,6 +1341,190 @@ func TestService_GetPromptPreview_UnconfiguredCompiler(t *testing.T) {
 	}
 }
 
+func TestService_PromptPreview_WorkflowsBeyondTailoring(t *testing.T) {
+	ctx := context.Background()
+	env := setupTestBranchEnv(t, 10)
+
+	renderedMD := "# Ada Lovelace\n- Built analytical engines in Go"
+	v1, err := env.svc.Version(ctx, env.branchID, env.v1ID)
+	if err != nil {
+		t.Fatalf("Version v1 failed: %v", err)
+	}
+	v1.MarkdownOutput = renderedMD
+	v1.ATSScore = &core.ATSScore{JobMatchingScore: 0.88}
+	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+		t.Fatalf("CompleteVersion v1 failed: %v", err)
+	}
+
+	pendingVer := &core.BranchVersion{
+		ID:       "ver-pending-preview",
+		BranchID: env.branchID,
+		Status:   core.VersionStatusPending,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, pendingVer); err != nil {
+		t.Fatalf("CreateVersion(pending) failed: %v", err)
+	}
+
+	explicitVer := &core.BranchVersion{
+		ID:            "ver-explicit-preview",
+		BranchID:      env.branchID,
+		VersionNumber: 2,
+		Status:        core.VersionStatusCompleted,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, explicitVer); err != nil {
+		t.Fatalf("CreateVersion(explicit) failed: %v", err)
+	}
+	explicitVer.PlainTextOutput = "Explicit plain text resume"
+	if err := env.branchRepo.CompleteVersion(ctx, explicitVer); err != nil {
+		t.Fatalf("CompleteVersion(explicit) failed: %v", err)
+	}
+
+	b, err := env.svc.Branch(ctx, env.defaultUser, env.branchID)
+	if err != nil {
+		t.Fatalf("Branch failed: %v", err)
+	}
+	b.ActiveVersionID = &v1.ID
+	if _, err := env.svc.UpdateBranch(ctx, b); err != nil {
+		t.Fatalf("UpdateBranch failed: %v", err)
+	}
+
+	noVersionBranch, err := env.svc.CreateBranch(ctx, &core.Branch{
+		UserID:        env.defaultUser,
+		Name:          "No Version Branch",
+		TargetRole:    "Staff Engineer",
+		TemplateSetID: core.TemplateStandardCleanID,
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch(noVersionBranch) failed: %v", err)
+	}
+
+	draftRole := "Principal Systems Engineer"
+	draftReqs := "Strong Go concurrency experience"
+
+	cases := []struct {
+		name        string
+		branchID    string
+		opts        *core.PromptPreviewOptions
+		wantSysSub  string
+		wantUserSub string
+		wantErr     error
+	}{
+		{
+			name:     "gap analysis workflow compiles with draft overrides",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:           core.PromptWorkflowGapAnalysis,
+				TargetRole:         &draftRole,
+				TargetRequirements: &draftReqs,
+			},
+			wantSysSub:  "Workflow: gap_analysis",
+			wantUserSub: draftRole,
+		},
+		{
+			name:     "ats extraction workflow compiles from completed branch version even when already scored",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow: core.PromptWorkflowATSExtraction,
+				Format:   string(core.OutputFormatMarkdown),
+			},
+			wantSysSub:  "Workflow: ats_extraction",
+			wantUserSub: "Built analytical engines in Go",
+		},
+		{
+			name:     "ats extraction workflow supports explicit VersionID override",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:  core.PromptWorkflowATSExtraction,
+				VersionID: explicitVer.ID,
+				Format:    string(core.OutputFormatPlainText),
+			},
+			wantSysSub:  "Format: text",
+			wantUserSub: "Explicit plain text resume",
+		},
+		{
+			name:     "ats extraction workflow compiles from draft resume text",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:   core.PromptWorkflowATSExtraction,
+				Format:     string(core.OutputFormatPlainText),
+				ResumeText: "Draft resume plain text",
+			},
+			wantSysSub:  "Format: text",
+			wantUserSub: "Draft resume plain text",
+		},
+		{
+			name:     "ats extraction workflow rejects pending version",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:  core.PromptWorkflowATSExtraction,
+				VersionID: pendingVer.ID,
+			},
+			wantErr: core.ErrValidation,
+		},
+		{
+			name:     "ats extraction workflow rejects branch missing both version and draft text",
+			branchID: noVersionBranch.ID,
+			opts: &core.PromptPreviewOptions{
+				Workflow: core.PromptWorkflowATSExtraction,
+			},
+			wantErr: core.ErrValidation,
+		},
+		{
+			name:     "ats extraction workflow rejects unsupported draft format",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:   core.PromptWorkflowATSExtraction,
+				Format:     "docx",
+				ResumeText: "Draft resume text",
+			},
+			wantErr: core.ErrValidation,
+		},
+		{
+			name:     "ats matching workflow compiles with supplied extracted candidate",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow:           core.PromptWorkflowATSMatching,
+				TargetRequirements: &draftReqs,
+				ExtractedCandidate: &core.ATSExtractedCandidate{
+					Summary: "Distributed systems specialist",
+					Skills:  []string{"Go"},
+				},
+			},
+			wantSysSub:  "Workflow: ats_matching",
+			wantUserSub: "Distributed systems specialist",
+		},
+		{
+			name:     "unsupported workflow returns validation error",
+			branchID: env.branchID,
+			opts: &core.PromptPreviewOptions{
+				Workflow: "unsupported",
+			},
+			wantErr: core.ErrValidation,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prev, err := env.svc.PromptPreview(ctx, env.defaultUser, tc.branchID, tc.opts)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PromptPreview failed: %v", err)
+			}
+			if !strings.Contains(prev.SystemPrompt, tc.wantSysSub) {
+				t.Errorf("SystemPrompt missing %q:\n%s", tc.wantSysSub, prev.SystemPrompt)
+			}
+			if !strings.Contains(prev.UserPrompt, tc.wantUserSub) {
+				t.Errorf("UserPrompt missing %q:\n%s", tc.wantUserSub, prev.UserPrompt)
+			}
+		})
+	}
+}
+
 type spyQuotaRepo struct {
 	mu           sync.Mutex
 	reservations []struct {

@@ -61,6 +61,9 @@ type Generator interface {
 // PromptCompiler compiles sanitized LLM prompt previews without invoking a provider.
 type PromptCompiler interface {
 	CompilePrompt(req core.GenerationRequest) (*core.PromptPreview, error)
+	CompileGapAnalysisPrompt(req core.GenerationRequest) (*core.PromptPreview, error)
+	CompileATSExtractionPrompt(req core.ATSSimulationRequest) (*core.PromptPreview, error)
+	CompileATSMatchingPrompt(branch core.Branch, profile *core.MainProfileSnapshot, extracted *core.ATSExtractedCandidate) (*core.PromptPreview, error)
 }
 
 // ProvenanceValidator verifies manual edits against the candidate's canonical snapshot.

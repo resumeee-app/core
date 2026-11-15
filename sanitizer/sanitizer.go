@@ -463,6 +463,19 @@ func (s *Session) ObfuscatePriorVersion(prior *core.TailoredContent) *core.Tailo
 	return res
 }
 
+// ObfuscateBranchContext returns a copy of branch with candidate contact PII scrubbed from
+// free-text prompt fields while intentionally preserving TargetCompany as non-PII entity metadata.
+func (s *Session) ObfuscateBranchContext(branch core.Branch) core.Branch {
+	if s == nil {
+		return branch
+	}
+	res := branch
+	res.TargetRole = s.ObfuscateString(res.TargetRole)
+	res.TargetRequirements = s.ObfuscateString(res.TargetRequirements)
+	res.BranchInstructions = s.ObfuscateString(res.BranchInstructions)
+	return res
+}
+
 // ObfuscateRequest returns a shallow copy of req with copy-on-write clones of MainProfile and
 // PriorVersion and PII scrubbed from free-text prompt fields. Unscrubbed slices and pointers on
 // req (such as Preset and BranchContext.PinnedEntityIDs) share backing storage with req.
@@ -472,10 +485,7 @@ func (s *Session) ObfuscateRequest(req core.GenerationRequest) core.GenerationRe
 	res.PriorVersion = s.ObfuscatePriorVersion(req.PriorVersion)
 	res.GlobalRules = s.ObfuscateString(req.GlobalRules)
 	res.PresetInstructions = s.ObfuscateString(req.PresetInstructions)
-
-	res.BranchContext.TargetRole = s.ObfuscateString(res.BranchContext.TargetRole)
-	res.BranchContext.TargetRequirements = s.ObfuscateString(res.BranchContext.TargetRequirements)
-	res.BranchContext.BranchInstructions = s.ObfuscateString(res.BranchContext.BranchInstructions)
+	res.BranchContext = s.ObfuscateBranchContext(res.BranchContext)
 
 	return res
 }

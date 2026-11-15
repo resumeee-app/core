@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -170,15 +172,52 @@ type PromptPreview struct {
 	UserPrompt   string `json:"user_prompt"`
 }
 
-// PromptPreviewOptions encapsulates optional draft modifications when previewing prompt compilation.
+// PromptWorkflow identifies which LLM workflow a dry-run prompt preview compiles.
+type PromptWorkflow string
+
+// Supported prompt workflows for dry-run prompt previews.
+const (
+	// PromptWorkflowTailoring previews resume tailoring prompts (default).
+	PromptWorkflowTailoring PromptWorkflow = "tailoring"
+	// PromptWorkflowGapAnalysis previews qualification gap-analysis prompts.
+	PromptWorkflowGapAnalysis PromptWorkflow = "gap_analysis"
+	// PromptWorkflowATSExtraction previews Stage 1 ATS resume extraction prompts.
+	PromptWorkflowATSExtraction PromptWorkflow = "ats_extraction"
+	// PromptWorkflowATSMatching previews Stage 2 ATS job matching prompts.
+	PromptWorkflowATSMatching PromptWorkflow = "ats_matching"
+)
+
+// NormalizePromptWorkflow canonicalizes raw to a supported PromptWorkflow and defaults empty inputs to tailoring.
+func NormalizePromptWorkflow(raw PromptWorkflow) (PromptWorkflow, error) {
+	normalized := PromptWorkflow(strings.ToLower(strings.TrimSpace(string(raw))))
+	switch normalized {
+	case "", "tailor", PromptWorkflowTailoring:
+		return PromptWorkflowTailoring, nil
+	case PromptWorkflowGapAnalysis:
+		return PromptWorkflowGapAnalysis, nil
+	case PromptWorkflowATSExtraction:
+		return PromptWorkflowATSExtraction, nil
+	case PromptWorkflowATSMatching:
+		return PromptWorkflowATSMatching, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported prompt workflow %q", ErrValidation, raw)
+	}
+}
+
+// PromptPreviewOptions encapsulates optional workflow selection and draft modifications when previewing prompt compilation.
 type PromptPreviewOptions struct {
-	TargetRole         *string  `json:"target_role,omitempty"`
-	TargetCompany      *string  `json:"target_company,omitempty"`
-	TargetRequirements *string  `json:"target_requirements,omitempty"`
-	BranchInstructions *string  `json:"branch_instructions,omitempty"`
-	PresetID           *string  `json:"preset_id,omitempty"`
-	PinnedEntityIDs    []string `json:"pinned_entity_ids,omitempty"`
-	ExcludedEntityIDs  []string `json:"excluded_entity_ids,omitempty"`
+	Workflow           PromptWorkflow         `json:"workflow,omitempty"`
+	TargetRole         *string                `json:"target_role,omitempty"`
+	TargetCompany      *string                `json:"target_company,omitempty"`
+	TargetRequirements *string                `json:"target_requirements,omitempty"`
+	BranchInstructions *string                `json:"branch_instructions,omitempty"`
+	PresetID           *string                `json:"preset_id,omitempty"`
+	PinnedEntityIDs    []string               `json:"pinned_entity_ids,omitempty"`
+	ExcludedEntityIDs  []string               `json:"excluded_entity_ids,omitempty"`
+	VersionID          string                 `json:"version_id,omitempty"`
+	Format             string                 `json:"format,omitempty"`
+	ResumeText         string                 `json:"resume_text,omitempty"`
+	ExtractedCandidate *ATSExtractedCandidate `json:"extracted_candidate,omitempty"`
 }
 
 // BranchStore defines persistence operations for Tier-3 targeted resumes and immutable versions.

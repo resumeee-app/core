@@ -945,6 +945,73 @@ func TestJSONResume_Import_GeneratesShortIDs(t *testing.T) {
 	}
 }
 
+func TestJSONResume_ImportYearOnlyAndExpectedDates(t *testing.T) {
+	// Extraction schemas permit "YYYY" and "Expected YYYY" dates; a past role with a year-only
+	// end date must not be misclassified as current, and year-only dates must not be dropped.
+	rawImport := []byte(`{
+		"basics": { "name": "Year Only" },
+		"work": [
+			{ "name": "Past Corp", "position": "Engineer", "startDate": "2018", "endDate": "2021" }
+		],
+		"projects": [
+			{ "name": "Side Project", "startDate": "2019", "endDate": "2020" }
+		],
+		"education": [
+			{ "institution": "State U", "studyType": "BSc", "area": "CS", "startDate": "2022", "endDate": "Expected 2026" }
+		],
+		"certificates": [
+			{ "name": "CKA", "issuer": "CNCF", "date": "2021" }
+		]
+	}`)
+
+	var parsed core.JSONResume
+	if err := json.Unmarshal(rawImport, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+	snap, err := profile.ToSnapshot(&parsed, "user-1", nil, 1)
+	if err != nil {
+		t.Fatalf("ToSnapshot failed: %v", err)
+	}
+
+	if len(snap.Experiences) != 1 {
+		t.Fatalf("expected 1 experience, got %d", len(snap.Experiences))
+	}
+	exp := snap.Experiences[0]
+	if exp.IsCurrent {
+		t.Error("expected past role with year-only end date to not be current")
+	}
+	if exp.StartDate.String() != "2018-01-01" {
+		t.Errorf("expected experience StartDate '2018-01-01', got %q", exp.StartDate.String())
+	}
+	if exp.EndDate == nil || exp.EndDate.String() != "2021-01-01" {
+		t.Errorf("expected experience EndDate '2021-01-01', got %v", exp.EndDate)
+	}
+
+	if len(snap.Projects) != 1 {
+		t.Fatalf("expected 1 project, got %d", len(snap.Projects))
+	}
+	if snap.Projects[0].StartDate == nil || snap.Projects[0].StartDate.String() != "2019-01-01" {
+		t.Errorf("expected project StartDate '2019-01-01', got %v", snap.Projects[0].StartDate)
+	}
+	if snap.Projects[0].EndDate == nil || snap.Projects[0].EndDate.String() != "2020-01-01" {
+		t.Errorf("expected project EndDate '2020-01-01', got %v", snap.Projects[0].EndDate)
+	}
+
+	if len(snap.Education) != 1 {
+		t.Fatalf("expected 1 education, got %d", len(snap.Education))
+	}
+	if snap.Education[0].EndDate == nil || snap.Education[0].EndDate.String() != "2026-01-01" {
+		t.Errorf("expected education EndDate '2026-01-01' from 'Expected 2026', got %v", snap.Education[0].EndDate)
+	}
+
+	if len(snap.Certifications) != 1 {
+		t.Fatalf("expected 1 certification, got %d", len(snap.Certifications))
+	}
+	if snap.Certifications[0].Date == nil || snap.Certifications[0].Date.String() != "2021-01-01" {
+		t.Errorf("expected certification Date '2021-01-01', got %v", snap.Certifications[0].Date)
+	}
+}
+
 func TestJSONResume_EndDatePresentHandling(t *testing.T) {
 	// 1. Verify Import: JSON Resume with "Present" end date is parsed as ongoing (nil EndDate, isCurrent = true)
 	rawImport := []byte(`{

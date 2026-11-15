@@ -156,10 +156,19 @@ type ATSSimulationRequest struct {
 	MainProfile    *MainProfileSnapshot
 }
 
-// ATSSimulationResponse wraps the two-stage ATS score evaluation and token consumption metrics.
+// ATSSimulationResponse wraps the two-stage ATS score evaluation, token consumption metrics, and call telemetry.
 type ATSSimulationResponse struct {
-	Score ATSScore   `json:"score"`
-	Usage TokenUsage `json:"usage"`
+	Score     ATSScore     `json:"score"`
+	Usage     TokenUsage   `json:"usage"`
+	Telemetry LLMTelemetry `json:"telemetry,omitempty"`
+}
+
+// EffectiveTelemetry returns r.Telemetry with Usage populated from r.Usage when Telemetry.Usage is zero.
+func (r *ATSSimulationResponse) EffectiveTelemetry() LLMTelemetry {
+	if r == nil {
+		return LLMTelemetry{}
+	}
+	return resolveResponseTelemetry(r.Telemetry, r.Usage)
 }
 
 // ATSExtractedExperience represents a work experience entry extracted by simulated ATS parsing.

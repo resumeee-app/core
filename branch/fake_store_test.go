@@ -764,29 +764,42 @@ func (s *fakeBranchStore) ReserveQuota(_ context.Context, userID string, op core
 		CreatedAt:       time.Now().UTC(),
 	}
 	s.usageRecords[rec.ID] = rec
-	return rec, nil
+	cp := *rec
+	return &cp, nil
 }
 
-func (s *fakeBranchStore) CommitUsage(_ context.Context, reservationID string, usage core.TokenUsage) error {
+func applyFakeUsageTelemetry(rec *core.LLMUsageRecord, telemetry core.LLMTelemetry) {
+	normalized := telemetry.Normalize()
+	rec.Provider = normalized.Provider
+	rec.Model = normalized.Model
+	rec.StatusCode = normalized.StatusCode
+	rec.Latency = normalized.Latency
+	rec.PromptTokens = normalized.Usage.PromptTokens
+	rec.CompletionTokens = normalized.Usage.CompletionTokens
+	rec.TotalTokens = normalized.Usage.TotalTokens
+}
+
+func (s *fakeBranchStore) CommitUsage(_ context.Context, reservationID string, telemetry core.LLMTelemetry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if rec, ok := s.usageRecords[reservationID]; ok {
 		rec.Status = core.ReservationStatusCommitted
-		rec.PromptTokens = usage.PromptTokens
-		rec.CompletionTokens = usage.CompletionTokens
-		rec.TotalTokens = usage.TotalTokens
+		applyFakeUsageTelemetry(rec, telemetry)
+		now := time.Now().UTC()
+		rec.CommittedAt = &now
 	}
 	return nil
 }
 
-func (s *fakeBranchStore) ReleaseQuota(_ context.Context, reservationID string, errMsg string) error {
+func (s *fakeBranchStore) ReleaseQuota(_ context.Context, reservationID string, errMsg string, telemetry core.LLMTelemetry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if rec, ok := s.usageRecords[reservationID]; ok {
 		rec.Status = core.ReservationStatusReleased
 		rec.ErrorMessage = errMsg
+		applyFakeUsageTelemetry(rec, telemetry)
 	}
 	return nil
 }

@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 	"github.com/resumeee-app/resumeee-core/llm/gemini"
 )
@@ -275,5 +277,358 @@ func TestGeminiClient_Complete_InteractionsSDK(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestGeminiClient_Complete_Telemetry(t *testing.T) {
+	t.Run("pre-flight nil receiver and empty key return nil response", func(t *testing.T) {
+		if resp, err := (*gemini.Client)(nil).Complete(context.Background(), llm.Request{UserPrompt: "ping"}); !errors.Is(err, llm.ErrUnauthorized) || resp != nil {
+			t.Errorf("expected (nil, ErrUnauthorized) for nil gemini.Client, got (%+v, %v)", resp, err)
+		}
+		if resp, err := gemini.New("   ").Complete(context.Background(), llm.Request{UserPrompt: "ping"}); !errors.Is(err, llm.ErrUnauthorized) || resp != nil {
+			t.Errorf("expected (nil, ErrUnauthorized) for blank gemini key, got (%+v, %v)", resp, err)
+		}
+	})
+
+	t.Run("usage extraction and model resolution", func(t *testing.T) {
+		cases := []struct {
+			name         string
+			defaultModel string
+			reqModel     string
+			body         string
+			wantModel    string
+			wantUsage    core.TokenUsage
+		}{
+			{
+				name:      "explicit total tokens preserved with provider default model",
+				body:      `{"id":"g1","status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}],"usage":{"total_input_tokens":100,"total_output_tokens":50,"total_tokens":175}}`,
+				wantModel: llm.DefaultModelForProvider(llm.ProviderGemini),
+				wantUsage: core.TokenUsage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 175},
+			},
+			{
+				name:      "omitted total tokens backfilled with explicit request model",
+				reqModel:  "  gemini-2.5-pro  ",
+				body:      `{"id":"g2","status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}],"usage":{"total_input_tokens":40,"total_output_tokens":15}}`,
+				wantModel: "gemini-2.5-pro",
+				wantUsage: core.TokenUsage{PromptTokens: 40, CompletionTokens: 15, TotalTokens: 55},
+			},
+			{
+				name:         "prompt-only usage backfilled with custom default model",
+				defaultModel: "gemini-custom",
+				body:         `{"id":"g3","status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}],"usage":{"total_input_tokens":22}}`,
+				wantModel:    "gemini-custom",
+				wantUsage:    core.TokenUsage{PromptTokens: 22, TotalTokens: 22},
+			},
+			{
+				name:      "omitted usage stays zero",
+				body:      `{"id":"g4","status":"completed","steps":[{"type":"model_output","content":[{"type":"text","text":"ok"}]}]}`,
+				wantModel: llm.DefaultModelForProvider(llm.ProviderGemini),
+				wantUsage: core.TokenUsage{},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				defer srv.Close()
+
+				opts := []gemini.Option{gemini.WithBaseURL(srv.URL), gemini.WithHTTPClient(srv.Client())}
+				if tc.defaultModel != "" {
+					opts = append(opts, gemini.WithDefaultModel(tc.defaultModel))
+				}
+				client := gemini.New("test-key", opts...)
+
+				resp, err := client.Complete(context.Background(), llm.Request{
+					Model:      tc.reqModel,
+					UserPrompt: "hello",
+				})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if resp == nil {
+					t.Fatalf("expected non-nil response")
+				}
+				if resp.Provider != llm.ProviderGemini || resp.Model != tc.wantModel || resp.StatusCode != http.StatusOK {
+					t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, 200)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderGemini, tc.wantModel)
+				}
+				if resp.Latency <= 0 {
+					t.Errorf("expected Latency > 0, got %v", resp.Latency)
+				}
+				if resp.Usage != tc.wantUsage {
+					t.Errorf("Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
+				}
+			})
+		}
+	})
+
+	t.Run("HTTP errors and 200 invalid responses populate telemetry and partial usage", func(t *testing.T) {
+		cases := []struct {
+			name        string
+			reqModel    string
+			statusCode  int
+			contentType string
+			body        string
+			wantErr     error
+			wantModel   string
+			wantUsage   core.TokenUsage
+		}{
+			{
+				name:        "400 bad request",
+				statusCode:  http.StatusBadRequest,
+				contentType: "application/json",
+				body:        `{"error":{"code":"invalid_argument","message":"bad req"}}`,
+				wantErr:     llm.ErrBadRequest,
+				wantModel:   llm.DefaultModelForProvider(llm.ProviderGemini),
+			},
+			{
+				name:        "401 unauthorized",
+				reqModel:    "gemini-2.5-pro",
+				statusCode:  http.StatusUnauthorized,
+				contentType: "application/json",
+				body:        `{"error":{"code":"unauthenticated","message":"invalid key"}}`,
+				wantErr:     llm.ErrUnauthorized,
+				wantModel:   "gemini-2.5-pro",
+			},
+			{
+				name:        "429 rate limited json",
+				statusCode:  http.StatusTooManyRequests,
+				contentType: "application/json",
+				body:        `{"error":{"code":"resource_exhausted","message":"quota exceeded"}}`,
+				wantErr:     llm.ErrRateLimited,
+				wantModel:   llm.DefaultModelForProvider(llm.ProviderGemini),
+			},
+			{
+				name:        "500 upstream error",
+				statusCode:  http.StatusInternalServerError,
+				contentType: "application/json",
+				body:        `{"error":{"code":"internal","message":"boom"}}`,
+				wantErr:     llm.ErrUpstream,
+				wantModel:   llm.DefaultModelForProvider(llm.ProviderGemini),
+			},
+			{
+				name:        "200 malformed json",
+				statusCode:  http.StatusOK,
+				contentType: "application/json",
+				body:        `{broken`,
+				wantErr:     llm.ErrInvalidResponse,
+				wantModel:   llm.DefaultModelForProvider(llm.ProviderGemini),
+			},
+			{
+				name:        "200 unexpected text content-type",
+				statusCode:  http.StatusOK,
+				contentType: "text/plain",
+				body:        `plain text`,
+				wantErr:     llm.ErrInvalidResponse,
+				wantModel:   llm.DefaultModelForProvider(llm.ProviderGemini),
+			},
+			{
+				name:        "200 failed status preserves partial usage with backfill",
+				reqModel:    "gemini-2.5-flash",
+				statusCode:  http.StatusOK,
+				contentType: "application/json",
+				body:        `{"id":"gf","status":"failed","errors":[{"code":"safety","message":"blocked"}],"usage":{"total_input_tokens":33,"total_output_tokens":7}}`,
+				wantErr:     llm.ErrInvalidResponse,
+				wantModel:   "gemini-2.5-flash",
+				wantUsage:   core.TokenUsage{PromptTokens: 33, CompletionTokens: 7, TotalTokens: 40},
+			},
+			{
+				name:        "200 incomplete status preserves explicit total usage",
+				statusCode:  http.StatusOK,
+				contentType: "application/json",
+				body:        `{"id":"gi","status":"incomplete","usage":{"total_input_tokens":50,"total_output_tokens":10,"total_tokens":65}}`,
+				wantErr:     llm.ErrInvalidResponse,
+				wantModel:   llm.DefaultModelForProvider(llm.ProviderGemini),
+				wantUsage:   core.TokenUsage{PromptTokens: 50, CompletionTokens: 10, TotalTokens: 65},
+			},
+			{
+				name:        "200 empty output preserves partial usage",
+				statusCode:  http.StatusOK,
+				contentType: "application/json",
+				body:        `{"id":"ge","status":"completed","steps":[],"usage":{"total_input_tokens":19}}`,
+				wantErr:     llm.ErrInvalidResponse,
+				wantModel:   llm.DefaultModelForProvider(llm.ProviderGemini),
+				wantUsage:   core.TokenUsage{PromptTokens: 19, TotalTokens: 19},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", tc.contentType)
+					w.WriteHeader(tc.statusCode)
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				defer srv.Close()
+
+				client := gemini.New("test-key", gemini.WithBaseURL(srv.URL), gemini.WithHTTPClient(srv.Client()))
+				resp, err := client.Complete(context.Background(), llm.Request{
+					Model:      tc.reqModel,
+					UserPrompt: "hello",
+				})
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("error = %v, want %v", err, tc.wantErr)
+				}
+				if resp == nil {
+					t.Fatalf("expected non-nil response on error")
+				}
+				if resp.Provider != llm.ProviderGemini || resp.Model != tc.wantModel || resp.StatusCode != tc.statusCode {
+					t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, %d)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderGemini, tc.wantModel, tc.statusCode)
+				}
+				if resp.Latency <= 0 {
+					t.Errorf("expected Latency > 0, got %v", resp.Latency)
+				}
+				if resp.Usage != tc.wantUsage {
+					t.Errorf("Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
+				}
+				if strings.Contains(err.Error(), "invalid key") || strings.Contains(err.Error(), "quota exceeded") || strings.Contains(err.Error(), "boom") || strings.Contains(err.Error(), "safety") {
+					t.Errorf("expected gemini error string not to echo raw upstream body/message, got %q", err.Error())
+				}
+			})
+		}
+
+		t.Run("upstream error bodies containing PII never leak into error string", func(t *testing.T) {
+			const secretPII = "SENSITIVE_GEMINI_ECHO_PII_5599"
+			for _, tc := range []struct {
+				name        string
+				statusCode  int
+				contentType string
+				body        string
+				wantErr     error
+			}{
+				{
+					name:        "json error message redacted",
+					statusCode:  http.StatusBadRequest,
+					contentType: "application/json",
+					body:        `{"error":{"code":"invalid_argument","message":"` + secretPII + `"}}`,
+					wantErr:     llm.ErrBadRequest,
+				},
+				{
+					name:        "plain text 502 error body redacted",
+					statusCode:  http.StatusBadGateway,
+					contentType: "text/plain",
+					body:        "upstream proxy failed with " + secretPII,
+					wantErr:     llm.ErrUpstream,
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("Content-Type", tc.contentType)
+						w.WriteHeader(tc.statusCode)
+						_, _ = w.Write([]byte(tc.body))
+					}))
+					defer srv.Close()
+
+					client := gemini.New("test-key", gemini.WithBaseURL(srv.URL), gemini.WithHTTPClient(srv.Client()))
+					resp, err := client.Complete(context.Background(), llm.Request{UserPrompt: "hello"})
+					if !errors.Is(err, tc.wantErr) {
+						t.Fatalf("error = %v, want %v", err, tc.wantErr)
+					}
+					if strings.Contains(err.Error(), secretPII) {
+						t.Errorf("error string leaked upstream PII: %q", err.Error())
+					}
+					if resp == nil || !strings.Contains(resp.RawBody, secretPII) {
+						t.Errorf("expected RawBody to retain raw response for in-memory diagnostics, got %+v", resp)
+					}
+				})
+			}
+		})
+	})
+
+	t.Run("timeout and transport errors return non-nil telemetry with zero status", func(t *testing.T) {
+		t.Run("context deadline exceeded", func(t *testing.T) {
+			done := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				select {
+				case <-done:
+				case <-r.Context().Done():
+				case <-time.After(500 * time.Millisecond):
+				}
+			}))
+			defer srv.Close()
+			defer close(done)
+
+			client := gemini.New("test-key", gemini.WithBaseURL(srv.URL), gemini.WithHTTPClient(srv.Client()))
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+			defer cancel()
+
+			resp, err := client.Complete(ctx, llm.Request{
+				Model:      "gemini-2.5-pro",
+				UserPrompt: "ping",
+			})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+			}
+			if resp == nil {
+				t.Fatalf("expected non-nil response on timeout")
+			}
+			if resp.Provider != llm.ProviderGemini || resp.Model != "gemini-2.5-pro" || resp.StatusCode != 0 {
+				t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, 0)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderGemini, "gemini-2.5-pro")
+			}
+			if resp.Latency <= 0 {
+				t.Errorf("expected Latency > 0, got %v", resp.Latency)
+			}
+		})
+
+		t.Run("client WithTimeout exceeded", func(t *testing.T) {
+			done := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				select {
+				case <-done:
+				case <-r.Context().Done():
+				case <-time.After(500 * time.Millisecond):
+				}
+			}))
+			defer srv.Close()
+			defer close(done)
+
+			client := gemini.New(
+				"test-key",
+				gemini.WithBaseURL(srv.URL),
+				gemini.WithHTTPClient(srv.Client()),
+				gemini.WithTimeout(15*time.Millisecond),
+			)
+			resp, err := client.Complete(context.Background(), llm.Request{
+				Model:      "gemini-2.5-flash",
+				UserPrompt: "ping",
+			})
+			if err == nil {
+				t.Fatalf("expected timeout error from WithTimeout")
+			}
+			if resp == nil {
+				t.Fatalf("expected non-nil response on client timeout")
+			}
+			if resp.Provider != llm.ProviderGemini || resp.Model != "gemini-2.5-flash" || resp.StatusCode != 0 {
+				t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, 0)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderGemini, "gemini-2.5-flash")
+			}
+			if resp.Latency <= 0 {
+				t.Errorf("expected Latency > 0, got %v", resp.Latency)
+			}
+		})
+
+		t.Run("closed server transport failure", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			srvURL := srv.URL
+			httpClient := srv.Client()
+			srv.Close()
+
+			client := gemini.New("test-key", gemini.WithBaseURL(srvURL), gemini.WithHTTPClient(httpClient))
+			resp, err := client.Complete(context.Background(), llm.Request{UserPrompt: "ping"})
+			if err == nil {
+				t.Fatalf("expected transport error against closed server")
+			}
+			if resp == nil {
+				t.Fatalf("expected non-nil response on transport error")
+			}
+			wantModel := llm.DefaultModelForProvider(llm.ProviderGemini)
+			if resp.Provider != llm.ProviderGemini || resp.Model != wantModel || resp.StatusCode != 0 {
+				t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, 0)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderGemini, wantModel)
+			}
+			if resp.Latency <= 0 {
+				t.Errorf("expected Latency > 0, got %v", resp.Latency)
+			}
+		})
 	})
 }

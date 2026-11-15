@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 	"github.com/resumeee-app/resumeee-core/llm/anthropic"
 )
@@ -289,6 +292,333 @@ func TestAnthropicClient_Complete_OutputConfigAndModelGating(t *testing.T) {
 				})
 				if !errors.Is(err, tc.wantErr) {
 					t.Errorf("expected %v, got %v", tc.wantErr, err)
+				}
+			})
+		}
+	})
+}
+
+type anthropicRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f anthropicRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type anthropicFailingBody struct {
+	delay time.Duration
+	err   error
+}
+
+func (b anthropicFailingBody) Read([]byte) (int, error) {
+	if b.delay > 0 {
+		time.Sleep(b.delay)
+	}
+	return 0, b.err
+}
+
+func (b anthropicFailingBody) Close() error {
+	return nil
+}
+
+func TestAnthropicClient_Complete_TelemetryAndEdgeCases(t *testing.T) {
+	t.Run("success populates provider, resolved model, status code, latency, and normalized usage", func(t *testing.T) {
+		cases := []struct {
+			name         string
+			defaultModel string
+			reqModel     string
+			responseBody string
+			wantModel    string
+			wantText     string
+			wantUsage    core.TokenUsage
+		}{
+			{
+				name:         "default model with input and output tokens",
+				defaultModel: "",
+				reqModel:     "",
+				responseBody: `{"stop_reason":"end_turn","content":[{"type":"text","text":"hello world"}],"usage":{"input_tokens":40,"output_tokens":20}}`,
+				wantModel:    "claude-sonnet-4-5",
+				wantText:     "hello world",
+				wantUsage:    core.TokenUsage{PromptTokens: 40, CompletionTokens: 20, TotalTokens: 60},
+			},
+			{
+				name:         "explicit request model overrides custom default model",
+				defaultModel: "claude-haiku-4-5",
+				reqModel:     "  claude-opus-4-1  ",
+				responseBody: `{"stop_reason":"end_turn","content":[{"type":"thinking","text":"ignored"},{"type":"text","text":" line 1 "},{"type":"text","text":" line 2 "}],"usage":{"input_tokens":15,"output_tokens":0}}`,
+				wantModel:    "claude-opus-4-1",
+				wantText:     "line 1\nline 2",
+				wantUsage:    core.TokenUsage{PromptTokens: 15, CompletionTokens: 0, TotalTokens: 15},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(tc.responseBody))
+				}))
+				defer srv.Close()
+
+				opts := []anthropic.Option{anthropic.WithBaseURL(srv.URL)}
+				if tc.defaultModel != "" {
+					opts = append(opts, anthropic.WithDefaultModel(tc.defaultModel))
+				}
+				client := anthropic.New("test-key", opts...)
+				resp, err := client.Complete(context.Background(), llm.Request{
+					Model:      tc.reqModel,
+					UserPrompt: "ping",
+				})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if resp == nil {
+					t.Fatal("expected non-nil response")
+				}
+				if resp.Provider != llm.ProviderAnthropic {
+					t.Errorf("Provider = %q, want %q", resp.Provider, llm.ProviderAnthropic)
+				}
+				if resp.Model != tc.wantModel {
+					t.Errorf("Model = %q, want %q", resp.Model, tc.wantModel)
+				}
+				if resp.StatusCode != http.StatusOK {
+					t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
+				}
+				if resp.Latency <= 0 {
+					t.Errorf("expected Latency > 0, got %v", resp.Latency)
+				}
+				if resp.Text != tc.wantText {
+					t.Errorf("Text = %q, want %q", resp.Text, tc.wantText)
+				}
+				if resp.Usage != tc.wantUsage {
+					t.Errorf("Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
+				}
+			})
+		}
+	})
+
+	t.Run("non-2xx HTTP errors preserve provider, model, status code, latency, and raw body", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			statusCode int
+			body       string
+			wantErr    error
+		}{
+			{"400 bad request", http.StatusBadRequest, `{"error":{"message":"bad request"}}`, llm.ErrBadRequest},
+			{"401 unauthorized", http.StatusUnauthorized, `{"error":{"message":"invalid x-api-key"}}`, llm.ErrUnauthorized},
+			{"403 forbidden", http.StatusForbidden, `{"error":{"message":"forbidden"}}`, llm.ErrUnauthorized},
+			{"429 rate limited", http.StatusTooManyRequests, `{"error":{"message":"rate limit"}}`, llm.ErrRateLimited},
+			{"500 internal error", http.StatusInternalServerError, `{"error":{"message":"server error"}}`, llm.ErrUpstream},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(tc.statusCode)
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				defer srv.Close()
+
+				client := anthropic.New("test-key", anthropic.WithBaseURL(srv.URL))
+				resp, err := client.Complete(context.Background(), llm.Request{
+					Model:      "claude-opus-4-1",
+					UserPrompt: "ping",
+				})
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+				if resp == nil {
+					t.Fatal("expected non-nil response on HTTP error")
+				}
+				if resp.Provider != llm.ProviderAnthropic || resp.Model != "claude-opus-4-1" || resp.StatusCode != tc.statusCode {
+					t.Errorf("unexpected telemetry metadata: %+v", resp)
+				}
+				if resp.Latency <= 0 {
+					t.Errorf("expected Latency > 0, got %v", resp.Latency)
+				}
+				if resp.RawBody != tc.body {
+					t.Errorf("RawBody = %q, want %q", resp.RawBody, tc.body)
+				}
+			})
+		}
+	})
+
+	t.Run("200 malformed, empty, non-text, refused, and truncated payloads preserve telemetry and partial usage", func(t *testing.T) {
+		schema := sampleTestSchema()
+		cases := []struct {
+			name       string
+			body       string
+			withSchema bool
+			wantUsage  core.TokenUsage
+		}{
+			{
+				name:      "malformed json",
+				body:      `{invalid`,
+				wantUsage: core.TokenUsage{},
+			},
+			{
+				name:      "empty content preserves partial usage",
+				body:      `{"stop_reason":"end_turn","content":[],"usage":{"input_tokens":18,"output_tokens":0}}`,
+				wantUsage: core.TokenUsage{PromptTokens: 18, CompletionTokens: 0, TotalTokens: 18},
+			},
+			{
+				name:      "non-text content preserves partial usage",
+				body:      `{"stop_reason":"end_turn","content":[{"type":"thinking","text":"thought"},{"type":"tool_use"}],"usage":{"input_tokens":22,"output_tokens":9}}`,
+				wantUsage: core.TokenUsage{PromptTokens: 22, CompletionTokens: 9, TotalTokens: 31},
+			},
+			{
+				name:       "stop_reason refusal preserves partial usage",
+				body:       `{"stop_reason":"refusal","content":[{"type":"text","text":"cannot comply"}],"usage":{"input_tokens":10,"output_tokens":4}}`,
+				withSchema: true,
+				wantUsage:  core.TokenUsage{PromptTokens: 10, CompletionTokens: 4, TotalTokens: 14},
+			},
+			{
+				name:       "stop_reason max_tokens on structured output preserves partial usage",
+				body:       `{"stop_reason":"max_tokens","content":[{"type":"text","text":"{\"summary\":\"trunc"}],"usage":{"input_tokens":30,"output_tokens":12}}`,
+				withSchema: true,
+				wantUsage:  core.TokenUsage{PromptTokens: 30, CompletionTokens: 12, TotalTokens: 42},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				defer srv.Close()
+
+				client := anthropic.New("test-key", anthropic.WithBaseURL(srv.URL))
+				var reqSchema *llm.Schema
+				if tc.withSchema {
+					reqSchema = schema
+				}
+				resp, err := client.Complete(context.Background(), llm.Request{
+					Model:          "claude-sonnet-4-5",
+					UserPrompt:     "ping",
+					ResponseSchema: reqSchema,
+				})
+				if !errors.Is(err, llm.ErrInvalidResponse) {
+					t.Fatalf("err = %v, want %v", err, llm.ErrInvalidResponse)
+				}
+				if resp == nil {
+					t.Fatal("expected non-nil response on 200 payload error")
+				}
+				if resp.Provider != llm.ProviderAnthropic || resp.Model != "claude-sonnet-4-5" || resp.StatusCode != http.StatusOK {
+					t.Errorf("unexpected telemetry metadata: %+v", resp)
+				}
+				if resp.Latency <= 0 {
+					t.Errorf("expected Latency > 0, got %v", resp.Latency)
+				}
+				if resp.RawBody != tc.body {
+					t.Errorf("RawBody = %q, want %q", resp.RawBody, tc.body)
+				}
+				if resp.Usage != tc.wantUsage {
+					t.Errorf("Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
+				}
+			})
+		}
+	})
+
+	t.Run("upstream timeout, connection failure, and body-read error return telemetry response", func(t *testing.T) {
+		t.Run("context deadline exceeded", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case <-r.Context().Done():
+				case <-time.After(150 * time.Millisecond):
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+
+			client := anthropic.New("test-key", anthropic.WithBaseURL(srv.URL))
+			resp, err := client.Complete(ctx, llm.Request{
+				Model:      "claude-opus-4-1",
+				UserPrompt: "ping",
+			})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+			}
+			if resp == nil {
+				t.Fatal("expected non-nil response on timeout")
+			}
+			if resp.Provider != llm.ProviderAnthropic || resp.Model != "claude-opus-4-1" || resp.StatusCode != 0 {
+				t.Errorf("unexpected timeout telemetry: %+v", resp)
+			}
+			if resp.Latency <= 0 {
+				t.Errorf("expected Latency > 0 on timeout, got %v", resp.Latency)
+			}
+		})
+
+		t.Run("connection failure", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			closedURL := srv.URL
+			srv.Close()
+
+			client := anthropic.New("test-key", anthropic.WithBaseURL(closedURL))
+			resp, err := client.Complete(context.Background(), llm.Request{UserPrompt: "ping"})
+			if err == nil {
+				t.Fatal("expected connection error, got nil")
+			}
+			if resp == nil {
+				t.Fatal("expected non-nil response on connection error")
+			}
+			if resp.Provider != llm.ProviderAnthropic || resp.Model != "claude-sonnet-4-5" || resp.StatusCode != 0 {
+				t.Errorf("unexpected connection-error telemetry: %+v", resp)
+			}
+			if resp.Latency <= 0 {
+				t.Errorf("expected Latency > 0 on connection error, got %v", resp.Latency)
+			}
+		})
+
+		t.Run("body read error preserves status code", func(t *testing.T) {
+			readErr := io.ErrUnexpectedEOF
+			httpClient := &http.Client{
+				Transport: anthropicRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusBadGateway,
+						Body:       anthropicFailingBody{delay: 2 * time.Millisecond, err: readErr},
+					}, nil
+				}),
+			}
+			client := anthropic.New("test-key", anthropic.WithBaseURL("https://example.test"), anthropic.WithHTTPClient(httpClient))
+			resp, err := client.Complete(context.Background(), llm.Request{UserPrompt: "ping"})
+			if !errors.Is(err, readErr) {
+				t.Fatalf("err = %v, want %v", err, readErr)
+			}
+			if resp == nil {
+				t.Fatal("expected non-nil response on body-read error")
+			}
+			if resp.Provider != llm.ProviderAnthropic || resp.Model != "claude-sonnet-4-5" || resp.StatusCode != http.StatusBadGateway {
+				t.Errorf("unexpected body-read telemetry: %+v", resp)
+			}
+			if resp.Latency <= 0 {
+				t.Errorf("expected Latency > 0 on body-read error, got %v", resp.Latency)
+			}
+		})
+	})
+
+	t.Run("pre-flight guards return nil response and ErrUnauthorized", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			client *anthropic.Client
+		}{
+			{"nil client", nil},
+			{"empty api key", anthropic.New("")},
+			{"whitespace api key", anthropic.New("   \t ")},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				resp, err := tc.client.Complete(context.Background(), llm.Request{UserPrompt: "ping"})
+				if !errors.Is(err, llm.ErrUnauthorized) {
+					t.Errorf("err = %v, want ErrUnauthorized", err)
+				}
+				if resp != nil {
+					t.Errorf("expected nil response from pre-flight guard, got %+v", resp)
 				}
 			})
 		}

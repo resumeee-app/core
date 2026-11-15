@@ -149,7 +149,11 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 
 	if err := s.branches.CreateVersion(ctx, ver); err != nil {
 		if reservationID != "" && s.quotas != nil {
-			_ = s.quotas.ReleaseQuota(ctx, reservationID, err.Error())
+			quotaCtx, cancel := detachedQuotaContext(ctx)
+			defer cancel()
+			if releaseErr := s.quotas.ReleaseQuota(quotaCtx, reservationID, "failed to create branch version", core.LLMTelemetry{}); releaseErr != nil && s.logger != nil {
+				s.logger.Error("failed to release quota after version creation failure", "reservation_id", reservationID, "err", releaseErr)
+			}
 		}
 		return nil, err
 	}
@@ -163,7 +167,11 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 		}
 		if err := s.jobEnqueuer.Enqueue(job); err != nil {
 			if reservationID != "" && s.quotas != nil {
-				_ = s.quotas.ReleaseQuota(ctx, reservationID, "failed to enqueue generation job")
+				quotaCtx, cancel := detachedQuotaContext(ctx)
+				defer cancel()
+				if releaseErr := s.quotas.ReleaseQuota(quotaCtx, reservationID, "failed to enqueue generation job", core.LLMTelemetry{}); releaseErr != nil && s.logger != nil {
+					s.logger.Error("failed to release quota after enqueue failure", "reservation_id", reservationID, "err", releaseErr)
+				}
 			}
 			if errors.Is(err, core.ErrQueueFull) {
 				_ = s.branches.UpdateVersionStatus(ctx, ver.ID, core.VersionStatusFailed, "generation queue full")

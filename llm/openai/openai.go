@@ -217,15 +217,19 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	}
 
 	headers := map[string]string{"Authorization": "Bearer " + c.apiKey}
+	start := time.Now()
 	bodyBytes, statusCode, err := httpx.PostJSON(ctx, c.settings.HTTPClient, buildResponsesURL(c.settings.BaseURL), payload, headers, llm.ProviderOpenAI)
+	latency := time.Since(start)
 	if err != nil {
-		if bodyBytes == nil && statusCode == 0 {
-			return nil, err
+		resp := &llm.Response{
+			RawBody:    string(bodyBytes),
+			StatusCode: statusCode,
 		}
-		return &llm.Response{RawBody: string(bodyBytes), StatusCode: statusCode}, err
+		return resp.PopulateTelemetry(c.Name(), model, latency), err
 	}
 
-	return parseResponsesPayload(bodyBytes, statusCode)
+	resp, parseErr := parseResponsesPayload(bodyBytes, statusCode)
+	return resp.PopulateTelemetry(c.Name(), model, latency), parseErr
 }
 
 // buildRequestPayload translates req into an OpenAI Responses payload with capability-aware schema handling.
@@ -294,17 +298,13 @@ func parseResponsesPayload(bodyBytes []byte, statusCode int) (*llm.Response, err
 	}, nil
 }
 
-// extractResponsesUsage converts OpenAI token counters into core.TokenUsage.
+// extractResponsesUsage converts OpenAI token counters into normalized core.TokenUsage.
 func extractResponsesUsage(parsed responsesPayload) core.TokenUsage {
-	usage := core.TokenUsage{
+	return core.TokenUsage{
 		PromptTokens:     parsed.Usage.InputTokens,
 		CompletionTokens: parsed.Usage.OutputTokens,
 		TotalTokens:      parsed.Usage.TotalTokens,
-	}
-	if usage.TotalTokens == 0 && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	}
-	return usage
+	}.Normalize()
 }
 
 // collectOutputText extracts assistant output segments and fails closed on model refusals or empty text.

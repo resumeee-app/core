@@ -22,10 +22,12 @@ type mockLLM struct {
 	mu           sync.Mutex
 	delay        time.Duration
 	fail         bool
+	failErr      error
 	failErrMsg   string
 	shouldPanic  bool
 	panicVal     any
 	customResp   *core.GenerationResponse
+	telemetry    core.LLMTelemetry
 	requestCount int
 	capturedCtx  context.Context
 }
@@ -36,10 +38,12 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req core.Generatio
 	m.capturedCtx = ctx
 	delay := m.delay
 	fail := m.fail
+	failErr := m.failErr
 	failErrMsg := m.failErrMsg
 	shouldPanic := m.shouldPanic
 	panicVal := m.panicVal
 	custom := m.customResp
+	telemetry := m.telemetry
 	m.mu.Unlock()
 
 	if shouldPanic {
@@ -54,6 +58,9 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req core.Generatio
 		}
 	}
 
+	if failErr != nil {
+		return nil, failErr
+	}
 	if fail {
 		return nil, errors.New(failErrMsg)
 	}
@@ -109,15 +116,20 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req core.Generatio
 		GapReport: core.GapReport{
 			OverallMatchSummary: "Candidate strongly matches requirements.",
 		},
+		Telemetry: telemetry,
 	}, nil
 }
 
-func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &resp.GapReport, nil
+	return &core.GapAnalysisResponse{
+		GapReport: resp.GapReport,
+		Usage:     resp.Usage,
+		Telemetry: resp.Telemetry,
+	}, nil
 }
 
 func (m *mockLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
@@ -366,12 +378,16 @@ func (m *blockingMockLLM) GenerateTailoredResume(ctx context.Context, _ core.Gen
 	}
 }
 
-func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &resp.GapReport, nil
+	return &core.GapAnalysisResponse{
+		GapReport: resp.GapReport,
+		Usage:     resp.Usage,
+		Telemetry: resp.Telemetry,
+	}, nil
 }
 
 func (m *blockingMockLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
@@ -698,59 +714,87 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 }
 
 // TestPool_WorkerPanicRecovery verifies that a panic during job execution is caught,
-// records the version as failed with panic diagnostics, and does not crash the worker goroutine,
-// allowing subsequent enqueued jobs to process successfully.
+// transitions the version to failed with a sanitized message, releases any pending quota
+// reservation, and keeps the worker goroutine alive for subsequent jobs.
 func TestPool_WorkerPanicRecovery(t *testing.T) {
-	env := setupTestWorkerEnv(t)
-	env.llm.mu.Lock()
-	env.llm.shouldPanic = true
-	env.llm.panicVal = "unexpected runtime nil pointer during model invocation"
-	env.llm.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Single concurrency to prove the single worker survives the panic
+	store, err := memory.NewSeeded(ctx, "user-panic-1")
+	if err != nil {
+		t.Fatalf("NewSeeded failed: %v", err)
+	}
+	b := &core.Branch{
+		ID:            "branch-panic-1",
+		UserID:        "user-panic-1",
+		Name:          "Panic Recovery Branch",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
+	if err := store.CreateBranch(ctx, b); err != nil {
+		t.Fatalf("CreateBranch failed: %v", err)
+	}
+
+	mockLLMClient := &mockLLM{
+		shouldPanic: true,
+		panicVal:    "unexpected runtime nil pointer during model invocation",
+	}
+
+	// Single concurrency to prove the single worker survives the panic.
 	pool := worker.New(worker.Config{
 		Concurrency: 1,
 		QueueSize:   5,
-		Branches:    env.branchRepo,
-		Profiles:    env.profileRepo,
-		Presets:     env.presetRepo,
-		Templates:   env.templateRepo,
-		Generator:   env.llm,
-		Validator:   env.validator,
-		Renderer:    env.renderer,
+		Branches:    store,
+		Profiles:    store,
+		Presets:     store,
+		Templates:   store,
+		Quotas:      store,
+		Generator:   mockLLMClient,
+		Validator:   provenance.New(),
+		Renderer:    renderer.New(),
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	pool.Start(ctx)
 	defer pool.Stop()
 
-	// 1. Enqueue job that panics
+	recPanic, err := store.ReserveQuota(ctx, "user-panic-1", core.OperationResumeTailoring, 2000, 50, 100000)
+	if err != nil {
+		t.Fatalf("ReserveQuota failed: %v", err)
+	}
+
+	// 1. Enqueue job that panics with an active reservation.
 	verPanic := &core.BranchVersion{
 		ID:                "ver-panic-1",
-		BranchID:          env.branchID,
+		BranchID:          b.ID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
-	if err := env.branchRepo.CreateVersion(ctx, verPanic); err != nil {
+	if err := store.CreateVersion(ctx, verPanic); err != nil {
 		t.Fatalf("failed to create panic version: %v", err)
 	}
 
-	if err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verPanic.ID}); err != nil {
+	if err := pool.Enqueue(core.GenerationJob{
+		UserID:        "user-panic-1",
+		BranchID:      b.ID,
+		VersionID:     verPanic.ID,
+		ReservationID: recPanic.ID,
+	}); err != nil {
 		t.Fatalf("failed to enqueue panic job: %v", err)
 	}
 
-	// Wait for panic version to fail
+	// Wait for panic version to fail.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		v, err := env.branchRepo.Version(ctx, env.branchID, verPanic.ID)
+		v, err := store.Version(ctx, b.ID, verPanic.ID)
 		if err != nil {
 			t.Fatalf("failed to get panic version: %v", err)
 		}
 		if v.Status == core.VersionStatusFailed {
 			if v.ErrorMessage == "" {
 				t.Errorf("expected non-empty error message on panic failure")
+			}
+			if strings.Contains(v.ErrorMessage, "unexpected runtime nil pointer") {
+				t.Errorf("expected sanitized error message without raw panic payload, got %q", v.ErrorMessage)
 			}
 			break
 		}
@@ -760,31 +804,56 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// 2. Clear panic condition and enqueue a second job to prove worker survived
-	env.llm.mu.Lock()
-	env.llm.shouldPanic = false
-	env.llm.panicVal = nil
-	env.llm.mu.Unlock()
+	// Verify the quota reservation was released and monthly/daily counters refunded.
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		recs, err := store.ListUsageRecords(ctx, "user-panic-1", 10)
+		if err != nil {
+			t.Fatalf("ListUsageRecords failed: %v", err)
+		}
+		if len(recs) == 1 && recs[0].Status == core.ReservationStatusReleased {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for panic job reservation release, records=%+v", recs)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	quotaAfterPanic, err := store.Quota(ctx, "user-panic-1")
+	if err != nil {
+		t.Fatalf("Quota failed: %v", err)
+	}
+	if quotaAfterPanic.MonthlyTokensUsed != 0 || quotaAfterPanic.DailyRequestsUsed != 0 {
+		t.Errorf("expected refunded quota (0, 0) after panic, got (%d, %d)",
+			quotaAfterPanic.MonthlyTokensUsed, quotaAfterPanic.DailyRequestsUsed)
+	}
+
+	// 2. Clear panic condition and enqueue a second job to prove worker survived.
+	mockLLMClient.mu.Lock()
+	mockLLMClient.shouldPanic = false
+	mockLLMClient.panicVal = nil
+	mockLLMClient.mu.Unlock()
 
 	verSuccess := &core.BranchVersion{
 		ID:                "ver-success-2",
-		BranchID:          env.branchID,
+		BranchID:          b.ID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
-	if err := env.branchRepo.CreateVersion(ctx, verSuccess); err != nil {
+	if err := store.CreateVersion(ctx, verSuccess); err != nil {
 		t.Fatalf("failed to create success version: %v", err)
 	}
 
-	if err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verSuccess.ID}); err != nil {
+	if err := pool.Enqueue(core.GenerationJob{UserID: "user-panic-1", BranchID: b.ID, VersionID: verSuccess.ID}); err != nil {
 		t.Fatalf("failed to enqueue second job: %v", err)
 	}
 
-	// Wait for second job to complete successfully
+	// Wait for second job to complete successfully.
 	deadline = time.Now().Add(2 * time.Second)
 	for {
-		v, err := env.branchRepo.Version(ctx, env.branchID, verSuccess.ID)
+		v, err := store.Version(ctx, b.ID, verSuccess.ID)
 		if err != nil {
 			t.Fatalf("failed to get success version: %v", err)
 		}
@@ -805,39 +874,48 @@ type mockResumeExtractor struct {
 	mu         sync.Mutex
 	delay      time.Duration
 	fail       bool
+	failErr    error
 	failErrMsg string
 	result     *core.JSONResume
 	usage      core.TokenUsage
+	telemetry  core.LLMTelemetry
 }
 
-func (m *mockResumeExtractor) ExtractResume(ctx context.Context, _, _, _ string) (*core.JSONResume, core.TokenUsage, error) {
+func (m *mockResumeExtractor) ExtractResume(ctx context.Context, _, _, _ string) (*core.JSONResume, core.LLMTelemetry, error) {
 	m.mu.Lock()
 	delay := m.delay
 	fail := m.fail
+	failErr := m.failErr
 	failErrMsg := m.failErrMsg
 	result := m.result
-	usage := m.usage
+	telemetry := m.telemetry
+	if telemetry.Usage.IsZero() && !m.usage.IsZero() {
+		telemetry.Usage = m.usage
+	}
 	m.mu.Unlock()
 
 	if delay > 0 {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return nil, core.TokenUsage{}, ctx.Err()
+			return nil, telemetry, ctx.Err()
 		}
 	}
+	if failErr != nil {
+		return nil, telemetry, failErr
+	}
 	if fail {
-		return nil, core.TokenUsage{}, errors.New(failErrMsg)
+		return nil, telemetry, errors.New(failErrMsg)
 	}
 	if result != nil {
-		return result, usage, nil
+		return result, telemetry, nil
 	}
 	return &core.JSONResume{
 		Basics: core.JSONResumeBasics{
 			Name:  "Test Candidate",
 			Email: "candidate@test.com",
 		},
-	}, usage, nil
+	}, telemetry, nil
 }
 
 func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
@@ -1459,15 +1537,19 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 }
 
 type callbackResumeExtractor struct {
-	fn func(ctx context.Context, text, provider, model string) (*core.JSONResume, error)
+	fn    func(ctx context.Context, text, provider, model string) (*core.JSONResume, error)
+	fnTel func(ctx context.Context, text, provider, model string) (*core.JSONResume, core.LLMTelemetry, error)
 }
 
-func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.TokenUsage, error) {
+func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.LLMTelemetry, error) {
+	if c.fnTel != nil {
+		return c.fnTel(ctx, text, provider, model)
+	}
 	if c.fn != nil {
 		res, err := c.fn(ctx, text, provider, model)
-		return res, core.TokenUsage{}, err
+		return res, core.LLMTelemetry{}, err
 	}
-	return &core.JSONResume{}, core.TokenUsage{}, nil
+	return &core.JSONResume{}, core.LLMTelemetry{}, nil
 }
 
 type callbackLLM struct {
@@ -1481,12 +1563,16 @@ func (m *callbackLLM) GenerateTailoredResume(ctx context.Context, req core.Gener
 	return &core.GenerationResponse{TailoredContent: core.TailoredContent{Summary: "OK"}}, nil
 }
 
-func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &resp.GapReport, nil
+	return &core.GapAnalysisResponse{
+		GapReport: resp.GapReport,
+		Usage:     resp.Usage,
+		Telemetry: resp.Telemetry,
+	}, nil
 }
 
 func (m *callbackLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
@@ -1943,6 +2029,9 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+
+	// Ensure post-persistence quota commit has settled before reading aggregate quota.
+	pool.Stop()
 
 	// Verify committed quota: monthly tokens should reflect actual 350 tokens rather than 1000 estimate
 	quota, err := store.Quota(ctx, "user-quota-worker")

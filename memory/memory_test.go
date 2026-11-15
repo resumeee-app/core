@@ -797,10 +797,12 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	}
 
 	// 3. CommitUsage
-	usage := core.TokenUsage{
-		PromptTokens:     500,
-		CompletionTokens: 1200,
-		TotalTokens:      1700,
+	usage := core.LLMTelemetry{
+		Usage: core.TokenUsage{
+			PromptTokens:     500,
+			CompletionTokens: 1200,
+			TotalTokens:      1700,
+		},
 	}
 	if err := store.CommitUsage(ctx, rec.ID, usage); err != nil {
 		t.Fatalf("failed to commit usage: %v", err)
@@ -828,7 +830,7 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	}
 
 	// 6. Release second quota
-	if err := store.ReleaseQuota(ctx, rec2.ID, "cancelled"); err != nil {
+	if err := store.ReleaseQuota(ctx, rec2.ID, "cancelled", core.LLMTelemetry{}); err != nil {
 		t.Fatalf("failed to release quota: %v", err)
 	}
 
@@ -842,7 +844,7 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	}
 
 	// 8. Releasing non-existent reservation returns ErrNotFound
-	if err := store.ReleaseQuota(ctx, "non-existent-id", "err"); !errors.Is(err, core.ErrNotFound) {
+	if err := store.ReleaseQuota(ctx, "non-existent-id", "err", core.LLMTelemetry{}); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for unknown reservation, got %v", err)
 	}
 }

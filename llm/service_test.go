@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -106,7 +108,7 @@ func TestService_GenerateGapAnalysisUnhappyPaths(t *testing.T) {
 			reg.Register(tt.client)
 			svc := NewService(reg)
 
-			report, err := svc.GenerateGapAnalysis(context.Background(), sampleRequest())
+			resp, err := svc.GenerateGapAnalysis(context.Background(), sampleRequest())
 
 			if tt.client.genCalls != tt.wantGenCalls {
 				t.Errorf("expected %d GenerateTailoredResume call(s), got %d", tt.wantGenCalls, tt.client.genCalls)
@@ -115,16 +117,16 @@ func TestService_GenerateGapAnalysisUnhappyPaths(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("expected error %v, got %v", tt.wantErr, err)
 				}
-				if report != nil {
-					t.Errorf("expected nil report on error, got %+v", report)
+				if resp != nil {
+					t.Errorf("expected nil response on error, got %+v", resp)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if report == nil || report.OverallMatchSummary != tt.wantSummary {
-				t.Errorf("expected fallback summary %q, got %+v", tt.wantSummary, report)
+			if resp == nil || resp.GapReport.OverallMatchSummary != tt.wantSummary {
+				t.Errorf("expected fallback summary %q, got %+v", tt.wantSummary, resp)
 			}
 		})
 	}
@@ -251,4 +253,394 @@ func TestService_LiveRequestsUseCompactJSON(t *testing.T) {
 	if !strings.Contains(preview.UserPrompt, "\n  \"") {
 		t.Errorf("PromptCompiler preview should preserve indented JSON:\n%s", preview.UserPrompt)
 	}
+}
+
+func TestService_GenerateTailoredResume_Telemetry(t *testing.T) {
+	bodyWithHallucinatedUsage := copySampleResponse()
+	bodyWithHallucinatedUsage.Usage = core.TokenUsage{PromptTokens: 999, CompletionTokens: 888, TotalTokens: 1887}
+	rawWithUsage, err := json.Marshal(bodyWithHallucinatedUsage)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	bodyWithPositiveJSONUsage := copySampleResponse()
+	bodyWithPositiveJSONUsage.Usage = core.TokenUsage{PromptTokens: 60, CompletionTokens: 30}
+	rawPosUsage, err := json.Marshal(bodyWithPositiveJSONUsage)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	bodyWithSpoofedNegative := copySampleResponse()
+	bodyWithSpoofedNegative.Usage = core.TokenUsage{PromptTokens: -500, CompletionTokens: -200, TotalTokens: -700}
+	bodyWithSpoofedNegative.Telemetry = core.LLMTelemetry{
+		Provider:   "spoofed-provider",
+		Model:      "spoofed-model",
+		StatusCode: 500,
+		Usage:      core.TokenUsage{TotalTokens: -999},
+	}
+	rawSpoofedNegative, err := json.Marshal(bodyWithSpoofedNegative)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	cases := []struct {
+		name           string
+		completeFn     func(ctx context.Context, req Request) (*Response, error)
+		wantErr        error
+		wantStatusCode int
+		wantMinLatency time.Duration
+		wantUsage      core.TokenUsage
+	}{
+		{
+			name: "transport usage overrides body JSON usage and populates telemetry",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				return &Response{
+					Text:       string(rawWithUsage),
+					StatusCode: 200,
+					Latency:    25 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 120, CompletionTokens: 80},
+				}, nil
+			},
+			wantStatusCode: 200,
+			wantMinLatency: 25 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 120, CompletionTokens: 80, TotalTokens: 200},
+		},
+		{
+			name: "zero transport usage ignores untrusted positive body JSON usage",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				return &Response{
+					Text:       string(rawPosUsage),
+					StatusCode: 200,
+					Latency:    14 * time.Millisecond,
+				}, nil
+			},
+			wantStatusCode: 200,
+			wantMinLatency: 14 * time.Millisecond,
+			wantUsage:      core.TokenUsage{},
+		},
+		{
+			name: "spoofed negative JSON usage and telemetry are ignored",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				return &Response{
+					Text:       string(rawSpoofedNegative),
+					StatusCode: 200,
+					Latency:    12 * time.Millisecond,
+				}, nil
+			},
+			wantStatusCode: 200,
+			wantMinLatency: 12 * time.Millisecond,
+			wantUsage:      core.TokenUsage{},
+		},
+		{
+			name: "HTTP 200 malformed JSON parse failure attaches transport telemetry to error",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				return &Response{
+					Text:       `{"tailored_content": invalid`,
+					StatusCode: 200,
+					Latency:    18 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 45, CompletionTokens: 15},
+				}, nil
+			},
+			wantErr:        ErrInvalidResponse,
+			wantStatusCode: 200,
+			wantMinLatency: 18 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 45, CompletionTokens: 15, TotalTokens: 60},
+		},
+		{
+			name: "HTTP 200 empty JSON output attaches transport telemetry to error",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				return &Response{
+					Text:       "   ",
+					StatusCode: 200,
+					Latency:    9 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 30, CompletionTokens: 0},
+				}, nil
+			},
+			wantErr:        ErrInvalidResponse,
+			wantStatusCode: 200,
+			wantMinLatency: 9 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 30, TotalTokens: 30},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeTransportClient{
+				name:         ProviderOpenAI,
+				defaultModel: "gpt-4o",
+				completeFn:   tc.completeFn,
+			}
+			reg := NewRegistry()
+			reg.Register(client)
+			svc := NewService(reg)
+
+			req := sampleRequest()
+			req.Model = "gpt-4o"
+
+			resp, err := svc.GenerateTailoredResume(context.Background(), req)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+				if resp != nil {
+					t.Errorf("expected nil response on error, got %+v", resp)
+				}
+				tel, ok := core.LLMTelemetryFromError(err)
+				if !ok {
+					t.Fatalf("expected telemetry attached to error")
+				}
+				if tel.Provider != ProviderOpenAI || tel.Model != "gpt-4o" || tel.StatusCode != tc.wantStatusCode {
+					t.Errorf("error telemetry = %+v", tel)
+				}
+				if tel.Latency < tc.wantMinLatency || tel.Usage != tc.wantUsage {
+					t.Errorf("error telemetry latency/usage = (%v, %+v), want (>=%v, %+v)", tel.Latency, tel.Usage, tc.wantMinLatency, tc.wantUsage)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.Usage != tc.wantUsage {
+				t.Errorf("resp.Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
+			}
+			if resp.Telemetry.Provider != ProviderOpenAI || resp.Telemetry.Model != "gpt-4o" || resp.Telemetry.StatusCode != tc.wantStatusCode {
+				t.Errorf("resp.Telemetry = %+v", resp.Telemetry)
+			}
+			if resp.Telemetry.Latency < tc.wantMinLatency || resp.Telemetry.Usage != tc.wantUsage {
+				t.Errorf("resp.Telemetry latency/usage = (%v, %+v), want (>=%v, %+v)", resp.Telemetry.Latency, resp.Telemetry.Usage, tc.wantMinLatency, tc.wantUsage)
+			}
+		})
+	}
+}
+
+func TestService_GenerateGapAnalysis_Telemetry(t *testing.T) {
+	rawTailored, err := json.Marshal(sampleResponse)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	gapJSON := `{"gap_report":{"overall_match_summary":"Strong gap match","missing_requirements":[]}}`
+
+	cases := []struct {
+		name           string
+		responses      []*Response
+		errs           []error
+		wantErr        error
+		wantSummary    string
+		wantStatusCode int
+		wantLatency    time.Duration
+		wantUsage      core.TokenUsage
+	}{
+		{
+			name: "lightweight success commits normalized usage and telemetry",
+			responses: []*Response{
+				{
+					Text:       gapJSON,
+					StatusCode: 200,
+					Latency:    8 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 40, CompletionTokens: 15},
+				},
+			},
+			wantSummary:    "Strong gap match",
+			wantStatusCode: 200,
+			wantLatency:    8 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 40, CompletionTokens: 15, TotalTokens: 55},
+		},
+		{
+			name: "fallback success merges lightweight and tailoring usage and latency",
+			responses: []*Response{
+				{
+					Text:       `{"unexpected":"shape"}`,
+					StatusCode: 200,
+					Latency:    5 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 20, CompletionTokens: 10},
+				},
+				{
+					Text:       string(rawTailored),
+					StatusCode: 200,
+					Latency:    12 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 100, CompletionTokens: 50},
+				},
+			},
+			wantSummary:    sampleResponse.GapReport.OverallMatchSummary,
+			wantStatusCode: 200,
+			wantLatency:    17 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 120, CompletionTokens: 60, TotalTokens: 180},
+		},
+		{
+			name: "fallback upstream error merges lightweight and failed fallback telemetry",
+			responses: []*Response{
+				{
+					Text:       "not json",
+					StatusCode: 200,
+					Latency:    5 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 20, CompletionTokens: 10},
+				},
+				{
+					RawBody:    `{"error":"upstream"}`,
+					StatusCode: 503,
+					Latency:    7 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 15},
+				},
+			},
+			errs:           []error{nil, ErrUpstream},
+			wantErr:        ErrUpstream,
+			wantStatusCode: 503,
+			wantLatency:    12 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 35, CompletionTokens: 10, TotalTokens: 45},
+		},
+		{
+			name: "fallback HTTP 200 malformed JSON merges lightweight and fallback telemetry",
+			responses: []*Response{
+				{
+					Text:       "not json",
+					StatusCode: 200,
+					Latency:    5 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 20, CompletionTokens: 10},
+				},
+				{
+					Text:       "{bad-json",
+					StatusCode: 200,
+					Latency:    9 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 50, CompletionTokens: 12},
+				},
+			},
+			wantErr:        ErrInvalidResponse,
+			wantStatusCode: 200,
+			wantLatency:    14 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 70, CompletionTokens: 22, TotalTokens: 92},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var idx int
+			client := &fakeTransportClient{
+				name:         ProviderGemini,
+				defaultModel: "gemini-2.5-flash",
+				completeFn: func(_ context.Context, _ Request) (*Response, error) {
+					i := idx
+					idx++
+					var r *Response
+					if i < len(tc.responses) {
+						r = tc.responses[i]
+					}
+					var callErr error
+					if i < len(tc.errs) {
+						callErr = tc.errs[i]
+					}
+					return r, callErr
+				},
+			}
+			reg := NewRegistry()
+			reg.Register(client)
+			svc := NewService(reg)
+
+			req := sampleRequest()
+			req.Model = "gemini-2.5-flash"
+			resp, err := svc.GenerateGapAnalysis(context.Background(), req)
+
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+				if resp != nil {
+					t.Errorf("expected nil response on error, got %+v", resp)
+				}
+				tel, ok := core.LLMTelemetryFromError(err)
+				if !ok {
+					t.Fatalf("expected merged telemetry attached to error")
+				}
+				if tel.Provider != ProviderGemini || tel.Model != "gemini-2.5-flash" || tel.StatusCode != tc.wantStatusCode {
+					t.Errorf("error telemetry = %+v, want status=%d", tel, tc.wantStatusCode)
+				}
+				if tel.Latency != tc.wantLatency || tel.Usage != tc.wantUsage {
+					t.Errorf("error telemetry latency/usage = (%v, %+v), want (%v, %+v)", tel.Latency, tel.Usage, tc.wantLatency, tc.wantUsage)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.GapReport.OverallMatchSummary != tc.wantSummary {
+				t.Errorf("summary = %q, want %q", resp.GapReport.OverallMatchSummary, tc.wantSummary)
+			}
+			if resp.Usage != tc.wantUsage {
+				t.Errorf("resp.Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
+			}
+			if resp.Telemetry.Provider != ProviderGemini || resp.Telemetry.Model != "gemini-2.5-flash" || resp.Telemetry.StatusCode != tc.wantStatusCode {
+				t.Errorf("resp.Telemetry = %+v, want status=%d", resp.Telemetry, tc.wantStatusCode)
+			}
+			if resp.Telemetry.Latency != tc.wantLatency || resp.Telemetry.Usage != tc.wantUsage {
+				t.Errorf("resp.Telemetry latency/usage = (%v, %+v), want (%v, %+v)", resp.Telemetry.Latency, resp.Telemetry.Usage, tc.wantLatency, tc.wantUsage)
+			}
+		})
+	}
+}
+
+func TestService_Concurrent_Race(t *testing.T) {
+	rawTailored, err := json.Marshal(sampleResponse)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	client := &fakeTransportClient{
+		name:         ProviderOpenAI,
+		defaultModel: "gpt-4o",
+		completeFn: func(_ context.Context, req Request) (*Response, error) {
+			var text string
+			switch req.SchemaName {
+			case "gap_analysis_response":
+				text = `{"gap_report":{"overall_match_summary":"Concurrent gap match","missing_requirements":[]}}`
+			case "ats_extraction_response":
+				text = `{"extraction_confidence_score":0.9,"extraction_summary":"Clean","extracted_candidate":{"summary":"Eng","skills":["Go"],"experiences":[],"educations":[]}}`
+			case "ats_matching_response":
+				text = `{"job_matching_score":0.8,"matching_summary":"Good"}`
+			default:
+				text = string(rawTailored)
+			}
+			return &Response{
+				Text:       text,
+				StatusCode: 200,
+				Usage:      core.TokenUsage{PromptTokens: 10, CompletionTokens: 5},
+			}, nil
+		},
+	}
+
+	reg := NewRegistry()
+	reg.Register(client)
+	svc := NewService(reg)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			req := sampleRequest()
+			req.Model = "gpt-4o"
+			switch idx % 3 {
+			case 0:
+				resp, callErr := svc.GenerateTailoredResume(context.Background(), req)
+				if callErr != nil || resp == nil || resp.Telemetry.Usage.TotalTokens != 15 {
+					t.Errorf("concurrent GenerateTailoredResume failed: resp=%+v err=%v", resp, callErr)
+				}
+			case 1:
+				resp, callErr := svc.GenerateGapAnalysis(context.Background(), req)
+				if callErr != nil || resp == nil || resp.Telemetry.Usage.TotalTokens != 15 {
+					t.Errorf("concurrent GenerateGapAnalysis failed: resp=%+v err=%v", resp, callErr)
+				}
+			case 2:
+				resp, callErr := svc.SimulateATS(context.Background(), core.ATSSimulationRequest{
+					Model:         "gpt-4o",
+					ResumeText:    "# Candidate\nGo systems engineer",
+					FormatUsed:    "markdown",
+					BranchContext: req.BranchContext,
+					MainProfile:   req.MainProfile,
+				})
+				if callErr != nil || resp == nil || resp.Telemetry.Usage.TotalTokens != 30 {
+					t.Errorf("concurrent SimulateATS failed: resp=%+v err=%v", resp, callErr)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
 }

@@ -48,7 +48,7 @@ func (s *Service) generateTailoredWithClient(ctx context.Context, client Client,
 		return nil, fmt.Errorf("failed to build prompt: %w", err)
 	}
 
-	rawText, usage, err := s.registry.CompleteStructured(ctx, client, "GenerateTailoredResume", Request{
+	rawText, telemetry, err := s.registry.CompleteStructured(ctx, client, "GenerateTailoredResume", Request{
 		Model:          model,
 		SystemPrompt:   prompts.SystemPrompt,
 		UserPrompt:     prompts.UserPrompt,
@@ -57,40 +57,48 @@ func (s *Service) generateTailoredWithClient(ctx context.Context, client Client,
 		ReasoningLevel: req.ReasoningLevel,
 	})
 	if err != nil {
-		return nil, err
+		return nil, core.AttachLLMTelemetry(err, telemetry)
 	}
 
-	parsed, err := parseTailoredGenerationResponse(rawText, usage)
+	parsed, err := parseTailoredGenerationResponse(rawText, telemetry.Usage)
 	if err != nil {
-		return nil, err
+		return nil, core.AttachLLMTelemetry(err, telemetry)
 	}
+
+	telemetry = telemetry.Normalize()
+	telemetry.Usage = parsed.Usage
+	parsed.Telemetry = telemetry
 
 	sanitizer.NewSessionFromRequest(req).DeobfuscateGenerationResponse(parsed)
 	return parsed, nil
 }
 
-// parseTailoredGenerationResponse unmarshals a tailored resume payload and backfills transport usage metrics.
-func parseTailoredGenerationResponse(rawText string, usage core.TokenUsage) (*core.GenerationResponse, error) {
+// parseTailoredGenerationResponse unmarshals a tailored resume payload and attaches normalized transport usage.
+func parseTailoredGenerationResponse(rawText string, transportUsage core.TokenUsage) (*core.GenerationResponse, error) {
 	cleanJSON := ExtractJSON(rawText)
 	if strings.TrimSpace(cleanJSON) == "" {
 		return nil, fmt.Errorf("%w: failed to unmarshal generation response: empty JSON output", ErrInvalidResponse)
 	}
 
-	var parsed core.GenerationResponse
-	if err := json.Unmarshal([]byte(cleanJSON), &parsed); err != nil {
+	// Decode strictly into output content fields so untrusted model JSON cannot inject usage or telemetry.
+	var payload struct {
+		TailoredContent core.TailoredContent `json:"tailored_content"`
+		GapReport       core.GapReport       `json:"gap_report"`
+	}
+	if err := json.Unmarshal([]byte(cleanJSON), &payload); err != nil {
 		return nil, fmt.Errorf("%w: failed to unmarshal generation response: %v", ErrInvalidResponse, err)
 	}
 
-	hasTransportUsage := usage.TotalTokens > 0 || usage.PromptTokens > 0 || usage.CompletionTokens > 0
-	if parsed.Usage.TotalTokens == 0 && hasTransportUsage {
-		parsed.Usage = usage
-	}
-	return &parsed, nil
+	return &core.GenerationResponse{
+		TailoredContent: payload.TailoredContent,
+		GapReport:       payload.GapReport,
+		Usage:           transportUsage.Normalize(),
+	}, nil
 }
 
 // GenerateGapAnalysis performs lightweight qualification gap evaluation before falling back
 // to full tailoring if a provider emits empty or unrecognized JSON.
-func (s *Service) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (s *Service) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	if s == nil || s.registry == nil {
 		return nil, ErrNoProviders
 	}
@@ -108,7 +116,7 @@ func (s *Service) GenerateGapAnalysis(ctx context.Context, req core.GenerationRe
 		return nil, err
 	}
 
-	text, _, err := s.registry.CompleteStructured(ctx, client, "GenerateGapAnalysis", Request{
+	text, telemetry1, err := s.registry.CompleteStructured(ctx, client, "GenerateGapAnalysis", Request{
 		Model:          model,
 		SystemPrompt:   prompts.SystemPrompt,
 		UserPrompt:     prompts.UserPrompt,
@@ -117,21 +125,35 @@ func (s *Service) GenerateGapAnalysis(ctx context.Context, req core.GenerationRe
 		ReasoningLevel: req.ReasoningLevel,
 	})
 	if err != nil {
-		return nil, err
+		return nil, core.AttachLLMTelemetry(err, telemetry1)
 	}
 
 	session := sanitizer.NewSessionFromRequest(req)
 	if report := parseGapReport(text, session); report != nil {
-		return report, nil
+		return &core.GapAnalysisResponse{
+			GapReport: *report,
+			Usage:     telemetry1.Usage,
+			Telemetry: telemetry1,
+		}, nil
 	}
 
 	// Fallback to full generation only when lightweight analysis produces empty or unrecognized output.
-	resp, err := s.generateTailoredWithClient(ctx, client, model, req)
+	resp2, err := s.generateTailoredWithClient(ctx, client, model, req)
 	if err != nil {
-		return nil, err
+		telemetry2, _ := core.LLMTelemetryFromError(err)
+		combined := telemetry1.Merge(telemetry2)
+		return nil, core.AttachLLMTelemetry(err, combined)
 	}
-	resp.GapReport.Normalize()
-	return &resp.GapReport, nil
+	if resp2 == nil {
+		return nil, core.AttachLLMTelemetry(fmt.Errorf("%w: empty fallback generation response", ErrInvalidResponse), telemetry1)
+	}
+	resp2.GapReport.Normalize()
+	combined := telemetry1.Merge(resp2.EffectiveTelemetry())
+	return &core.GapAnalysisResponse{
+		GapReport: resp2.GapReport,
+		Usage:     combined.Usage,
+		Telemetry: combined,
+	}, nil
 }
 
 // parseGapReport attempts to decode either a wrapped or unwrapped GapReport JSON payload.
@@ -201,23 +223,21 @@ func (s *Service) SimulateATS(ctx context.Context, req core.ATSSimulationRequest
 		CompactJSON:            true,
 	}
 
-	extractOut, session, usage1, err := s.runATSExtractionStage(ctx, client, model, req, promptOpts)
+	extractOut, session, telemetry1, err := s.runATSExtractionStage(ctx, client, model, req, promptOpts)
 	if err != nil {
-		return nil, err
+		return nil, core.AttachLLMTelemetry(err, telemetry1)
 	}
 
-	matchOut, usage2, err := s.runATSMatchingStage(ctx, client, model, req, &extractOut.ExtractedCandidate, session, promptOpts)
+	matchOut, telemetry2, err := s.runATSMatchingStage(ctx, client, model, req, &extractOut.ExtractedCandidate, session, promptOpts)
+	combined := telemetry1.Merge(telemetry2)
 	if err != nil {
-		return nil, err
+		return nil, core.AttachLLMTelemetry(err, combined)
 	}
 
 	return &core.ATSSimulationResponse{
-		Score: buildATSScore(formatUsed, extractOut, matchOut, session),
-		Usage: core.TokenUsage{
-			PromptTokens:     usage1.PromptTokens + usage2.PromptTokens,
-			CompletionTokens: usage1.CompletionTokens + usage2.CompletionTokens,
-			TotalTokens:      usage1.TotalTokens + usage2.TotalTokens,
-		},
+		Score:     buildATSScore(formatUsed, extractOut, matchOut, session),
+		Usage:     combined.Usage,
+		Telemetry: combined,
 	}, nil
 }
 
@@ -228,13 +248,13 @@ func (s *Service) resolveATSClient(req core.ATSSimulationRequest) (Client, strin
 }
 
 // runATSExtractionStage compiles Stage 1 prompts and extracts candidate attributes from resume text.
-func (s *Service) runATSExtractionStage(ctx context.Context, client Client, model string, req core.ATSSimulationRequest, opts PromptOptions) (*atsExtractionLLMOutput, *sanitizer.Session, core.TokenUsage, error) {
+func (s *Service) runATSExtractionStage(ctx context.Context, client Client, model string, req core.ATSSimulationRequest, opts PromptOptions) (*atsExtractionLLMOutput, *sanitizer.Session, core.LLMTelemetry, error) {
 	prompts, session, err := BuildATSExtractionPromptWithOptions(req, opts)
 	if err != nil {
-		return nil, nil, core.TokenUsage{}, err
+		return nil, nil, core.LLMTelemetry{}, err
 	}
 
-	rawExtract, usage, err := s.registry.CompleteStructured(ctx, client, "ATSExtraction", Request{
+	rawExtract, telemetry, err := s.registry.CompleteStructured(ctx, client, "ATSExtraction", Request{
 		Model:          model,
 		SystemPrompt:   prompts.SystemPrompt,
 		UserPrompt:     prompts.UserPrompt,
@@ -243,30 +263,30 @@ func (s *Service) runATSExtractionStage(ctx context.Context, client Client, mode
 		ReasoningLevel: req.ReasoningLevel,
 	})
 	if err != nil {
-		return nil, nil, core.TokenUsage{}, fmt.Errorf("ats extraction failed: %w", err)
+		return nil, nil, telemetry, fmt.Errorf("ats extraction failed: %w", err)
 	}
 
 	cleaned := ExtractJSON(rawExtract)
 	if strings.TrimSpace(cleaned) == "" {
-		return nil, nil, core.TokenUsage{}, fmt.Errorf("%w: empty JSON in ATS extraction response", ErrInvalidResponse)
+		return nil, nil, telemetry, fmt.Errorf("%w: empty JSON in ATS extraction response", ErrInvalidResponse)
 	}
 
 	var parsed atsExtractionLLMOutput
 	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-		return nil, nil, core.TokenUsage{}, fmt.Errorf("%w: failed to parse ATS extraction response: %v", ErrInvalidResponse, err)
+		return nil, nil, telemetry, fmt.Errorf("%w: failed to parse ATS extraction response: %v", ErrInvalidResponse, err)
 	}
 	parsed.ExtractedCandidate.Normalize()
-	return &parsed, session, usage, nil
+	return &parsed, session, telemetry, nil
 }
 
 // runATSMatchingStage compiles Stage 2 prompts using only the extracted candidate profile from Stage 1.
-func (s *Service) runATSMatchingStage(ctx context.Context, client Client, model string, req core.ATSSimulationRequest, candidate *core.ATSExtractedCandidate, session *sanitizer.Session, opts PromptOptions) (*atsMatchingLLMOutput, core.TokenUsage, error) {
+func (s *Service) runATSMatchingStage(ctx context.Context, client Client, model string, req core.ATSSimulationRequest, candidate *core.ATSExtractedCandidate, session *sanitizer.Session, opts PromptOptions) (*atsMatchingLLMOutput, core.LLMTelemetry, error) {
 	prompts, err := BuildATSMatchingPromptWithOptions(req.BranchContext, candidate, session, opts)
 	if err != nil {
-		return nil, core.TokenUsage{}, err
+		return nil, core.LLMTelemetry{}, err
 	}
 
-	rawMatch, usage, err := s.registry.CompleteStructured(ctx, client, "ATSMatching", Request{
+	rawMatch, telemetry, err := s.registry.CompleteStructured(ctx, client, "ATSMatching", Request{
 		Model:          model,
 		SystemPrompt:   prompts.SystemPrompt,
 		UserPrompt:     prompts.UserPrompt,
@@ -275,19 +295,19 @@ func (s *Service) runATSMatchingStage(ctx context.Context, client Client, model 
 		ReasoningLevel: req.ReasoningLevel,
 	})
 	if err != nil {
-		return nil, core.TokenUsage{}, fmt.Errorf("ats matching failed: %w", err)
+		return nil, telemetry, fmt.Errorf("ats matching failed: %w", err)
 	}
 
 	cleaned := ExtractJSON(rawMatch)
 	if strings.TrimSpace(cleaned) == "" {
-		return nil, core.TokenUsage{}, fmt.Errorf("%w: empty JSON in ATS matching response", ErrInvalidResponse)
+		return nil, telemetry, fmt.Errorf("%w: empty JSON in ATS matching response", ErrInvalidResponse)
 	}
 
 	var parsed atsMatchingLLMOutput
 	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-		return nil, core.TokenUsage{}, fmt.Errorf("%w: failed to parse ATS matching response: %v", ErrInvalidResponse, err)
+		return nil, telemetry, fmt.Errorf("%w: failed to parse ATS matching response: %v", ErrInvalidResponse, err)
 	}
-	return &parsed, usage, nil
+	return &parsed, telemetry, nil
 }
 
 // buildATSScore combines Stage 1 extraction and Stage 2 matching outputs into a normalized core.ATSScore.

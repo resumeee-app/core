@@ -20,6 +20,7 @@ import (
 
 func TestPromptTemplates_EmbeddedFilesExist(t *testing.T) {
 	requiredFiles := []string{
+		"pii_placeholder_rules.tmpl",
 		"tailor_system.tmpl",
 		"tailor_user.tmpl",
 		"gap_analysis_system.tmpl",
@@ -344,6 +345,7 @@ func TestBuildPrompt_InvalidAndRTLTargetLanguage_Rejected(t *testing.T) {
 
 func TestPromptTemplates_NoHardcodedResponseSchemasAndDynamicOptions(t *testing.T) {
 	systemTemplates := []string{
+		"pii_placeholder_rules.tmpl",
 		"tailor_system.tmpl",
 		"gap_analysis_system.tmpl",
 		"resume_extract_system.tmpl",
@@ -1037,6 +1039,309 @@ func TestPromptCompiler_AdditionalWorkflowPreviews(t *testing.T) {
 		}
 		if strings.Contains(prev.UserPrompt, "<instructions>") || !strings.Contains(prev.UserPrompt, "&lt;/raw_resume_text&gt;") {
 			t.Errorf("resume extract preview failed delimiter sanitization:\n%s", prev.UserPrompt)
+		}
+	})
+}
+
+func TestPromptTemplates_PIIPlaceholderPreservationRules(t *testing.T) {
+	baseSnapshot := &core.MainProfileSnapshot{
+		Profile: core.Profile{
+			FullName: "Jane Doe",
+			Email:    "jane.doe@example.org",
+			Phone:    "+1 555 234 5678",
+			Profiles: []core.SocialLink{
+				{Network: "GitHub", Username: "janedoe", URL: "https://github.com/janedoe"},
+			},
+		},
+		Skills: []core.Skill{
+			{ID: "skill-1", ShortID: "skill-1", Name: "Go"},
+		},
+		ExportedAt: time.Now(),
+	}
+	baseBranch := core.Branch{
+		TargetRole:         "Senior Backend Engineer",
+		TargetCompany:      "Acme Cloud",
+		TargetRequirements: "5+ years Go experience.",
+	}
+
+	concreteSentinels := []string{
+		sanitizer.PlaceholderFullName,
+		sanitizer.PlaceholderEmail,
+		sanitizer.PlaceholderPhone,
+		sanitizer.PlaceholderWebsite,
+		sanitizer.PlaceholderSocialURL(1),
+		sanitizer.PlaceholderSocialHandle(1),
+	}
+	companyExample := sanitizer.PlaceholderFullName + " Consulting"
+	prohibitionTerms := []string{
+		"translat",
+		"transliterat",
+		"reformat",
+		"casing",
+		"bracket",
+	}
+
+	cases := []struct {
+		name                       string
+		targetLanguage             string
+		checkLocalizationReinforce bool
+		build                      func(targetLanguage string) (*llm.PromptPayload, error)
+	}{
+		{
+			name:                       "tailor English",
+			targetLanguage:             "English",
+			checkLocalizationReinforce: true,
+			build: func(targetLanguage string) (*llm.PromptPayload, error) {
+				return llm.BuildPrompt(core.GenerationRequest{
+					TargetLanguage: targetLanguage,
+					MainProfile:    baseSnapshot,
+					BranchContext:  baseBranch,
+				})
+			},
+		},
+		{
+			name:                       "tailor Spanish",
+			targetLanguage:             "Spanish",
+			checkLocalizationReinforce: true,
+			build: func(targetLanguage string) (*llm.PromptPayload, error) {
+				return llm.BuildPrompt(core.GenerationRequest{
+					TargetLanguage: targetLanguage,
+					MainProfile:    baseSnapshot,
+					BranchContext:  baseBranch,
+				})
+			},
+		},
+		{
+			name:                       "tailor Japanese",
+			targetLanguage:             "Japanese",
+			checkLocalizationReinforce: true,
+			build: func(targetLanguage string) (*llm.PromptPayload, error) {
+				return llm.BuildPrompt(core.GenerationRequest{
+					TargetLanguage: targetLanguage,
+					MainProfile:    baseSnapshot,
+					BranchContext:  baseBranch,
+				})
+			},
+		},
+		{
+			name: "gap analysis",
+			build: func(_ string) (*llm.PromptPayload, error) {
+				return llm.BuildGapAnalysisPrompt(core.GenerationRequest{
+					MainProfile:   baseSnapshot,
+					BranchContext: baseBranch,
+				})
+			},
+		},
+		{
+			name: "ats extraction",
+			build: func(_ string) (*llm.PromptPayload, error) {
+				payload, _, err := llm.BuildATSExtractionPrompt(core.ATSSimulationRequest{
+					FormatUsed:  "markdown",
+					ResumeText:  "# Staff Engineer\n- Built distributed systems in Go.",
+					MainProfile: baseSnapshot,
+				})
+				return payload, err
+			},
+		},
+		{
+			name: "ats matching",
+			build: func(_ string) (*llm.PromptPayload, error) {
+				extracted := &core.ATSExtractedCandidate{
+					Summary: "Staff backend engineer building Go microservices.",
+					Skills:  []string{"Go", "PostgreSQL"},
+				}
+				return llm.BuildATSMatchingPrompt(baseBranch, extracted, sanitizer.NewSessionFromSnapshot(baseSnapshot))
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := tc.build(tc.targetLanguage)
+			if err != nil {
+				t.Fatalf("failed to build prompt: %v", err)
+			}
+
+			piiSection := extractTaggedSection(t, payload.SystemPrompt, "pii_placeholder_rules")
+			for _, token := range concreteSentinels {
+				if !strings.Contains(piiSection, token) {
+					t.Errorf("<pii_placeholder_rules> missing concrete sentinel %q:\n%s", token, piiSection)
+				}
+			}
+			if !strings.Contains(piiSection, companyExample) {
+				t.Errorf("<pii_placeholder_rules> missing company-name preservation example %q:\n%s", companyExample, piiSection)
+			}
+			lowerPII := strings.ToLower(piiSection)
+			for _, term := range append(prohibitionTerms, "non-english") {
+				if !strings.Contains(lowerPII, term) {
+					t.Errorf("<pii_placeholder_rules> missing prohibition term %q:\n%s", term, piiSection)
+				}
+			}
+
+			if tc.checkLocalizationReinforce {
+				locSection := extractTaggedSection(t, payload.SystemPrompt, "language_and_localization_rules")
+				if !strings.Contains(locSection, "<pii_placeholder_rules>") {
+					t.Errorf("<language_and_localization_rules> missing concise <pii_placeholder_rules> cross-reference:\n%s", locSection)
+				}
+				lowerLoc := strings.ToLower(locSection)
+				for _, term := range []string{"company names", "translated"} {
+					if !strings.Contains(lowerLoc, term) {
+						t.Errorf("<language_and_localization_rules> missing localization term %q:\n%s", term, locSection)
+					}
+				}
+				for _, dup := range append(append([]string(nil), concreteSentinels...), "[FIELD_PLACEHOLDER]", "[SOCIAL_*_PLACEHOLDER_N]") {
+					if strings.Contains(locSection, dup) {
+						t.Errorf("<language_and_localization_rules> should stay concise and not duplicate %q:\n%s", dup, locSection)
+					}
+				}
+				for _, verboseTerm := range []string{"transliterat", "reformat", "casing"} {
+					if strings.Contains(lowerLoc, verboseTerm) {
+						t.Errorf("<language_and_localization_rules> should stay concise and not repeat prohibition verb %q:\n%s", verboseTerm, locSection)
+					}
+				}
+			}
+
+			// User prompt must use generic pattern notation and never embed concrete sanitizer sentinels.
+			for _, literal := range concreteSentinels {
+				if strings.Contains(payload.UserPrompt, literal) {
+					t.Errorf("UserPrompt unexpectedly embedded literal sentinel %q:\n%s", literal, payload.UserPrompt)
+				}
+			}
+			const clausePrefix = "Preserve any bracketed uppercase PII placeholder tokens"
+			clauseStart := strings.Index(payload.UserPrompt, clausePrefix)
+			if clauseStart == -1 {
+				t.Fatalf("UserPrompt missing %q preservation clause:\n%s", clausePrefix, payload.UserPrompt)
+			}
+			preservationClause := payload.UserPrompt[clauseStart:]
+			if endIdx := strings.Index(preservationClause, "Output valid JSON only."); endIdx != -1 {
+				preservationClause = preservationClause[:endIdx]
+			}
+			for _, pattern := range []string{"[FIELD_PLACEHOLDER]", "[SOCIAL_*_PLACEHOLDER_N]"} {
+				if !strings.Contains(preservationClause, pattern) {
+					t.Errorf("preservation clause missing generic placeholder pattern %q:\n%s", pattern, preservationClause)
+				}
+			}
+			lowerClause := strings.ToLower(preservationClause)
+			for _, term := range append(prohibitionTerms, "company names", "translated prose") {
+				if !strings.Contains(lowerClause, term) {
+					t.Errorf("preservation clause missing term %q:\n%s", term, preservationClause)
+				}
+			}
+
+			if tc.targetLanguage == "" || tc.targetLanguage == "English" {
+				if strings.Contains(payload.UserPrompt, "Target Output Language:") {
+					t.Errorf("UserPrompt unexpectedly emitted Target Output Language directive for %q:\n%s", tc.targetLanguage, payload.UserPrompt)
+				}
+			} else {
+				langPrefix := "Target Output Language: " + tc.targetLanguage
+				idx := strings.Index(payload.UserPrompt, langPrefix)
+				if idx == -1 {
+					t.Fatalf("UserPrompt missing %q line", langPrefix)
+				}
+				langLine := payload.UserPrompt[idx:]
+				if nl := strings.Index(langLine, "\n"); nl != -1 {
+					langLine = langLine[:nl]
+				}
+				if !strings.Contains(langLine, "bracketed PII placeholder tokens verbatim per the instructions below") {
+					t.Errorf("Target Output Language line missing concise cross-reference:\n%s", langLine)
+				}
+				for _, dup := range append(append([]string(nil), concreteSentinels...), "[FIELD_PLACEHOLDER]", "[SOCIAL_*_PLACEHOLDER_N]") {
+					if strings.Contains(langLine, dup) {
+						t.Errorf("Target Output Language line should stay concise and not duplicate %q:\n%s", dup, langLine)
+					}
+				}
+				lowerLangLine := strings.ToLower(langLine)
+				for _, verboseTerm := range []string{"transliterat", "reformat", "casing", "drop brackets"} {
+					if strings.Contains(lowerLangLine, verboseTerm) {
+						t.Errorf("Target Output Language line should stay concise and not repeat prohibition verb %q:\n%s", verboseTerm, langLine)
+					}
+				}
+			}
+		})
+	}
+
+	t.Run("scrubbed templates share canonical PII partials without duplication", func(t *testing.T) {
+		partials, err := llm.ReadTemplateFile("pii_placeholder_rules.tmpl")
+		if err != nil {
+			t.Fatalf("failed to read pii_placeholder_rules.tmpl: %v", err)
+		}
+		for _, def := range []string{`define "pii_placeholder_system_rules"`, `define "pii_placeholder_user_directive"`} {
+			if !strings.Contains(partials, def) {
+				t.Errorf("pii_placeholder_rules.tmpl missing %s", def)
+			}
+		}
+
+		scrubbedSystemTemplates := []string{
+			"tailor_system.tmpl",
+			"gap_analysis_system.tmpl",
+			"ats_extract_system.tmpl",
+			"ats_match_system.tmpl",
+		}
+		for _, file := range scrubbedSystemTemplates {
+			content, err := llm.ReadTemplateFile(file)
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", file, err)
+			}
+			if !strings.Contains(content, `{{template "pii_placeholder_system_rules"}}`) {
+				t.Errorf("%s must invoke {{template \"pii_placeholder_system_rules\"}}", file)
+			}
+			if strings.Contains(content, "</pii_placeholder_rules>") ||
+				strings.Contains(content, "[FIELD_PLACEHOLDER]") ||
+				strings.Contains(content, sanitizer.PlaceholderFullName) {
+				t.Errorf("%s must not inline <pii_placeholder_rules> block or placeholder tokens directly", file)
+			}
+			allowedRefs := 0
+			if file == "tailor_system.tmpl" {
+				allowedRefs = 1
+			}
+			if gotRefs := strings.Count(content, "<pii_placeholder_rules>"); gotRefs != allowedRefs {
+				t.Errorf("%s has %d <pii_placeholder_rules> occurrences, want %d", file, gotRefs, allowedRefs)
+			}
+		}
+
+		scrubbedUserTemplates := []string{
+			"tailor_user.tmpl",
+			"gap_analysis_user.tmpl",
+			"ats_extract_user.tmpl",
+			"ats_match_user.tmpl",
+		}
+		for _, file := range scrubbedUserTemplates {
+			content, err := llm.ReadTemplateFile(file)
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", file, err)
+			}
+			if !strings.Contains(content, `{{template "pii_placeholder_user_directive"}}`) {
+				t.Errorf("%s must invoke {{template \"pii_placeholder_user_directive\"}}", file)
+			}
+			if strings.Contains(content, "<pii_placeholder_rules>") ||
+				strings.Contains(content, "</pii_placeholder_rules>") ||
+				strings.Contains(content, "[FIELD_PLACEHOLDER]") ||
+				strings.Contains(content, "[SOCIAL_*_PLACEHOLDER_N]") ||
+				strings.Contains(content, sanitizer.PlaceholderFullName) {
+				t.Errorf("%s must not inline PII placeholder directives or tokens directly", file)
+			}
+		}
+	})
+
+	t.Run("resume extraction templates remain untouched without PII placeholder rules", func(t *testing.T) {
+		for _, file := range []string{"resume_extract_system.tmpl", "resume_extract_user.tmpl"} {
+			content, err := llm.ReadTemplateFile(file)
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", file, err)
+			}
+			if strings.Contains(content, "pii_placeholder_rules") ||
+				strings.Contains(content, "[FIELD_PLACEHOLDER]") ||
+				strings.Contains(content, sanitizer.PlaceholderFullName) {
+				t.Errorf("%s should remain untouched for unredacted raw resume extraction, got:\n%s", file, content)
+			}
+		}
+
+		payload, err := llm.BuildResumeExtractPrompt("Jane Doe\nStaff Engineer\n- Cut p99 latency by 45%")
+		if err != nil {
+			t.Fatalf("BuildResumeExtractPrompt failed: %v", err)
+		}
+		if strings.Contains(payload.SystemPrompt, "<pii_placeholder_rules>") {
+			t.Errorf("BuildResumeExtractPrompt should not contain <pii_placeholder_rules>")
 		}
 	})
 }

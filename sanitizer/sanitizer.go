@@ -15,29 +15,73 @@ import (
 // Canonical deterministic PII placeholder constants.
 const (
 	// PlaceholderFullName replaces the candidate's full name in obfuscated prompts.
-	PlaceholderFullName = "[John Doe]"
+	PlaceholderFullName = "[NAME_PLACEHOLDER]"
 	// PlaceholderEmail replaces the candidate's email address in obfuscated prompts.
-	PlaceholderEmail = "candidate@email.com"
+	PlaceholderEmail = "[EMAIL_PLACEHOLDER]"
 	// PlaceholderPhone replaces the candidate's phone number in obfuscated prompts.
-	PlaceholderPhone = "+1 111 111 1111"
+	PlaceholderPhone = "[PHONE_PLACEHOLDER]"
 	// PlaceholderWebsite replaces personal website URLs in obfuscated prompts.
-	PlaceholderWebsite = "https://candidate.example.com"
-	// PlaceholderSocialURLPrefix prefixes indexed synthetic social profile URLs.
-	PlaceholderSocialURLPrefix = "https://social.example.com/profile-"
-	// PlaceholderSocialUserPrefix prefixes indexed synthetic social handles.
-	PlaceholderSocialUserPrefix = "candidate-social-"
+	PlaceholderWebsite = "[WEBSITE_PLACEHOLDER]"
+	// PlaceholderSocialURLPrefix prefixes indexed sentinel social profile URLs.
+	PlaceholderSocialURLPrefix = "[SOCIAL_URL_PLACEHOLDER_"
+	// PlaceholderSocialHandlePrefix prefixes indexed sentinel social handles.
+	PlaceholderSocialHandlePrefix = "[SOCIAL_HANDLE_PLACEHOLDER_"
+	// PlaceholderSocialSuffix closes indexed social URL and handle sentinel placeholders.
+	PlaceholderSocialSuffix = "]"
 )
 
-// textRule pairs a compiled regex with its literal or capture-aware replacement.
+// formatIndexedPlaceholder builds a 1-based sentinel token from prefix and index, clamping
+// non-positive indices to 1 so emitted sentinels remain canonically 1-based.
+func formatIndexedPlaceholder(prefix string, index int) string {
+	if index < 1 {
+		index = 1
+	}
+	return prefix + strconv.Itoa(index) + PlaceholderSocialSuffix
+}
+
+// PlaceholderSocialURL returns the 1-based indexed sentinel placeholder for a social profile URL
+// (index >= 1; non-positive indices clamp to 1).
+func PlaceholderSocialURL(index int) string {
+	return formatIndexedPlaceholder(PlaceholderSocialURLPrefix, index)
+}
+
+// PlaceholderSocialHandle returns the 1-based indexed sentinel placeholder for a social profile
+// handle (index >= 1; non-positive indices clamp to 1).
+func PlaceholderSocialHandle(index int) string {
+	return formatIndexedPlaceholder(PlaceholderSocialHandlePrefix, index)
+}
+
+// textRule pairs a compiled regex with its literal sentinel replacement.
 type textRule struct {
-	re      *regexp.Regexp
+	// re holds the compiled regular expression matched during forward obfuscation.
+	re *regexp.Regexp
+	// replace holds the sentinel placeholder emitted for the matched PII token.
+	replace string
+	// hasPrefixGroup reports whether re captures a leading delimiter in group 1 so only
+	// the phone span after capture group 1 is replaced.
+	hasPrefixGroup bool
+}
+
+// obfMatch captures a single forward match span against the immutable original input.
+type obfMatch struct {
+	// start is the inclusive byte index where the PII token begins.
+	start int
+	// end is the exclusive byte index where the PII token ends.
+	end int
+	// ruleIdx breaks same-start ties in favor of earlier (longer-source) rules.
+	ruleIdx int
+	// replace is the sentinel placeholder to emit for [start:end].
 	replace string
 }
 
 // Session manages deterministic PII masking and unmasking for a generation lifecycle.
 type Session struct {
-	obfRules   []textRule
-	deobfRules []textRule
+	// obfRules stores forward obfuscation rules ordered longest-first.
+	obfRules []textRule
+	// deobfRegex matches all registered placeholders in a single case-insensitive pass.
+	deobfRegex *regexp.Regexp
+	// deobfLookup maps lowercased placeholders back to their original PII values.
+	deobfLookup map[string]string
 }
 
 // rawMapping captures an uncompiled source-to-placeholder substitution rule.
@@ -46,7 +90,6 @@ type rawMapping struct {
 	replacement   string
 	wordBound     bool
 	customPattern string
-	customReplace string
 }
 
 // mappingBuilder accumulates forward and reverse PII replacement rules.
@@ -122,14 +165,6 @@ func (b *mappingBuilder) addPair(orig, placeholder string, wordBound bool) {
 func (b *mappingBuilder) addContactRules(profile core.Profile) {
 	if profile.FullName != "" {
 		b.addPair(profile.FullName, PlaceholderFullName, isWordBounded(profile.FullName))
-		// Also support reverse deobfuscation if LLM dropped the brackets.
-		if !strings.EqualFold(profile.FullName, "John Doe") {
-			b.reverse = append(b.reverse, rawMapping{
-				source:      "John Doe",
-				replacement: profile.FullName,
-				wordBound:   true,
-			})
-		}
 	}
 
 	if profile.Email != "" {
@@ -148,13 +183,12 @@ func (b *mappingBuilder) addPhoneRule(phone string) {
 		b.addPair(cleanPhone, PlaceholderPhone, true)
 		return
 	}
-	// Phone starts with a non-word rune (e.g. '+' or '('); capture the leading delimiter in ${1}
-	// so surrounding whitespace is preserved.
+	// Phone starts with a non-word rune (e.g. '+' or '('); capture the leading delimiter in
+	// group 1 so single-pass scanning preserves surrounding characters without re-scanning.
 	b.forward = append(b.forward, rawMapping{
 		source:        cleanPhone,
 		replacement:   PlaceholderPhone,
 		customPattern: fmt.Sprintf(`(?i)(^|[^\w+])%s\b`, regexp.QuoteMeta(cleanPhone)),
-		customReplace: fmt.Sprintf(`${1}%s`, PlaceholderPhone),
 	})
 	b.reverse = append(b.reverse, rawMapping{
 		source:      PlaceholderPhone,
@@ -188,9 +222,8 @@ func (b *mappingBuilder) addWebsiteAndSocialRules(profile core.Profile) {
 	}
 
 	for i, p := range profile.Profiles {
-		idx := strconv.Itoa(i + 1)
-		placeholderURL := PlaceholderSocialURLPrefix + idx
-		placeholderUser := PlaceholderSocialUserPrefix + idx
+		placeholderURL := PlaceholderSocialURL(i + 1)
+		placeholderHandle := PlaceholderSocialHandle(i + 1)
 
 		cleanURL := strings.TrimSpace(p.URL)
 		if cleanURL != "" && cleanURL != realWebsite && isValidURL(cleanURL) {
@@ -201,7 +234,7 @@ func (b *mappingBuilder) addWebsiteAndSocialRules(profile core.Profile) {
 		// corrupting technical terms and common words.
 		cleanUser := strings.TrimSpace(p.Username)
 		if len(cleanUser) >= 3 {
-			b.addPair(cleanUser, placeholderUser, isWordBounded(cleanUser))
+			b.addPair(cleanUser, placeholderHandle, isWordBounded(cleanUser))
 		}
 	}
 }
@@ -209,7 +242,7 @@ func (b *mappingBuilder) addWebsiteAndSocialRules(profile core.Profile) {
 // compileMappings sorts raw mappings longest-first and compiles unique regexp rules.
 func compileMappings(mappings []rawMapping) []textRule {
 	// Sort by source length descending to prevent partial prefix collision.
-	sort.Slice(mappings, func(i, j int) bool {
+	sort.SliceStable(mappings, func(i, j int) bool {
 		return len(mappings[i].source) > len(mappings[j].source)
 	})
 
@@ -223,7 +256,7 @@ func compileMappings(mappings []rawMapping) []textRule {
 		seen[key] = true
 
 		pattern := m.customPattern
-		replace := m.customReplace
+		hasPrefixGroup := pattern != ""
 		if pattern == "" {
 			pattern = regexp.QuoteMeta(m.source)
 			if m.wordBound {
@@ -231,18 +264,96 @@ func compileMappings(mappings []rawMapping) []textRule {
 			} else {
 				pattern = fmt.Sprintf(`(?i)%s`, pattern)
 			}
-			replace = m.replacement
 		}
 
 		re, err := regexp.Compile(pattern)
 		if err == nil {
 			rules = append(rules, textRule{
-				re:      re,
-				replace: replace,
+				re:             re,
+				replace:        m.replacement,
+				hasPrefixGroup: hasPrefixGroup,
 			})
 		}
 	}
 	return rules
+}
+
+// collectObfMatches collects candidate forward match spans across rules against immutable input.
+func collectObfMatches(input string, rules []textRule) []obfMatch {
+	var matches []obfMatch
+	for ruleIdx, rule := range rules {
+		if rule.hasPrefixGroup {
+			for _, loc := range rule.re.FindAllStringSubmatchIndex(input, -1) {
+				// Group 1 captures the leading delimiter; the phone token itself starts at loc[3].
+				if len(loc) < 4 || loc[3] < 0 || loc[3] >= loc[1] {
+					continue
+				}
+				matches = append(matches, obfMatch{
+					start:   loc[3],
+					end:     loc[1],
+					ruleIdx: ruleIdx,
+					replace: rule.replace,
+				})
+			}
+			continue
+		}
+		for _, loc := range rule.re.FindAllStringIndex(input, -1) {
+			if len(loc) < 2 || loc[0] >= loc[1] {
+				continue
+			}
+			matches = append(matches, obfMatch{
+				start:   loc[0],
+				end:     loc[1],
+				ruleIdx: ruleIdx,
+				replace: rule.replace,
+			})
+		}
+	}
+	return matches
+}
+
+// compileDeobfMatcher builds a single-pass case-insensitive alternation regex and lookup map
+// from reverse mappings so DeobfuscateString avoids RE2 $-expansion and multi-pass collisions.
+func compileDeobfMatcher(mappings []rawMapping) (*regexp.Regexp, map[string]string) {
+	if len(mappings) == 0 {
+		return nil, nil
+	}
+
+	// Deduplicate case-insensitively before sorting so each placeholder appears at most once.
+	unique := make([]rawMapping, 0, len(mappings))
+	seen := make(map[string]bool, len(mappings))
+	for _, m := range mappings {
+		if m.source == "" {
+			continue
+		}
+		key := strings.ToLower(m.source)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, m)
+	}
+	if len(unique) == 0 {
+		return nil, nil
+	}
+
+	// Sort longest-first so RE2 leftmost-first alternation prefers longer tokens on shared prefixes.
+	sort.SliceStable(unique, func(i, j int) bool {
+		return len(unique[i].source) > len(unique[j].source)
+	})
+
+	lookup := make(map[string]string, len(unique))
+	patterns := make([]string, len(unique))
+	for i, m := range unique {
+		lookup[strings.ToLower(m.source)] = m.replacement
+		patterns[i] = regexp.QuoteMeta(m.source)
+	}
+
+	re, err := regexp.Compile(`(?i)(?:` + strings.Join(patterns, "|") + `)`)
+	if err != nil {
+		return nil, nil
+	}
+	return re, lookup
 }
 
 // NewSession constructs a Session from a Profile.
@@ -257,9 +368,11 @@ func NewSession(profile *core.Profile) *Session {
 	builder.addPhoneRule(targetProfile.Phone)
 	builder.addWebsiteAndSocialRules(targetProfile)
 
+	deobfRegex, deobfLookup := compileDeobfMatcher(builder.reverse)
 	return &Session{
-		obfRules:   compileMappings(builder.forward),
-		deobfRules: compileMappings(builder.reverse),
+		obfRules:    compileMappings(builder.forward),
+		deobfRegex:  deobfRegex,
+		deobfLookup: deobfLookup,
 	}
 }
 
@@ -276,28 +389,54 @@ func NewSessionFromRequest(req core.GenerationRequest) *Session {
 	return NewSessionFromSnapshot(req.MainProfile)
 }
 
-// ObfuscateString replaces occurrences of real contact details with placeholders.
+// ObfuscateString replaces occurrences of real contact details with placeholders in a single
+// pass against immutable input so emitted sentinels are never re-matched by later rules.
 func (s *Session) ObfuscateString(input string) string {
 	if s == nil || input == "" || len(s.obfRules) == 0 {
 		return input
 	}
-	res := input
-	for _, rule := range s.obfRules {
-		res = rule.re.ReplaceAllString(res, rule.replace)
-	}
-	return res
-}
-
-// DeobfuscateString replaces occurrences of placeholders with real contact details.
-func (s *Session) DeobfuscateString(input string) string {
-	if s == nil || input == "" || len(s.deobfRules) == 0 {
+	matches := collectObfMatches(input, s.obfRules)
+	if len(matches) == 0 {
 		return input
 	}
-	res := input
-	for _, rule := range s.deobfRules {
-		res = rule.re.ReplaceAllString(res, rule.replace)
+	// Resolve leftmost-earliest spans first, breaking equal starts by longest-source rule index.
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].start != matches[j].start {
+			return matches[i].start < matches[j].start
+		}
+		if matches[i].ruleIdx != matches[j].ruleIdx {
+			return matches[i].ruleIdx < matches[j].ruleIdx
+		}
+		return matches[i].end > matches[j].end
+	})
+
+	var buf strings.Builder
+	buf.Grow(len(input))
+	cursor := 0
+	for _, m := range matches {
+		if m.start < cursor {
+			continue
+		}
+		buf.WriteString(input[cursor:m.start])
+		buf.WriteString(m.replace)
+		cursor = m.end
 	}
-	return res
+	buf.WriteString(input[cursor:])
+	return buf.String()
+}
+
+// DeobfuscateString replaces occurrences of placeholders with real contact details in a single
+// pass without RE2 $-expansion.
+func (s *Session) DeobfuscateString(input string) string {
+	if s == nil || input == "" || s.deobfRegex == nil {
+		return input
+	}
+	return s.deobfRegex.ReplaceAllStringFunc(input, func(match string) string {
+		if repl, ok := s.deobfLookup[strings.ToLower(match)]; ok {
+			return repl
+		}
+		return match
+	})
 }
 
 // cloneSlice returns a nil-preserving shallow copy of items.
@@ -508,7 +647,7 @@ func (s *Session) ObfuscateRequest(req core.GenerationRequest) core.GenerationRe
 // (company, role title, project identity, education headers, certification identity/URL)
 // are canonically populated by provenance.Validate.
 func (s *Session) DeobfuscateTailoredContent(content *core.TailoredContent) {
-	if s == nil || content == nil || len(s.deobfRules) == 0 {
+	if s == nil || content == nil || s.deobfRegex == nil {
 		return
 	}
 	content.Summary = s.DeobfuscateString(content.Summary)
@@ -550,7 +689,7 @@ func (s *Session) deobfuscateGapItems(items []core.GapItem) {
 
 // DeobfuscateGapReport restores original contact details into the provided GapReport.
 func (s *Session) DeobfuscateGapReport(report *core.GapReport) {
-	if s == nil || report == nil || len(s.deobfRules) == 0 {
+	if s == nil || report == nil || s.deobfRegex == nil {
 		return
 	}
 	report.OverallMatchSummary = s.DeobfuscateString(report.OverallMatchSummary)
@@ -577,10 +716,11 @@ func (s *Session) DeobfuscateGenerationResponse(resp *core.GenerationResponse) {
 	s.DeobfuscateGapReport(&resp.GapReport)
 }
 
-// DeobfuscateATSScore restores original contact details across free-text narrative and highlight
-// fields of an ATSScore and its ExtractedCandidate.
+// DeobfuscateATSScore restores original contact details across summary, experience company,
+// role title, and highlight fields of an ATSScore and its ExtractedCandidate, while leaving
+// Skills, DateRange, Educations, and Certifications untouched.
 func (s *Session) DeobfuscateATSScore(score *core.ATSScore) {
-	if s == nil || score == nil || len(s.deobfRules) == 0 {
+	if s == nil || score == nil || s.deobfRegex == nil {
 		return
 	}
 	score.ExtractionSummary = s.DeobfuscateString(score.ExtractionSummary)
@@ -589,6 +729,7 @@ func (s *Session) DeobfuscateATSScore(score *core.ATSScore) {
 		c := score.ExtractedCandidate
 		c.Summary = s.DeobfuscateString(c.Summary)
 		for i := range c.Experiences {
+			c.Experiences[i].Company = s.DeobfuscateString(c.Experiences[i].Company)
 			c.Experiences[i].Title = s.DeobfuscateString(c.Experiences[i].Title)
 			for j := range c.Experiences[i].Highlights {
 				c.Experiences[i].Highlights[j] = s.DeobfuscateString(c.Experiences[i].Highlights[j])
@@ -598,8 +739,8 @@ func (s *Session) DeobfuscateATSScore(score *core.ATSScore) {
 }
 
 // ObfuscateExtractedCandidate returns a deep clone of candidate with contact PII scrubbed from
-// narrative fields (Summary, Experiences[].Title, Experiences[].Highlights), leaving caller slices
-// unmutated and preserving non-PII Company, Educations, Skills, and Certifications metadata.
+// Summary and Experiences (Company, Title, Highlights), leaving caller slices unmutated and
+// preserving non-PII third-party company names, DateRange, Skills, Educations, and Certifications.
 func (s *Session) ObfuscateExtractedCandidate(candidate *core.ATSExtractedCandidate) *core.ATSExtractedCandidate {
 	if candidate == nil {
 		return nil
@@ -615,6 +756,7 @@ func (s *Session) ObfuscateExtractedCandidate(candidate *core.ATSExtractedCandid
 		res.Experiences = make([]core.ATSExtractedExperience, len(candidate.Experiences))
 		for i, exp := range candidate.Experiences {
 			clonedExp := exp
+			clonedExp.Company = s.ObfuscateString(exp.Company)
 			clonedExp.Title = s.ObfuscateString(exp.Title)
 			if exp.Highlights != nil {
 				clonedExp.Highlights = make([]string, len(exp.Highlights))

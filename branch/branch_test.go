@@ -1214,8 +1214,8 @@ func TestService_AnalyzeGaps(t *testing.T) {
 			t.Fatalf("AnalyzeGaps failed: %v", err)
 		}
 
-		if strings.Contains(report.OverallMatchSummary, "[John Doe]") {
-			t.Errorf("gap report leaked placeholder [John Doe]")
+		if strings.Contains(report.OverallMatchSummary, sanitizer.PlaceholderFullName) {
+			t.Errorf("gap report leaked placeholder %q", sanitizer.PlaceholderFullName)
 		}
 		if !strings.Contains(report.OverallMatchSummary, realName) {
 			t.Errorf("gap report missing authentic name %q", realName)

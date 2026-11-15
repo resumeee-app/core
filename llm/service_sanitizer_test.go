@@ -71,6 +71,22 @@ func TestService_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 						},
 					},
 				},
+				Education: []core.TailoredEducation{
+					{
+						SourceEntityID: "edu-1",
+						Institution:    "MIT",
+						Bullets: []core.TailoredBullet{
+							{Text: sanitizer.PlaceholderFullName + " authored distributed systems research at " + sanitizer.PlaceholderWebsite + "."},
+						},
+					},
+				},
+				Certifications: []core.TailoredCert{
+					{
+						SourceEntityID: "cert-1",
+						Name:           "CKA",
+						Summary:        "Awarded to " + sanitizer.PlaceholderFullName + ".",
+					},
+				},
 			},
 			GapReport: core.GapReport{
 				OverallMatchSummary: sanitizer.PlaceholderFullName + " satisfies all requirements.",
@@ -99,6 +115,23 @@ func TestService_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 		},
 		MainProfile: &core.MainProfileSnapshot{
 			Profile: *candidateProf,
+			Education: []core.Education{
+				{
+					ID:          "edu-1",
+					ShortID:     "edu-1",
+					Institution: "MIT",
+					Degree:      "M.S.",
+					Field:       "Computer Science",
+				},
+			},
+			Certifications: []core.Certification{
+				{
+					ID:      "cert-1",
+					ShortID: "cert-1",
+					Name:    "CKA",
+					Issuer:  "CNCF",
+				},
+			},
 		},
 	}
 
@@ -132,6 +165,25 @@ func TestService_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 	}
 	if !strings.Contains(resp.TailoredContent.Experiences[0].Bullets[0].Text, "Alice Walker scaled") {
 		t.Errorf("bullet failed deobfuscation: %s", resp.TailoredContent.Experiences[0].Bullets[0].Text)
+	}
+	if len(resp.TailoredContent.Education) == 0 || len(resp.TailoredContent.Education[0].Bullets) == 0 {
+		t.Fatalf("expected education bullet in tailored response, got %+v", resp.TailoredContent.Education)
+	}
+	eduBullet := resp.TailoredContent.Education[0].Bullets[0].Text
+	if strings.Contains(eduBullet, sanitizer.PlaceholderFullName) || strings.Contains(eduBullet, sanitizer.PlaceholderWebsite) {
+		t.Errorf("education bullet retained placeholder: %s", eduBullet)
+	}
+	wantEduBullet := "Alice Walker authored distributed systems research at https://alice.dev."
+	if eduBullet != wantEduBullet {
+		t.Errorf("education bullet failed deobfuscation: got %q, want %q", eduBullet, wantEduBullet)
+	}
+	if len(resp.TailoredContent.Certifications) == 0 {
+		t.Fatalf("expected certification in tailored response, got %+v", resp.TailoredContent.Certifications)
+	}
+	certSummary := resp.TailoredContent.Certifications[0].Summary
+	wantCertSummary := "Awarded to Alice Walker."
+	if certSummary != wantCertSummary {
+		t.Errorf("certification summary failed deobfuscation: got %q, want %q", certSummary, wantCertSummary)
 	}
 	if !strings.Contains(resp.GapReport.OverallMatchSummary, "Alice Walker satisfies") {
 		t.Errorf("gap report failed deobfuscation: %s", resp.GapReport.OverallMatchSummary)

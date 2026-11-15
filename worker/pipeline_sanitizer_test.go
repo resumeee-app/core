@@ -100,6 +100,67 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		t.Fatalf("failed to create fact: %v", err)
 	}
 
+	consultExp := core.WorkExperience{
+		ID:            "exp-consulting",
+		UserID:        env.defaultUser,
+		Company:       "Margaret Hamilton Consulting",
+		RoleTitle:     "Principal Systems Advisor",
+		StartDate:     core.NewDate(1976, 1, 1),
+		DutiesSummary: "Margaret Hamilton advised aerospace and fault-tolerant systems clients.",
+	}
+	if err := env.careerRepo.CreateExperience(ctx, &consultExp); err != nil {
+		t.Fatalf("failed to create consulting exp: %v", err)
+	}
+
+	consultFact := core.Fact{
+		ID:        "fact-consulting-1",
+		UserID:    env.defaultUser,
+		OwnerID:   consultExp.ID,
+		OwnerType: core.OwnerTypeWorkExperience,
+		Statement: "Margaret Hamilton designed formal verification tooling for mission software.",
+	}
+	if err := env.careerRepo.CreateFact(ctx, &consultFact); err != nil {
+		t.Fatalf("failed to create consulting fact: %v", err)
+	}
+
+	eduStart := core.NewDate(1954, 9, 1)
+	eduEnd := core.NewDate(1958, 5, 1)
+	edu := core.Education{
+		ID:          "edu-earlham",
+		UserID:      env.defaultUser,
+		Institution: "Earlham College",
+		Degree:      "B.A.",
+		Field:       "Mathematics",
+		StartDate:   &eduStart,
+		EndDate:     &eduEnd,
+	}
+	if err := env.careerRepo.CreateEducation(ctx, &edu); err != nil {
+		t.Fatalf("failed to create education: %v", err)
+	}
+
+	eduFact := core.Fact{
+		ID:        "fact-edu-earlham-1",
+		UserID:    env.defaultUser,
+		OwnerID:   edu.ID,
+		OwnerType: core.OwnerTypeEducation,
+		Statement: "Margaret Hamilton authored mathematics research archived at https://margarethamilton.org.",
+	}
+	if err := env.careerRepo.CreateFact(ctx, &eduFact); err != nil {
+		t.Fatalf("failed to create education fact: %v", err)
+	}
+
+	cert := core.Certification{
+		ID:      "cert-apollo",
+		UserID:  env.defaultUser,
+		Name:    "Apollo Flight Ops",
+		Issuer:  "NASA",
+		URL:     "https://margarethamilton.org/cert",
+		Summary: "Issued to Margaret Hamilton.",
+	}
+	if err := env.careerRepo.CreateCertification(ctx, &cert); err != nil {
+		t.Fatalf("failed to create certification: %v", err)
+	}
+
 	// Transport client returns ONLY synthetic placeholders (simulating an external LLM echoing masked inputs).
 	transportClient := &sanitizerPipelineClient{
 		resp: core.GenerationResponse{
@@ -116,6 +177,33 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 							{
 								Text:          sanitizer.PlaceholderFullName + " engineered priority display and asynchronous recovery.",
 								SourceFactIDs: []string{fact.EffectiveShortID()},
+							},
+						},
+					},
+					{
+						SourceEntityID: consultExp.EffectiveShortID(),
+						Company:        sanitizer.PlaceholderFullName + " Consulting",
+						RoleTitle:      "Principal Systems Advisor",
+						StartDate:      core.NewDate(1976, 1, 1),
+						DutiesSummary:  sanitizer.PlaceholderFullName + " advised fault-tolerant systems clients.",
+						Bullets: []core.TailoredBullet{
+							{
+								Text:          sanitizer.PlaceholderFullName + " built formal verification tooling.",
+								SourceFactIDs: []string{consultFact.EffectiveShortID()},
+							},
+						},
+					},
+				},
+				Education: []core.TailoredEducation{
+					{
+						SourceEntityID: edu.EffectiveShortID(),
+						Institution:    "Earlham College",
+						Degree:         "B.A.",
+						Field:          "Mathematics",
+						Bullets: []core.TailoredBullet{
+							{
+								Text:          sanitizer.PlaceholderFullName + " authored mathematics research at " + sanitizer.PlaceholderWebsite + ".",
+								SourceFactIDs: []string{eduFact.EffectiveShortID()},
 							},
 						},
 					},
@@ -195,6 +283,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		"margaret.hamilton@mit.edu",
 		"+1 (617) 253-1000",
 		"https://margarethamilton.org",
+		"https://margarethamilton.org/cert",
 		"https://github.com/mhamilton",
 		"mhamilton",
 	} {
@@ -204,9 +293,12 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 	}
 	for _, mask := range []string{
 		sanitizer.PlaceholderFullName,
+		sanitizer.PlaceholderFullName + " Consulting",
 		sanitizer.PlaceholderEmail,
 		sanitizer.PlaceholderPhone,
 		sanitizer.PlaceholderWebsite,
+		sanitizer.PlaceholderWebsite + "/cert",
+		"Issued to " + sanitizer.PlaceholderFullName,
 	} {
 		if !strings.Contains(outboundWire, mask) {
 			t.Errorf("outbound LLM transport prompt missing expected placeholder %q", mask)
@@ -245,6 +337,39 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		t.Errorf("version bullet text failed deobfuscation: %q", bulletText)
 	}
 
+	var foundConsulting *core.TailoredExperience
+	for i := range completedVer.TailoredContent.Experiences {
+		if completedVer.TailoredContent.Experiences[i].SourceEntityID == consultExp.ID {
+			foundConsulting = &completedVer.TailoredContent.Experiences[i]
+			break
+		}
+	}
+	if foundConsulting == nil {
+		t.Fatalf("expected consulting experience %q in validated TailoredContent", consultExp.ID)
+	}
+	if foundConsulting.Company != "Margaret Hamilton Consulting" {
+		t.Errorf("consulting Company failed provenance reconciliation: got %q, want %q", foundConsulting.Company, "Margaret Hamilton Consulting")
+	}
+
+	if len(completedVer.TailoredContent.Education) == 0 || len(completedVer.TailoredContent.Education[0].Bullets) == 0 {
+		t.Fatalf("expected education bullet in validated TailoredContent, got %+v", completedVer.TailoredContent.Education)
+	}
+	eduBullet := completedVer.TailoredContent.Education[0].Bullets[0].Text
+	for _, placeholder := range []string{
+		sanitizer.PlaceholderFullName,
+		sanitizer.PlaceholderEmail,
+		sanitizer.PlaceholderPhone,
+		sanitizer.PlaceholderWebsite,
+		"candidate-social-2",
+	} {
+		if strings.Contains(eduBullet, placeholder) {
+			t.Errorf("education Bullets[0].Text retained placeholder %q: %q", placeholder, eduBullet)
+		}
+	}
+	if !strings.Contains(eduBullet, "Margaret Hamilton") || !strings.Contains(eduBullet, "https://margarethamilton.org") {
+		t.Errorf("education Bullets[0].Text failed deobfuscation: %q", eduBullet)
+	}
+
 	// 3. Verify GapReport contains authentic details and zero placeholders
 	if strings.Contains(completedVer.GapReport.OverallMatchSummary, sanitizer.PlaceholderFullName) ||
 		!strings.Contains(completedVer.GapReport.OverallMatchSummary, "Margaret Hamilton") {
@@ -271,6 +396,9 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		}
 		if !strings.Contains(content, "Margaret Hamilton") {
 			t.Errorf("%s missing authentic name 'Margaret Hamilton'", format)
+		}
+		if !strings.Contains(content, "Margaret Hamilton Consulting") {
+			t.Errorf("%s missing canonical consulting company 'Margaret Hamilton Consulting'", format)
 		}
 		if !strings.Contains(content, "margaret.hamilton@mit.edu") {
 			t.Errorf("%s missing authentic email 'margaret.hamilton@mit.edu'", format)

@@ -163,11 +163,6 @@ func TestSession_ObfuscateSnapshot_NonLLMFieldsUntouched(t *testing.T) {
 			want: "https://alicewalker.dev",
 		},
 		{
-			name: "Experience.Company structured employer untouched",
-			got:  obf.Experiences[0].Company,
-			want: "Alice Walker Consulting",
-		},
-		{
 			name: "Experience.SupervisorName stripped by LeanExperience",
 			got:  obf.Experiences[0].SupervisorName,
 			want: "Alice Walker Supervisor",
@@ -207,16 +202,6 @@ func TestSession_ObfuscateSnapshot_NonLLMFieldsUntouched(t *testing.T) {
 			got:  obf.Certifications[0].Issuer,
 			want: "CNCF / alicewalker",
 		},
-		{
-			name: "Certification.URL structured details untouched",
-			got:  obf.Certifications[0].URL,
-			want: "https://alicewalker.dev/cka",
-		},
-		{
-			name: "Certification.Summary structured details untouched",
-			got:  obf.Certifications[0].Summary,
-			want: "Issued to Alice Walker.",
-		},
 	}
 
 	for _, tc := range nonLLMChecks {
@@ -247,6 +232,15 @@ func TestSession_ObfuscateSnapshot_NonLLMFieldsUntouched(t *testing.T) {
 	if !strings.Contains(snap.Facts[0].Statement, "Alice Walker") {
 		t.Errorf("original snapshot root Fact.Statement was mutated: %q", snap.Facts[0].Statement)
 	}
+	if snap.Experiences[0].Company != "Alice Walker Consulting" {
+		t.Errorf("original snapshot Experience.Company was mutated: %q", snap.Experiences[0].Company)
+	}
+	if snap.Certifications[0].URL != "https://alicewalker.dev/cka" {
+		t.Errorf("original snapshot Certification.URL was mutated: %q", snap.Certifications[0].URL)
+	}
+	if snap.Certifications[0].Summary != "Issued to Alice Walker." {
+		t.Errorf("original snapshot Certification.Summary was mutated: %q", snap.Certifications[0].Summary)
+	}
 }
 
 func TestSession_ObfuscateSnapshot_LLMBoundFieldsScrubbed(t *testing.T) {
@@ -273,6 +267,7 @@ func TestSession_ObfuscateSnapshot_LLMBoundFieldsScrubbed(t *testing.T) {
 	}{
 		{"Profile.Headline", obf.Profile.Headline, sanitizer.PlaceholderFullName},
 		{"Profile.Summary", obf.Profile.Summary, sanitizer.PlaceholderEmail},
+		{"Experience.Company", obf.Experiences[0].Company, sanitizer.PlaceholderFullName + " Consulting"},
 		{"Experience.RoleTitle", obf.Experiences[0].RoleTitle, sanitizer.PlaceholderFullName},
 		{"Experience.DutiesSummary", obf.Experiences[0].DutiesSummary, sanitizer.PlaceholderFullName},
 		{"Experience.Fact.Statement", obf.Experiences[0].Facts[0].Statement, sanitizer.PlaceholderFullName},
@@ -285,6 +280,8 @@ func TestSession_ObfuscateSnapshot_LLMBoundFieldsScrubbed(t *testing.T) {
 		{"Project.Fact.Impact", obf.Projects[0].Facts[0].Impact, sanitizer.PlaceholderSocialUserPrefix + "2"},
 		{"Education.Fact.Statement", obf.Education[0].Facts[0].Statement, sanitizer.PlaceholderFullName},
 		{"Education.Fact.Impact", obf.Education[0].Facts[0].Impact, sanitizer.PlaceholderWebsite},
+		{"Certification.URL", obf.Certifications[0].URL, sanitizer.PlaceholderWebsite + "/cka"},
+		{"Certification.Summary", obf.Certifications[0].Summary, sanitizer.PlaceholderFullName},
 		{"Root.Fact.Statement", obf.Facts[0].Statement, sanitizer.PlaceholderFullName},
 		{"Root.Fact.Impact", obf.Facts[0].Impact, sanitizer.PlaceholderEmail},
 	}
@@ -381,6 +378,7 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 		{"BranchContext.TargetRequirements", obfReq.BranchContext.TargetRequirements},
 		{"BranchContext.BranchInstructions", obfReq.BranchContext.BranchInstructions},
 		{"PriorVersion.Summary", obfReq.PriorVersion.Summary},
+		{"PriorVersion.Experience.Company", obfReq.PriorVersion.Experiences[0].Company},
 		{"PriorVersion.Experience.RoleTitle", obfReq.PriorVersion.Experiences[0].RoleTitle},
 		{"PriorVersion.Experience.DutiesSummary", obfReq.PriorVersion.Experiences[0].DutiesSummary},
 		{"PriorVersion.Experience.Bullet", obfReq.PriorVersion.Experiences[0].Bullets[0].Text},
@@ -390,6 +388,7 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 		{"PriorVersion.Project.Summary", obfReq.PriorVersion.Projects[0].Summary},
 		{"PriorVersion.Project.Bullet", obfReq.PriorVersion.Projects[0].Bullets[0].Text},
 		{"PriorVersion.Education.Bullet", obfReq.PriorVersion.Education[0].Bullets[0].Text},
+		{"PriorVersion.Certification.URL", obfReq.PriorVersion.Certifications[0].URL},
 	}
 	for _, tc := range scrubbedChecks {
 		t.Run(tc.name, func(t *testing.T) {
@@ -410,13 +409,11 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 	}{
 		{"BranchContext.TargetCompany", obfReq.BranchContext.TargetCompany, "Alice Walker Ventures"},
 		{"BranchContext.CustomDirectives", obfReq.BranchContext.CustomDirectives, "Unused alias mentioning Alice Walker."},
-		{"PriorVersion.Experience.Company", obfReq.PriorVersion.Experiences[0].Company, "Alice Walker Consulting"},
 		{"PriorVersion.Education.Institution", obfReq.PriorVersion.Education[0].Institution, "MIT (Alice Walker)"},
 		{"PriorVersion.Education.Degree", obfReq.PriorVersion.Education[0].Degree, "M.S. (Alice Walker)"},
 		{"PriorVersion.Education.Field", obfReq.PriorVersion.Education[0].Field, "Systems (Alice Walker)"},
 		{"PriorVersion.Certification.Name", obfReq.PriorVersion.Certifications[0].Name, "CKA - Alice Walker"},
 		{"PriorVersion.Certification.Issuer", obfReq.PriorVersion.Certifications[0].Issuer, "CNCF (alicewalker)"},
-		{"PriorVersion.Certification.URL", obfReq.PriorVersion.Certifications[0].URL, "https://alicewalker.dev/cka"},
 		{"PriorVersion.Certification.Summary", obfReq.PriorVersion.Certifications[0].Summary, "Non-projected cert summary for Alice Walker."},
 	}
 	for _, tc := range untouchedChecks {
@@ -439,6 +436,12 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 	}
 	if !strings.Contains(req.PriorVersion.Education[0].Bullets[0].Text, "Alice Walker") {
 		t.Errorf("original req.PriorVersion education bullet was mutated")
+	}
+	if req.PriorVersion.Experiences[0].Company != "Alice Walker Consulting" {
+		t.Errorf("original req.PriorVersion experience company was mutated: %q", req.PriorVersion.Experiences[0].Company)
+	}
+	if req.PriorVersion.Certifications[0].URL != "https://alicewalker.dev/cka" {
+		t.Errorf("original req.PriorVersion certification URL was mutated: %q", req.PriorVersion.Certifications[0].URL)
 	}
 }
 
@@ -488,7 +491,7 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 				Degree:         "M.S. (" + sanitizer.PlaceholderFullName + ")",
 				Field:          "CS (" + sanitizer.PlaceholderFullName + ")",
 				Bullets: []core.TailoredBullet{
-					{Text: "Non-schema bullet " + sanitizer.PlaceholderFullName},
+					{Text: "Researched Paxos variants with " + sanitizer.PlaceholderFullName + " at " + sanitizer.PlaceholderWebsite + "."},
 				},
 			},
 		},
@@ -498,6 +501,7 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 				Name:           "CKA (" + sanitizer.PlaceholderFullName + ")",
 				Issuer:         "CNCF / candidate-social-1",
 				URL:            sanitizer.PlaceholderWebsite + "/cka",
+				Summary:        "Credential issued to " + sanitizer.PlaceholderFullName + " (" + sanitizer.PlaceholderEmail + ").",
 			},
 		},
 	}
@@ -565,6 +569,15 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 		t.Errorf("project Bullets[0].Text failed deobfuscation: got %q", proj.Bullets[0].Text)
 	}
 
+	eduBullet := genResp.TailoredContent.Education[0].Bullets[0].Text
+	if eduBullet != "Researched Paxos variants with Alice Walker at https://alicewalker.dev." {
+		t.Errorf("education Bullets[0].Text failed deobfuscation: got %q", eduBullet)
+	}
+	certSummary := genResp.TailoredContent.Certifications[0].Summary
+	if certSummary != "Credential issued to Alice Walker (alice.walker@example.org)." {
+		t.Errorf("certification Summary failed deobfuscation: got %q", certSummary)
+	}
+
 	// Non-schema and validator-overwritten structured identity fields must NOT be deobfuscated
 	untouchedTailored := []struct {
 		name string
@@ -582,7 +595,6 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 		{"Education.Institution", genResp.TailoredContent.Education[0].Institution, "MIT (" + sanitizer.PlaceholderFullName + ")"},
 		{"Education.Degree", genResp.TailoredContent.Education[0].Degree, "M.S. (" + sanitizer.PlaceholderFullName + ")"},
 		{"Education.Field", genResp.TailoredContent.Education[0].Field, "CS (" + sanitizer.PlaceholderFullName + ")"},
-		{"Education.Bullets[0].Text", genResp.TailoredContent.Education[0].Bullets[0].Text, "Non-schema bullet " + sanitizer.PlaceholderFullName},
 		{"Certification.Name", genResp.TailoredContent.Certifications[0].Name, "CKA (" + sanitizer.PlaceholderFullName + ")"},
 		{"Certification.Issuer", genResp.TailoredContent.Certifications[0].Issuer, "CNCF / candidate-social-1"},
 		{"Certification.URL", genResp.TailoredContent.Certifications[0].URL, sanitizer.PlaceholderWebsite + "/cka"},

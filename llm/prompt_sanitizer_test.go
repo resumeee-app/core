@@ -177,12 +177,16 @@ func TestBuildGapAnalysisPrompt_ContactSanitizerMasking(t *testing.T) {
 	}
 }
 
-func TestBuildPrompts_EmployerEducationAndCertificationsNotObfuscated(t *testing.T) {
+func TestBuildPrompts_PreservesStructuralLabelsAndScrubsCompanyAndCertPII(t *testing.T) {
 	realName := "Jordan Vance"
+	realWebsite := "https://jordanvance.dev"
 	snap := &core.MainProfileSnapshot{
 		Profile: core.Profile{
 			FullName: realName,
 			Summary:  realName + " builds distributed storage engines.",
+			Profiles: []core.SocialLink{
+				{Network: "Website", URL: realWebsite},
+			},
 		},
 		Experiences: []core.WorkExperience{
 			{
@@ -198,7 +202,7 @@ func TestBuildPrompts_EmployerEducationAndCertificationsNotObfuscated(t *testing
 				ID:          "edu-1",
 				ShortID:     "edu-1",
 				Institution: realName + " Institute of Technology",
-				Degree:      "M.S.",
+				Degree:      "M.S. (" + realName + " Fellow)",
 				Field:       "Computer Science (" + realName + " Track)",
 			},
 		},
@@ -208,6 +212,8 @@ func TestBuildPrompts_EmployerEducationAndCertificationsNotObfuscated(t *testing
 				ShortID: "cert-1",
 				Name:    "CKA (" + realName + ")",
 				Issuer:  "CNCF",
+				URL:     realWebsite + "/cka",
+				Summary: "Issued to " + realName + ".",
 			},
 		},
 		ExportedAt: time.Now(),
@@ -220,39 +226,140 @@ func TestBuildPrompts_EmployerEducationAndCertificationsNotObfuscated(t *testing
 			TargetCompany:      realName + " Corp",
 			TargetRequirements: "Seeking engineer like " + realName + ".",
 		},
+		PriorVersion: &core.TailoredContent{
+			Experiences: []core.TailoredExperience{
+				{
+					SourceEntityID: "exp-1",
+					Company:        realName + " Systems",
+				},
+			},
+			Certifications: []core.TailoredCert{
+				{
+					SourceEntityID: "cert-1",
+					URL:            realWebsite + "/cka",
+					Summary:        "Unprojected cert summary for " + realName + ".",
+				},
+			},
+		},
+	}
+
+	structuralLabels := []string{
+		realName + " Corp",
+		realName + " Institute of Technology",
+		"M.S. (" + realName + " Fellow)",
+		"Computer Science (" + realName + " Track)",
+		"CKA (" + realName + ")",
+		"CNCF",
+	}
+
+	assertScrubbedCompanyAndCert := func(promptName, prompt string) {
+		t.Helper()
+		for _, leaked := range []string{
+			realName + " Systems",
+			realWebsite + "/cka",
+			"Issued to " + realName + ".",
+		} {
+			if strings.Contains(prompt, leaked) {
+				t.Errorf("%s leaked PII %q", promptName, leaked)
+			}
+		}
+		for _, masked := range []string{
+			sanitizer.PlaceholderFullName + " Systems",
+			sanitizer.PlaceholderWebsite + "/cka",
+			"Issued to " + sanitizer.PlaceholderFullName + ".",
+		} {
+			if !strings.Contains(prompt, masked) {
+				t.Errorf("%s missing scrubbed placeholder %q", promptName, masked)
+			}
+		}
 	}
 
 	tailorPayload, err := llm.BuildPrompt(req)
 	if err != nil {
 		t.Fatalf("BuildPrompt failed: %v", err)
 	}
-	for _, want := range []string{
-		realName + " Corp",
-		realName + " Systems",
-		realName + " Institute of Technology",
-		"Computer Science (" + realName + " Track)",
-		"CKA (" + realName + ")",
-	} {
+	assertScrubbedCompanyAndCert("BuildPrompt", tailorPayload.UserPrompt)
+	for _, want := range structuralLabels {
 		if !strings.Contains(tailorPayload.UserPrompt, want) {
 			t.Errorf("BuildPrompt unexpectedly obfuscated non-PII structured field %q", want)
 		}
+	}
+
+	// Verify PriorVersion section in BuildPrompt scrubs Company and Certification.URL while omitting Summary.
+	_, afterPriorStart, okStart := strings.Cut(tailorPayload.UserPrompt, "<prior_active_version>")
+	if !okStart {
+		t.Fatalf("BuildPrompt UserPrompt missing <prior_active_version> marker")
+	}
+	priorSection, _, okEnd := strings.Cut(afterPriorStart, "</prior_active_version>")
+	if !okEnd {
+		t.Fatalf("BuildPrompt UserPrompt missing </prior_active_version> marker")
+	}
+	if strings.Contains(priorSection, realName+" Systems") || !strings.Contains(priorSection, sanitizer.PlaceholderFullName+" Systems") {
+		t.Errorf("BuildPrompt PriorVersion failed to scrub Company: %s", priorSection)
+	}
+	if strings.Contains(priorSection, realWebsite+"/cka") || !strings.Contains(priorSection, sanitizer.PlaceholderWebsite+"/cka") {
+		t.Errorf("BuildPrompt PriorVersion failed to scrub Certification.URL: %s", priorSection)
+	}
+	if strings.Contains(tailorPayload.UserPrompt, "Unprojected cert summary") {
+		t.Errorf("BuildPrompt unexpectedly projected PriorVersion Certification.Summary")
+	}
+
+	// Verify BuildPrompt did not mutate caller MainProfile or PriorVersion in place.
+	if req.MainProfile.Experiences[0].Company != realName+" Systems" {
+		t.Errorf("BuildPrompt mutated MainProfile.Experiences[0].Company: %q", req.MainProfile.Experiences[0].Company)
+	}
+	if req.MainProfile.Certifications[0].URL != realWebsite+"/cka" {
+		t.Errorf("BuildPrompt mutated MainProfile.Certifications[0].URL: %q", req.MainProfile.Certifications[0].URL)
+	}
+	if req.MainProfile.Certifications[0].Summary != "Issued to "+realName+"." {
+		t.Errorf("BuildPrompt mutated MainProfile.Certifications[0].Summary: %q", req.MainProfile.Certifications[0].Summary)
+	}
+	if req.PriorVersion.Experiences[0].Company != realName+" Systems" {
+		t.Errorf("BuildPrompt mutated PriorVersion.Experiences[0].Company: %q", req.PriorVersion.Experiences[0].Company)
+	}
+	if req.PriorVersion.Certifications[0].URL != realWebsite+"/cka" {
+		t.Errorf("BuildPrompt mutated PriorVersion.Certifications[0].URL: %q", req.PriorVersion.Certifications[0].URL)
+	}
+	if req.PriorVersion.Certifications[0].Summary != "Unprojected cert summary for "+realName+"." {
+		t.Errorf("BuildPrompt mutated PriorVersion.Certifications[0].Summary: %q", req.PriorVersion.Certifications[0].Summary)
 	}
 
 	gapPayload, err := llm.BuildGapAnalysisPrompt(req)
 	if err != nil {
 		t.Fatalf("BuildGapAnalysisPrompt failed: %v", err)
 	}
-	if !strings.Contains(gapPayload.UserPrompt, realName+" Corp") {
-		t.Errorf("BuildGapAnalysisPrompt unexpectedly obfuscated TargetCompany")
+	assertScrubbedCompanyAndCert("BuildGapAnalysisPrompt", gapPayload.UserPrompt)
+	for _, want := range structuralLabels {
+		if !strings.Contains(gapPayload.UserPrompt, want) {
+			t.Errorf("BuildGapAnalysisPrompt unexpectedly obfuscated non-PII structured field %q", want)
+		}
 	}
 
 	session := sanitizer.NewSessionFromSnapshot(snap)
-	atsMatchPayload, err := llm.BuildATSMatchingPrompt(req.BranchContext, &core.ATSExtractedCandidate{}, session)
+	extracted := &core.ATSExtractedCandidate{
+		Educations: []core.ATSExtractedEducation{
+			{
+				Institution: realName + " Institute of Technology",
+				Degree:      "M.S. (" + realName + " Fellow)",
+				Field:       "Computer Science (" + realName + " Track)",
+			},
+		},
+		Certifications: []string{"CKA (" + realName + ")"},
+	}
+	atsMatchPayload, err := llm.BuildATSMatchingPrompt(req.BranchContext, extracted, session)
 	if err != nil {
 		t.Fatalf("BuildATSMatchingPrompt failed: %v", err)
 	}
-	if !strings.Contains(atsMatchPayload.UserPrompt, realName+" Corp") {
-		t.Errorf("BuildATSMatchingPrompt unexpectedly obfuscated TargetCompany")
+	for _, want := range []string{
+		realName + " Corp",
+		realName + " Institute of Technology",
+		"M.S. (" + realName + " Fellow)",
+		"Computer Science (" + realName + " Track)",
+		"CKA (" + realName + ")",
+	} {
+		if !strings.Contains(atsMatchPayload.UserPrompt, want) {
+			t.Errorf("BuildATSMatchingPrompt unexpectedly obfuscated non-PII structured field %q", want)
+		}
 	}
 	if strings.Contains(atsMatchPayload.UserPrompt, "Seeking engineer like "+realName) {
 		t.Errorf("BuildATSMatchingPrompt failed to obfuscate TargetRequirements")

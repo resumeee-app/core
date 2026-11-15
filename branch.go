@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -97,6 +98,35 @@ func (b *Branch) IsStaleRevision(currentMainRevision int64) bool {
 // PresetName returns an empty string on core.Branch, allowing view models to override it.
 func (b Branch) PresetName() string {
 	return ""
+}
+
+// equalOptionalString reports whether two optional string pointers are both nil or point to equal values.
+func equalOptionalString(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// GenerationOrActiveChanged reports whether other alters b's active version selection or generation-defining tailoring configuration.
+func (b *Branch) GenerationOrActiveChanged(other *Branch) bool {
+	if b == nil || other == nil {
+		return b != other
+	}
+	return !equalOptionalString(b.ActiveVersionID, other.ActiveVersionID) ||
+		b.TargetRole != other.TargetRole ||
+		b.TargetCompany != other.TargetCompany ||
+		b.TargetRequirements != other.TargetRequirements ||
+		b.CustomDirectives != other.CustomDirectives ||
+		b.BranchInstructions != other.BranchInstructions ||
+		!equalOptionalString(b.TailoringStrategyID, other.TailoringStrategyID) ||
+		!equalOptionalString(b.PresetID, other.PresetID) ||
+		b.TemplateSetID != other.TemplateSetID ||
+		b.ProviderOverride != other.ProviderOverride ||
+		b.ModelOverride != other.ModelOverride ||
+		b.ReasoningLevel != other.ReasoningLevel ||
+		!slices.Equal(b.PinnedEntityIDs, other.PinnedEntityIDs) ||
+		!slices.Equal(b.ExcludedEntityIDs, other.ExcludedEntityIDs)
 }
 
 // VersionStatus represents the lifecycle state of a BranchVersion.

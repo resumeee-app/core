@@ -87,33 +87,6 @@ func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchSt
 
 // --- BranchStore ---
 
-func equalFakeStringPtr(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func fakeBranchGenerationOrActiveChanged(existing, updated *core.Branch) bool {
-	if existing == nil || updated == nil {
-		return existing != updated
-	}
-	return !equalFakeStringPtr(existing.ActiveVersionID, updated.ActiveVersionID) ||
-		existing.TargetRole != updated.TargetRole ||
-		existing.TargetCompany != updated.TargetCompany ||
-		existing.TargetRequirements != updated.TargetRequirements ||
-		existing.CustomDirectives != updated.CustomDirectives ||
-		existing.BranchInstructions != updated.BranchInstructions ||
-		!equalFakeStringPtr(existing.TailoringStrategyID, updated.TailoringStrategyID) ||
-		!equalFakeStringPtr(existing.PresetID, updated.PresetID) ||
-		existing.TemplateSetID != updated.TemplateSetID ||
-		existing.ProviderOverride != updated.ProviderOverride ||
-		existing.ModelOverride != updated.ModelOverride ||
-		existing.ReasoningLevel != updated.ReasoningLevel ||
-		!slices.Equal(existing.PinnedEntityIDs, updated.PinnedEntityIDs) ||
-		!slices.Equal(existing.ExcludedEntityIDs, updated.ExcludedEntityIDs)
-}
-
 func cloneBranch(b *core.Branch) *core.Branch {
 	if b == nil {
 		return nil
@@ -204,7 +177,7 @@ func (s *fakeBranchStore) UpdateBranch(_ context.Context, branch *core.Branch) e
 		}
 	}
 
-	if existing, ok := s.branches[branch.ID]; ok && fakeBranchGenerationOrActiveChanged(existing, branch) {
+	if existing, ok := s.branches[branch.ID]; ok && existing.GenerationOrActiveChanged(branch) {
 		s.branchEpoch[branch.ID]++
 	}
 	s.branches[branch.ID] = cloneBranch(branch)

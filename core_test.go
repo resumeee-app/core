@@ -867,3 +867,190 @@ func TestSentinelsAndStatusHelpers(t *testing.T) {
 		}
 	}
 }
+
+func TestBranch_GenerationOrActiveChanged(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+
+	baseBranch := func() *core.Branch {
+		return &core.Branch{
+			ID:                     "br-1",
+			UserID:                 "user-1",
+			Name:                   "Backend Role",
+			ActiveVersionID:        strPtr("ver-1"),
+			TargetRole:             "Staff Engineer",
+			TargetCompany:          "Acme",
+			TargetRequirements:     "Go, PostgreSQL",
+			CustomDirectives:       "Keep concise",
+			BranchInstructions:     "Highlight systems work",
+			TailoringStrategyID:    strPtr("strategy-1"),
+			PresetID:               strPtr("preset-1"),
+			TemplateSetID:          core.TemplateStandardCleanID,
+			ProviderOverride:       "gemini",
+			ModelOverride:          "gemini-2.5-pro",
+			ReasoningLevel:         "medium",
+			PinnedEntityIDs:        []string{"exp-1"},
+			ExcludedEntityIDs:      []string{"proj-1"},
+			LastSyncedMainRevision: 2,
+		}
+	}
+
+	cases := []struct {
+		name  string
+		left  func() *core.Branch
+		right func() *core.Branch
+		want  bool
+	}{
+		{
+			name:  "both nil returns false",
+			left:  func() *core.Branch { return nil },
+			right: func() *core.Branch { return nil },
+			want:  false,
+		},
+		{
+			name:  "nil receiver with non-nil other returns true",
+			left:  func() *core.Branch { return nil },
+			right: baseBranch,
+			want:  true,
+		},
+		{
+			name:  "non-nil receiver with nil other returns true",
+			left:  baseBranch,
+			right: func() *core.Branch { return nil },
+			want:  true,
+		},
+		{
+			name: "equal values with distinct pointers and nil vs empty slices returns false",
+			left: func() *core.Branch {
+				b := baseBranch()
+				b.PinnedEntityIDs = nil
+				b.ExcludedEntityIDs = nil
+				return b
+			},
+			right: func() *core.Branch {
+				b := baseBranch()
+				b.ActiveVersionID = strPtr("ver-1")
+				b.TailoringStrategyID = strPtr("strategy-1")
+				b.PresetID = strPtr("preset-1")
+				b.PinnedEntityIDs = []string{}
+				b.ExcludedEntityIDs = []string{}
+				return b
+			},
+			want: false,
+		},
+		{
+			name: "non-config metadata changes return false",
+			left: baseBranch,
+			right: func() *core.Branch {
+				b := baseBranch()
+				b.Name = "Renamed Branch"
+				b.GapReport = &core.GapReport{OverallMatchSummary: "Strong"}
+				b.ATSScore = &core.ATSScore{JobMatchingScore: 0.9}
+				b.LastSyncedMainRevision = 99
+				b.IsStale = true
+				b.CreatedAt = time.Unix(100, 0).UTC()
+				b.UpdatedAt = time.Unix(200, 0).UTC()
+				return b
+			},
+			want: false,
+		},
+		{
+			name:  "ActiveVersionID changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.ActiveVersionID = strPtr("ver-2"); return b },
+			want:  true,
+		},
+		{
+			name:  "ActiveVersionID nil vs empty string",
+			left:  func() *core.Branch { b := baseBranch(); b.ActiveVersionID = nil; return b },
+			right: func() *core.Branch { b := baseBranch(); b.ActiveVersionID = strPtr(""); return b },
+			want:  true,
+		},
+		{
+			name:  "TargetRole changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.TargetRole = "Principal Engineer"; return b },
+			want:  true,
+		},
+		{
+			name:  "TargetCompany changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.TargetCompany = "Beta Corp"; return b },
+			want:  true,
+		},
+		{
+			name:  "TargetRequirements changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.TargetRequirements = "Rust, Raft"; return b },
+			want:  true,
+		},
+		{
+			name:  "CustomDirectives changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.CustomDirectives = "Use metrics"; return b },
+			want:  true,
+		},
+		{
+			name:  "BranchInstructions changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.BranchInstructions = "Focus on scale"; return b },
+			want:  true,
+		},
+		{
+			name:  "TailoringStrategyID changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.TailoringStrategyID = strPtr("strategy-2"); return b },
+			want:  true,
+		},
+		{
+			name:  "PresetID changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.PresetID = nil; return b },
+			want:  true,
+		},
+		{
+			name:  "TemplateSetID changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.TemplateSetID = "tmpl-2"; return b },
+			want:  true,
+		},
+		{
+			name:  "ProviderOverride changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.ProviderOverride = "anthropic"; return b },
+			want:  true,
+		},
+		{
+			name:  "ModelOverride changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.ModelOverride = "claude-4"; return b },
+			want:  true,
+		},
+		{
+			name:  "ReasoningLevel changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.ReasoningLevel = "high"; return b },
+			want:  true,
+		},
+		{
+			name:  "PinnedEntityIDs changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.PinnedEntityIDs = []string{"exp-1", "exp-2"}; return b },
+			want:  true,
+		},
+		{
+			name:  "ExcludedEntityIDs changed",
+			left:  baseBranch,
+			right: func() *core.Branch { b := baseBranch(); b.ExcludedEntityIDs = []string{"proj-2"}; return b },
+			want:  true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.left().GenerationOrActiveChanged(tc.right())
+			if got != tc.want {
+				t.Errorf("GenerationOrActiveChanged() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

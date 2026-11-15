@@ -3245,6 +3245,35 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 		}
 	})
 
+	for _, badUserID := range []struct {
+		name   string
+		userID string
+	}{
+		{name: "empty userID DeleteBranch rejected before aborting versions", userID: ""},
+		{name: "whitespace userID DeleteBranch rejected before aborting versions", userID: "   "},
+	} {
+		t.Run(badUserID.name, func(t *testing.T) {
+			err := svc.DeleteBranch(ctx, badUserID.userID, b.ID)
+			if !errors.Is(err, core.ErrValidation) {
+				t.Fatalf("expected ErrValidation for %q DeleteBranch, got %v", badUserID.userID, err)
+			}
+			if len(spyStore.abortedCalls) != 0 {
+				t.Errorf("expected AbortBranchVersions NOT to be called, got %v", spyStore.abortedCalls)
+			}
+			if len(quotaSpy.Releases()) != 0 {
+				t.Errorf("expected zero quota releases on rejected delete, got %+v", quotaSpy.Releases())
+			}
+			gotPending, err := svc.Version(ctx, b.ID, vPending.ID)
+			if err != nil || gotPending.Status != core.VersionStatusPending {
+				t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+			}
+			gotProcessing, err := svc.Version(ctx, b.ID, vProcessing.ID)
+			if err != nil || gotProcessing.Status != core.VersionStatusProcessing {
+				t.Errorf("expected victim processing version untouched, got %+v err=%v", gotProcessing, err)
+			}
+		})
+	}
+
 	t.Run("default branch DeleteBranch rejected before aborting", func(t *testing.T) {
 		err := svc.DeleteBranch(ctx, owner, core.DefaultBranchID(owner))
 		if !errors.Is(err, core.ErrDefaultBranchImmutable) {
@@ -3767,5 +3796,396 @@ func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
 	}
 	if genScore.EvaluatedAt == nil || !genScore.EvaluatedAt.Equal(fixedNow) {
 		t.Errorf("SimulateATS generator EvaluatedAt = %v, want %v", genScore.EvaluatedAt, fixedNow)
+	}
+}
+
+type permissiveTenantStore struct {
+	*fakeBranchStore
+}
+
+func (s *permissiveTenantStore) Branch(ctx context.Context, _ string, id string) (*core.Branch, error) {
+	return s.fakeBranchStore.Branch(ctx, "", id)
+}
+
+func (s *permissiveTenantStore) ListBranches(ctx context.Context, _ string) ([]core.Branch, error) {
+	s.mu.Lock()
+	var ids []string
+	for _, b := range s.branches {
+		ids = append(ids, b.ID)
+	}
+	s.mu.Unlock()
+
+	var all []core.Branch
+	for _, id := range ids {
+		b, err := s.fakeBranchStore.Branch(ctx, "", id)
+		if err == nil {
+			all = append(all, *b)
+		}
+	}
+	return all, nil
+}
+
+func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t *testing.T) {
+	setupVictim := func(t *testing.T, withProfiles bool, permissive bool) (
+		context.Context,
+		*fakeBranchStore,
+		*spyQuotaRepo,
+		*stubNotifier,
+		*branch.Service,
+		*core.Branch,
+		*core.BranchVersion,
+	) {
+		t.Helper()
+		ctx := context.Background()
+		victim := "victim-user"
+		store := newSeededBranchStore(ctx, victim)
+		if _, err := store.IncrementMainRevision(ctx, victim); err != nil {
+			t.Fatalf("IncrementMainRevision: %v", err)
+		}
+		victimBranch := &core.Branch{
+			ID:                 "br-victim-gen",
+			UserID:             victim,
+			Name:               "Victim Branch",
+			TargetRequirements: "Go, distributed systems",
+			TemplateSetID:      core.TemplateStandardCleanID,
+		}
+		if err := store.CreateBranch(ctx, victimBranch); err != nil {
+			t.Fatalf("CreateBranch victim: %v", err)
+		}
+		victimPending := &core.BranchVersion{
+			ID:            "ver-victim-pending",
+			UserID:        victim,
+			BranchID:      victimBranch.ID,
+			Status:        core.VersionStatusPending,
+			ReservationID: "res-victim-existing",
+		}
+		if err := store.CreateVersion(ctx, victimPending); err != nil {
+			t.Fatalf("CreateVersion victim pending: %v", err)
+		}
+
+		quotaSpy := &spyQuotaRepo{}
+		notifier := &stubNotifier{}
+		var branchStore branch.Store = store
+		if permissive {
+			branchStore = &permissiveTenantStore{fakeBranchStore: store}
+		}
+		var profiles branch.ProfileReader
+		if withProfiles {
+			profiles = store
+		}
+		svc := branch.New(branch.Config{
+			Branches:    branchStore,
+			Profiles:    profiles,
+			Presets:     store,
+			Templates:   store,
+			Quotas:      quotaSpy,
+			JobNotifier: notifier,
+		})
+		return ctx, store, quotaSpy, notifier, svc, victimBranch, victimPending
+	}
+
+	for _, invalidUser := range []struct {
+		label  string
+		userID string
+	}{
+		{label: "empty userID", userID: ""},
+		{label: "whitespace userID", userID: "   "},
+	} {
+		for _, withProfiles := range []bool{true, false} {
+			profileLabel := "profiles_nil"
+			if withProfiles {
+				profileLabel = "profiles_configured"
+			}
+
+			t.Run("GenerateVersion/"+invalidUser.label+"/"+profileLabel, func(t *testing.T) {
+				ctx, _, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withProfiles, false)
+
+				_, err := svc.GenerateVersion(ctx, invalidUser.userID, victimBranch.ID)
+				if !errors.Is(err, core.ErrValidation) {
+					t.Fatalf("expected ErrValidation, got %v", err)
+				}
+
+				quotaSpy.mu.Lock()
+				resCount := len(quotaSpy.reservations)
+				relCount := len(quotaSpy.releases)
+				quotaSpy.mu.Unlock()
+				if resCount != 0 || relCount != 0 {
+					t.Errorf("expected zero quota reservations/releases, got reservations=%d releases=%d", resCount, relCount)
+				}
+				if notifier.Count() != 0 {
+					t.Errorf("expected zero worker notifications, got %d", notifier.Count())
+				}
+				gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+				if err != nil || gotPending.Status != core.VersionStatusPending {
+					t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+				}
+			})
+
+			t.Run("SyncBranches_explicit/"+invalidUser.label+"/"+profileLabel, func(t *testing.T) {
+				ctx, _, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withProfiles, false)
+
+				ids, err := svc.SyncBranches(ctx, invalidUser.userID, []string{victimBranch.ID})
+				if !errors.Is(err, core.ErrValidation) {
+					t.Fatalf("expected ErrValidation, got %v", err)
+				}
+				if len(ids) != 0 {
+					t.Errorf("expected zero synced IDs, got %v", ids)
+				}
+
+				quotaSpy.mu.Lock()
+				resCount := len(quotaSpy.reservations)
+				relCount := len(quotaSpy.releases)
+				quotaSpy.mu.Unlock()
+				if resCount != 0 || relCount != 0 {
+					t.Errorf("expected zero quota reservations/releases, got reservations=%d releases=%d", resCount, relCount)
+				}
+				if notifier.Count() != 0 {
+					t.Errorf("expected zero worker notifications, got %d", notifier.Count())
+				}
+				gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+				if err != nil || gotPending.Status != core.VersionStatusPending {
+					t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+				}
+			})
+
+			t.Run("SyncBranches_allStale/"+invalidUser.label+"/"+profileLabel, func(t *testing.T) {
+				ctx, _, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withProfiles, false)
+
+				ids, err := svc.SyncBranches(ctx, invalidUser.userID, nil)
+				if !errors.Is(err, core.ErrValidation) {
+					t.Fatalf("expected ErrValidation, got %v", err)
+				}
+				if len(ids) != 0 {
+					t.Errorf("expected zero synced IDs, got %v", ids)
+				}
+				quotaSpy.mu.Lock()
+				resCount := len(quotaSpy.reservations)
+				quotaSpy.mu.Unlock()
+				if resCount != 0 || notifier.Count() != 0 {
+					t.Errorf("expected zero reservations and notifications, got reservations=%d notifications=%d", resCount, notifier.Count())
+				}
+				gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+				if err != nil || gotPending.Status != core.VersionStatusPending {
+					t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+				}
+			})
+		}
+	}
+
+	t.Run("permissive store foreign branch rejected in GenerateVersion and SyncBranches", func(t *testing.T) {
+		ctx, store, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, false, true)
+		attacker := "attacker-user"
+		if err := store.UpsertProfile(ctx, &core.Profile{ID: "prof-att", UserID: attacker, FullName: "Attacker", MainRevision: 1}); err != nil {
+			t.Fatalf("UpsertProfile attacker: %v", err)
+		}
+
+		if _, err := svc.GenerateVersion(ctx, attacker, victimBranch.ID); !errors.Is(err, core.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for foreign GenerateVersion, got %v", err)
+		}
+		if _, err := svc.SyncBranches(ctx, attacker, []string{victimBranch.ID}); !errors.Is(err, core.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for foreign SyncBranches explicit, got %v", err)
+		}
+		ids, err := svc.SyncBranches(ctx, attacker, nil)
+		if err != nil {
+			t.Fatalf("unexpected error for empty stale list: %v", err)
+		}
+		if len(ids) != 0 {
+			t.Errorf("expected zero synced IDs when only foreign stale branch exists, got %v", ids)
+		}
+
+		quotaSpy.mu.Lock()
+		resCount := len(quotaSpy.reservations)
+		quotaSpy.mu.Unlock()
+		if resCount != 0 || notifier.Count() != 0 {
+			t.Errorf("expected zero reservations and notifications, got reservations=%d notifications=%d", resCount, notifier.Count())
+		}
+		gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+		if err != nil || gotPending.Status != core.VersionStatusPending {
+			t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+		}
+	})
+}
+
+func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testing.T) {
+	ctx := context.Background()
+	owner := "tenant-owner"
+	baseStore := newSeededBranchStore(ctx, owner)
+	permStore := &permissiveTenantStore{fakeBranchStore: baseStore}
+	quotaSpy := &spyQuotaRepo{}
+
+	exp := &core.WorkExperience{
+		ID:        "exp-tenant-1",
+		UserID:    owner,
+		Company:   "Acme",
+		RoleTitle: "Engineer",
+		StartDate: core.NewDate(2020, 1, 1),
+	}
+	if err := baseStore.CreateExperience(ctx, exp); err != nil {
+		t.Fatalf("CreateExperience: %v", err)
+	}
+	fact := &core.Fact{
+		ID:        "fact-tenant-1",
+		UserID:    owner,
+		OwnerID:   exp.ID,
+		OwnerType: core.OwnerTypeWorkExperience,
+		Statement: "Shipped core services.",
+	}
+	if err := baseStore.CreateFact(ctx, fact); err != nil {
+		t.Fatalf("CreateFact: %v", err)
+	}
+
+	victimBranch := &core.Branch{
+		ID:                 "br-tenant-victim",
+		UserID:             owner,
+		Name:               "Victim Tailored",
+		TargetRequirements: "Go, PostgreSQL",
+		TemplateSetID:      core.TemplateStandardCleanID,
+	}
+	if err := baseStore.CreateBranch(ctx, victimBranch); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	completedVer := &core.BranchVersion{
+		ID:               "ver-tenant-done",
+		UserID:           owner,
+		BranchID:         victimBranch.ID,
+		Status:           core.VersionStatusCompleted,
+		MainRevisionUsed: 1,
+		MarkdownOutput:   "# Resume\nShipped core services.",
+	}
+	if err := baseStore.CreateVersion(ctx, completedVer); err != nil {
+		t.Fatalf("CreateVersion completed: %v", err)
+	}
+	if err := baseStore.CompleteVersion(ctx, completedVer); err != nil {
+		t.Fatalf("CompleteVersion: %v", err)
+	}
+	pendingVer := &core.BranchVersion{
+		ID:            "ver-tenant-pending",
+		UserID:        owner,
+		BranchID:      victimBranch.ID,
+		Status:        core.VersionStatusPending,
+		ReservationID: "res-tenant-pending",
+	}
+	if err := baseStore.CreateVersion(ctx, pendingVer); err != nil {
+		t.Fatalf("CreateVersion pending: %v", err)
+	}
+
+	svc := branch.New(branch.Config{
+		Branches:       permStore,
+		Profiles:       baseStore,
+		Presets:        baseStore,
+		Templates:      baseStore,
+		Quotas:         quotaSpy,
+		Generator:      &stubATSSimulator{stubGenerator: stubGenerator{gapReport: &core.GapReport{OverallMatchSummary: "ok"}}},
+		PromptCompiler: &fakePromptCompiler{},
+	})
+
+	editPayload := core.TailoredContent{Summary: "Updated"}
+
+	for _, badUser := range []string{"", "   "} {
+		cases := []struct {
+			name string
+			call func() error
+		}{
+			{name: "ListBranches", call: func() error { _, err := svc.ListBranches(ctx, badUser, false); return err }},
+			{name: "Branch", call: func() error { _, err := svc.Branch(ctx, badUser, victimBranch.ID); return err }},
+			{name: "CreateBranch", call: func() error {
+				_, err := svc.CreateBranch(ctx, &core.Branch{UserID: badUser, Name: "New", TemplateSetID: core.TemplateStandardCleanID})
+				return err
+			}},
+			{name: "UpdateBranch", call: func() error {
+				_, err := svc.UpdateBranch(ctx, &core.Branch{ID: victimBranch.ID, UserID: badUser, Name: "Hack", TemplateSetID: core.TemplateStandardCleanID})
+				return err
+			}},
+			{name: "DeleteBranch", call: func() error { return svc.DeleteBranch(ctx, badUser, victimBranch.ID) }},
+			{name: "GenerateVersion", call: func() error { _, err := svc.GenerateVersion(ctx, badUser, victimBranch.ID); return err }},
+			{name: "SyncBranches", call: func() error { _, err := svc.SyncBranches(ctx, badUser, []string{victimBranch.ID}); return err }},
+			{name: "CancelVersion", call: func() error {
+				_, err := svc.CancelVersion(ctx, badUser, victimBranch.ID, pendingVer.ID)
+				return err
+			}},
+			{name: "EditVersion", call: func() error {
+				_, err := svc.EditVersion(ctx, badUser, victimBranch.ID, completedVer.ID, editPayload)
+				return err
+			}},
+			{name: "AnalyzeGaps", call: func() error { _, err := svc.AnalyzeGaps(ctx, badUser, victimBranch.ID); return err }},
+			{name: "SimulateATS", call: func() error {
+				_, err := svc.SimulateATS(ctx, badUser, victimBranch.ID, &core.ATSSimulationOptions{VersionID: completedVer.ID})
+				return err
+			}},
+			{name: "PromptPreview", call: func() error {
+				_, err := svc.PromptPreview(ctx, badUser, victimBranch.ID, nil)
+				return err
+			}},
+		}
+		for _, tc := range cases {
+			t.Run(fmt.Sprintf("%s/user=%q", tc.name, badUser), func(t *testing.T) {
+				if err := tc.call(); !errors.Is(err, core.ErrValidation) {
+					t.Errorf("expected ErrValidation for %s with user %q, got %v", tc.name, badUser, err)
+				}
+			})
+		}
+	}
+
+	t.Run("nil branch rejected by CreateBranch and UpdateBranch", func(t *testing.T) {
+		if _, err := svc.CreateBranch(ctx, nil); !errors.Is(err, core.ErrValidation) {
+			t.Errorf("CreateBranch(nil) expected ErrValidation, got %v", err)
+		}
+		if _, err := svc.UpdateBranch(ctx, nil); !errors.Is(err, core.ErrValidation) {
+			t.Errorf("UpdateBranch(nil) expected ErrValidation, got %v", err)
+		}
+	})
+
+	attacker := "attacker-tenant"
+	foreignCases := []struct {
+		name string
+		call func() error
+	}{
+		{name: "Branch", call: func() error { _, err := svc.Branch(ctx, attacker, victimBranch.ID); return err }},
+		{name: "UpdateBranch", call: func() error {
+			_, err := svc.UpdateBranch(ctx, &core.Branch{ID: victimBranch.ID, UserID: attacker, Name: "Hijack", TemplateSetID: core.TemplateStandardCleanID})
+			return err
+		}},
+		{name: "DeleteBranch", call: func() error { return svc.DeleteBranch(ctx, attacker, victimBranch.ID) }},
+		{name: "GenerateVersion", call: func() error { _, err := svc.GenerateVersion(ctx, attacker, victimBranch.ID); return err }},
+		{name: "SyncBranches", call: func() error { _, err := svc.SyncBranches(ctx, attacker, []string{victimBranch.ID}); return err }},
+		{name: "CancelVersion", call: func() error {
+			_, err := svc.CancelVersion(ctx, attacker, victimBranch.ID, pendingVer.ID)
+			return err
+		}},
+		{name: "EditVersion", call: func() error {
+			_, err := svc.EditVersion(ctx, attacker, victimBranch.ID, completedVer.ID, editPayload)
+			return err
+		}},
+		{name: "AnalyzeGaps", call: func() error { _, err := svc.AnalyzeGaps(ctx, attacker, victimBranch.ID); return err }},
+		{name: "SimulateATS", call: func() error {
+			_, err := svc.SimulateATS(ctx, attacker, victimBranch.ID, &core.ATSSimulationOptions{VersionID: completedVer.ID})
+			return err
+		}},
+		{name: "PromptPreview", call: func() error {
+			_, err := svc.PromptPreview(ctx, attacker, victimBranch.ID, nil)
+			return err
+		}},
+	}
+	for _, tc := range foreignCases {
+		t.Run("foreign_branch/"+tc.name, func(t *testing.T) {
+			if err := tc.call(); !errors.Is(err, core.ErrNotFound) {
+				t.Errorf("expected ErrNotFound for %s on foreign branch, got %v", tc.name, err)
+			}
+		})
+	}
+
+	quotaSpy.mu.Lock()
+	resCount := len(quotaSpy.reservations)
+	quotaSpy.mu.Unlock()
+	if resCount != 0 {
+		t.Errorf("expected zero quota reservations for invalid/foreign calls, got %d", resCount)
+	}
+	gotPending, err := svc.Version(ctx, victimBranch.ID, pendingVer.ID)
+	if err != nil || gotPending.Status != core.VersionStatusPending {
+		t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+	}
+	gotBranch, err := svc.Branch(ctx, owner, victimBranch.ID)
+	if err != nil || gotBranch.Name != "Victim Tailored" {
+		t.Errorf("expected victim branch untouched, got %+v err=%v", gotBranch, err)
 	}
 }

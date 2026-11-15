@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"time"
 
@@ -85,7 +84,7 @@ func (s *Store) UpdateBranch(_ context.Context, branch *core.Branch) error {
 	if !exists || existing.UserID != branch.UserID {
 		return core.ErrNotFound
 	}
-	if branchGenerationOrActiveChanged(existing, branch) {
+	if existing.GenerationOrActiveChanged(branch) {
 		s.branchEpoch[branch.ID]++
 	}
 	branch.UpdatedAt = s.now()
@@ -753,35 +752,6 @@ func (s *Store) validateVersionCompletionLocked(existing *core.BranchVersion, ex
 		}
 	}
 	return nil
-}
-
-// branchGenerationOrActiveChanged reports whether generation-defining configuration or ActiveVersionID changed between a and b.
-func branchGenerationOrActiveChanged(a, b *core.Branch) bool {
-	if a == nil || b == nil {
-		return a != b
-	}
-	return !equalStringPtr(a.ActiveVersionID, b.ActiveVersionID) ||
-		a.TargetRole != b.TargetRole ||
-		a.TargetCompany != b.TargetCompany ||
-		a.TargetRequirements != b.TargetRequirements ||
-		a.CustomDirectives != b.CustomDirectives ||
-		a.BranchInstructions != b.BranchInstructions ||
-		!equalStringPtr(a.TailoringStrategyID, b.TailoringStrategyID) ||
-		!equalStringPtr(a.PresetID, b.PresetID) ||
-		a.TemplateSetID != b.TemplateSetID ||
-		a.ProviderOverride != b.ProviderOverride ||
-		a.ModelOverride != b.ModelOverride ||
-		a.ReasoningLevel != b.ReasoningLevel ||
-		!slices.Equal(a.PinnedEntityIDs, b.PinnedEntityIDs) ||
-		!slices.Equal(a.ExcludedEntityIDs, b.ExcludedEntityIDs)
-}
-
-// equalStringPtr reports whether two optional string pointers hold equal values.
-func equalStringPtr(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
 }
 
 // resolveVersionBranchID canonicalizes ResumeID and BranchID on version and returns the branch ID.

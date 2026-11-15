@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -197,33 +197,12 @@ func (s *Service) abortBranchVersions(ctx context.Context, branchID, reason stri
 	return nil
 }
 
-// equalStringPtr reports whether two optional string pointers are both nil or point to equal values.
-func equalStringPtr(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
+// requireUserID ensures tenant-scoped branch operations receive a non-empty user identifier.
+func requireUserID(userID string) error {
+	if strings.TrimSpace(userID) == "" {
+		return fmt.Errorf("%w: user id is required", core.ErrValidation)
 	}
-	return *a == *b
-}
-
-// branchGenerationOrActiveChanged reports whether updated alters active version selection or tailoring configuration.
-func branchGenerationOrActiveChanged(existing, updated *core.Branch) bool {
-	if existing == nil || updated == nil {
-		return existing != updated
-	}
-	return !equalStringPtr(existing.ActiveVersionID, updated.ActiveVersionID) ||
-		existing.TargetRole != updated.TargetRole ||
-		existing.TargetCompany != updated.TargetCompany ||
-		existing.TargetRequirements != updated.TargetRequirements ||
-		existing.CustomDirectives != updated.CustomDirectives ||
-		existing.BranchInstructions != updated.BranchInstructions ||
-		!equalStringPtr(existing.TailoringStrategyID, updated.TailoringStrategyID) ||
-		!equalStringPtr(existing.PresetID, updated.PresetID) ||
-		existing.TemplateSetID != updated.TemplateSetID ||
-		existing.ProviderOverride != updated.ProviderOverride ||
-		existing.ModelOverride != updated.ModelOverride ||
-		existing.ReasoningLevel != updated.ReasoningLevel ||
-		!slices.Equal(existing.PinnedEntityIDs, updated.PinnedEntityIDs) ||
-		!slices.Equal(existing.ExcludedEntityIDs, updated.ExcludedEntityIDs)
+	return nil
 }
 
 // notifyJob wakes background workers via JobNotifier or falls back to JobEnqueuer without
@@ -341,16 +320,26 @@ func (s *Service) populateBranchActiveMetrics(ctx context.Context, branch *core.
 
 // ListBranches returns all branches for userID, optionally filtering for branches stale against main.
 func (s *Service) ListBranches(ctx context.Context, userID string, staleOnly bool) ([]core.Branch, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
 	branches, err := s.branches.ListBranches(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	s.hydrateBranchListMetrics(ctx, branches)
+	owned := make([]core.Branch, 0, len(branches))
+	for _, b := range branches {
+		if b.UserID == userID {
+			owned = append(owned, b)
+		}
+	}
+
+	s.hydrateBranchListMetrics(ctx, owned)
 
 	if staleOnly {
 		filtered := []core.Branch{}
-		for _, b := range branches {
+		for _, b := range owned {
 			if b.IsStale {
 				filtered = append(filtered, b)
 			}
@@ -358,10 +347,7 @@ func (s *Service) ListBranches(ctx context.Context, userID string, staleOnly boo
 		return filtered, nil
 	}
 
-	if branches == nil {
-		branches = []core.Branch{}
-	}
-	return branches, nil
+	return owned, nil
 }
 
 // hydrateBranchListMetrics normalizes cached metrics and batch-loads missing metrics from active versions.
@@ -402,9 +388,15 @@ func (s *Service) hydrateBranchListMetrics(ctx context.Context, branches []core.
 
 // Branch retrieves a branch record by its identifier and hydrates its active metrics.
 func (s *Service) Branch(ctx context.Context, userID, id string) (*core.Branch, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
 	branch, err := s.branches.Branch(ctx, userID, id)
 	if err != nil {
 		return nil, err
+	}
+	if branch.UserID != userID {
+		return nil, core.ErrNotFound
 	}
 	s.populateBranchActiveMetrics(ctx, branch)
 	return branch, nil
@@ -412,6 +404,12 @@ func (s *Service) Branch(ctx context.Context, userID, id string) (*core.Branch, 
 
 // CreateBranch initializes and saves a new resume branch synchronized to the main revision.
 func (s *Service) CreateBranch(ctx context.Context, branch *core.Branch) (*core.Branch, error) {
+	if branch == nil {
+		return nil, fmt.Errorf("%w: branch is required", core.ErrValidation)
+	}
+	if err := requireUserID(branch.UserID); err != nil {
+		return nil, err
+	}
 	if err := s.validateBranchReferences(ctx, branch); err != nil {
 		return nil, err
 	}
@@ -436,6 +434,12 @@ func (s *Service) CreateBranch(ctx context.Context, branch *core.Branch) (*core.
 
 // UpdateBranch modifies branch configuration while preserving default branch immutability invariants.
 func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.Branch, error) {
+	if branch == nil {
+		return nil, fmt.Errorf("%w: branch is required", core.ErrValidation)
+	}
+	if err := requireUserID(branch.UserID); err != nil {
+		return nil, err
+	}
 	if err := s.validateBranchReferences(ctx, branch); err != nil {
 		return nil, err
 	}
@@ -443,6 +447,9 @@ func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.
 	existing, err := s.branches.Branch(ctx, branch.UserID, branch.ID)
 	if err != nil {
 		return nil, err
+	}
+	if existing.UserID != branch.UserID {
+		return nil, core.ErrNotFound
 	}
 
 	if existing.IsDefault {
@@ -458,7 +465,7 @@ func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.
 	if err := s.branches.UpdateBranch(ctx, branch); err != nil {
 		return nil, err
 	}
-	if branchGenerationOrActiveChanged(existing, branch) {
+	if existing.GenerationOrActiveChanged(branch) {
 		_ = s.abortBranchVersions(ctx, branch.ID, "superseded by branch update")
 	} else {
 		s.supersedePendingVersions(ctx, branch.ID, "superseded by branch update")
@@ -521,9 +528,15 @@ func (s *Service) validateActiveVersion(ctx context.Context, branch *core.Branch
 
 // DeleteBranch aborts active versions, releases reserved quota, and removes a non-default branch.
 func (s *Service) DeleteBranch(ctx context.Context, userID, id string) error {
+	if err := requireUserID(userID); err != nil {
+		return err
+	}
 	branch, err := s.branches.Branch(ctx, userID, id)
 	if err != nil {
 		return err
+	}
+	if branch.UserID != userID {
+		return core.ErrNotFound
 	}
 	if branch.IsDefault {
 		return fmt.Errorf("%w: cannot delete default branch", core.ErrDefaultBranchImmutable)

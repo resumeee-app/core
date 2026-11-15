@@ -697,6 +697,9 @@ func TestSession_DeobfuscateATSScore(t *testing.T) {
 	if !strings.Contains(c.Summary, "Alice Walker") || !strings.Contains(c.Summary, "alice.walker@example.org") {
 		t.Errorf("ATSExtractedCandidate.Summary failed: %s", c.Summary)
 	}
+	if c.Experiences[0].Company != "Alice Walker LLC" {
+		t.Errorf("ATSExtractedCandidate.Experiences[0].Company failed: %q", c.Experiences[0].Company)
+	}
 	if c.Experiences[0].Title != "Engineer (Alice Walker)" {
 		t.Errorf("ATSExtractedCandidate.Experiences[0].Title failed: %q", c.Experiences[0].Title)
 	}
@@ -704,12 +707,9 @@ func TestSession_DeobfuscateATSScore(t *testing.T) {
 		t.Errorf("ATSExtractedCandidate.Experiences[0].Highlights[0] failed: %q", c.Experiences[0].Highlights[0])
 	}
 
-	// Structured skills, company, date range, education, and certification details must NOT be deobfuscated
+	// Structured skills, date range, education, and certification details must NOT be deobfuscated
 	if c.Skills[0] != "Go ("+sanitizer.PlaceholderFullName+")" {
 		t.Errorf("expected Skills[0] untouched, got %q", c.Skills[0])
-	}
-	if c.Experiences[0].Company != sanitizer.PlaceholderFullName+" LLC" {
-		t.Errorf("expected Experiences[0].Company untouched, got %q", c.Experiences[0].Company)
 	}
 	if c.Experiences[0].DateRange != "2021 - "+sanitizer.PlaceholderFullName {
 		t.Errorf("expected Experiences[0].DateRange untouched, got %q", c.Experiences[0].DateRange)
@@ -1028,6 +1028,13 @@ func TestSession_ObfuscateExtractedCandidate(t *testing.T) {
 					"Contact " + realPhone + " for " + realName + " architecture review.",
 				},
 			},
+			{
+				Company: "Acme Corp",
+				Title:   "Staff Engineer",
+				Highlights: []string{
+					"Led distributed systems at Acme Corp.",
+				},
+			},
 		},
 	}
 
@@ -1043,8 +1050,11 @@ func TestSession_ObfuscateExtractedCandidate(t *testing.T) {
 	if !strings.Contains(orig.Summary, realName) {
 		t.Errorf("caller Summary mutated: %q", orig.Summary)
 	}
+	if orig.Experiences[0].Company != realName+" Systems" {
+		t.Errorf("caller Experiences[0].Company mutated: %q", orig.Experiences[0].Company)
+	}
 
-	// Verify candidate PII is scrubbed across Summary, Title, and Highlights while preserving Company.
+	// Verify candidate PII is scrubbed across Summary, Company, Title, and Highlights while preserving non-PII Company.
 	for _, pii := range []string{realName, realEmail, realPhone, realWeb} {
 		if strings.Contains(got.Summary, pii) {
 			t.Errorf("obfuscated Summary leaked %q: %q", pii, got.Summary)
@@ -1056,8 +1066,11 @@ func TestSession_ObfuscateExtractedCandidate(t *testing.T) {
 	if strings.Contains(got.Experiences[0].Title, realName) {
 		t.Errorf("obfuscated Experience Title leaked name: %q", got.Experiences[0].Title)
 	}
-	if got.Experiences[0].Company != realName+" Systems" {
-		t.Errorf("expected non-PII Company preserved, got %q", got.Experiences[0].Company)
+	if got.Experiences[0].Company != sanitizer.PlaceholderFullName+" Systems" {
+		t.Errorf("expected candidate-PII Company scrubbed, got %q", got.Experiences[0].Company)
+	}
+	if got.Experiences[1].Company != "Acme Corp" {
+		t.Errorf("expected non-PII third-party Company preserved, got %q", got.Experiences[1].Company)
 	}
 
 	// Nil safety and copy-on-write cloning even on nil session.
@@ -1252,6 +1265,229 @@ func TestSession_NoBracketlessOrNaturalLanguageFallbacks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := session.DeobfuscateString(tc.input); got != tc.input {
 				t.Errorf("DeobfuscateString(%q) = %q, want unmodified %q", tc.input, got, tc.input)
+			}
+		})
+	}
+}
+
+func TestSession_ATSCompanyName_RoundTrip(t *testing.T) {
+	prof := sampleCandidateProfile()
+	session := sanitizer.NewSession(&prof)
+
+	cases := []struct {
+		name        string
+		company     string
+		wantObf     string
+		wantDeobf   string
+		title       string
+		wantTitle   string
+		highlight   string
+		wantHighlgt string
+	}{
+		{
+			name:        "candidate-named consulting company round-trips",
+			company:     "Alice Walker Consulting",
+			wantObf:     sanitizer.PlaceholderFullName + " Consulting",
+			wantDeobf:   "Alice Walker Consulting",
+			title:       "Principal Consultant",
+			wantTitle:   "Principal Consultant",
+			highlight:   "Delivered architecture for Alice Walker clients.",
+			wantHighlgt: "Delivered architecture for Alice Walker clients.",
+		},
+		{
+			name:        "non-PII third-party company stays intact",
+			company:     "Acme Corp",
+			wantObf:     "Acme Corp",
+			wantDeobf:   "Acme Corp",
+			title:       "Staff Engineer",
+			wantTitle:   "Staff Engineer",
+			highlight:   "Alice Walker scaled Acme Corp services.",
+			wantHighlgt: "Alice Walker scaled Acme Corp services.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := &core.ATSExtractedCandidate{
+				Experiences: []core.ATSExtractedExperience{
+					{
+						Company:    tc.company,
+						Title:      tc.title,
+						Highlights: []string{tc.highlight},
+					},
+				},
+			}
+
+			obf := session.ObfuscateExtractedCandidate(orig)
+			if obf.Experiences[0].Company != tc.wantObf {
+				t.Errorf("ObfuscateExtractedCandidate Company = %q, want %q", obf.Experiences[0].Company, tc.wantObf)
+			}
+
+			score := &core.ATSScore{ExtractedCandidate: obf}
+			session.DeobfuscateATSScore(score)
+
+			got := score.ExtractedCandidate.Experiences[0]
+			if got.Company != tc.wantDeobf {
+				t.Errorf("DeobfuscateATSScore Company = %q, want %q", got.Company, tc.wantDeobf)
+			}
+			if got.Title != tc.wantTitle {
+				t.Errorf("DeobfuscateATSScore Title = %q, want %q", got.Title, tc.wantTitle)
+			}
+			if got.Highlights[0] != tc.wantHighlgt {
+				t.Errorf("DeobfuscateATSScore Highlights[0] = %q, want %q", got.Highlights[0], tc.wantHighlgt)
+			}
+		})
+	}
+}
+
+func TestSession_DollarExpansionProtection(t *testing.T) {
+	cases := []struct {
+		name      string
+		profile   core.Profile
+		input     string
+		wantObf   string
+		deobfIn   string
+		wantDeobf string
+	}{
+		{
+			name: "FullName with RE2 dollar expressions",
+			profile: core.Profile{
+				FullName: "Alice $1 $$ ${1} $var Walker",
+			},
+			input:     "Author: Alice $1 $$ ${1} $var Walker.",
+			wantObf:   "Author: " + sanitizer.PlaceholderFullName + ".",
+			deobfIn:   "Author: " + sanitizer.PlaceholderFullName + ".",
+			wantDeobf: "Author: Alice $1 $$ ${1} $var Walker.",
+		},
+		{
+			name: "Username with RE2 dollar expressions",
+			profile: core.Profile{
+				Profiles: []core.SocialLink{
+					{Network: "GitHub", Username: "dev_$1_$$_${1}_$var", URL: "https://github.com/dev"},
+				},
+			},
+			input:     "Handle: dev_$1_$$_${1}_$var.",
+			wantObf:   "Handle: " + sanitizer.PlaceholderSocialHandle(1) + ".",
+			deobfIn:   "Handle: " + sanitizer.PlaceholderSocialHandle(1) + ".",
+			wantDeobf: "Handle: dev_$1_$$_${1}_$var.",
+		},
+		{
+			name: "Website URL with RE2 dollar expressions",
+			profile: core.Profile{
+				Metadata: map[string]any{
+					"website": "https://alice.dev/$1/$$/${1}/$var",
+				},
+			},
+			input:     "Site: https://alice.dev/$1/$$/${1}/$var.",
+			wantObf:   "Site: " + sanitizer.PlaceholderWebsite + ".",
+			deobfIn:   "Site: " + sanitizer.PlaceholderWebsite + ".",
+			wantDeobf: "Site: https://alice.dev/$1/$$/${1}/$var.",
+		},
+		{
+			name: "Combined FullName, Username, and Website with dollar expressions and lowercase placeholders",
+			profile: core.Profile{
+				FullName: "$1 Alice $$ ${1} $var",
+				Profiles: []core.SocialLink{
+					{Network: "GitHub", Username: "$1$$${1}$var", URL: "https://github.com/alice"},
+				},
+				Metadata: map[string]any{
+					"website": "https://alice.dev/path/$1/$$/${1}/$var",
+				},
+			},
+			input:     "$1 Alice $$ ${1} $var | $1$$${1}$var | https://alice.dev/path/$1/$$/${1}/$var",
+			wantObf:   sanitizer.PlaceholderFullName + " | " + sanitizer.PlaceholderSocialHandle(1) + " | " + sanitizer.PlaceholderWebsite,
+			deobfIn:   "[name_placeholder] | [social_handle_placeholder_1] | [website_placeholder]",
+			wantDeobf: "$1 Alice $$ ${1} $var | $1$$${1}$var | https://alice.dev/path/$1/$$/${1}/$var",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			session := sanitizer.NewSession(&tc.profile)
+			gotObf := session.ObfuscateString(tc.input)
+			if gotObf != tc.wantObf {
+				t.Errorf("ObfuscateString() = %q, want %q", gotObf, tc.wantObf)
+			}
+			gotDeobf := session.DeobfuscateString(gotObf)
+			if gotDeobf != tc.wantDeobf {
+				t.Errorf("DeobfuscateString(obf) = %q, want %q", gotDeobf, tc.wantDeobf)
+			}
+			if tc.deobfIn != "" && tc.deobfIn != gotObf {
+				gotCustomDeobf := session.DeobfuscateString(tc.deobfIn)
+				if gotCustomDeobf != tc.wantDeobf {
+					t.Errorf("DeobfuscateString(%q) = %q, want %q", tc.deobfIn, gotCustomDeobf, tc.wantDeobf)
+				}
+			}
+		})
+	}
+}
+
+func TestSession_SinglePassCollisionProtection(t *testing.T) {
+	cases := []struct {
+		name      string
+		profile   core.Profile
+		input     string
+		wantObf   string
+		deobfIn   string
+		wantDeobf string
+	}{
+		{
+			name: "FullName containing EMAIL_PLACEHOLDER does not double-expand",
+			profile: core.Profile{
+				FullName: "Alice [EMAIL_PLACEHOLDER]",
+				Email:    "alice@example.org",
+			},
+			input:     "Alice [EMAIL_PLACEHOLDER] <alice@example.org>",
+			wantObf:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			deobfIn:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			wantDeobf: "Alice [EMAIL_PLACEHOLDER] <alice@example.org>",
+		},
+		{
+			name: "Email containing NAME_PLACEHOLDER does not double-expand",
+			profile: core.Profile{
+				FullName: "Alice Walker",
+				Email:    "alice+[NAME_PLACEHOLDER]@example.org",
+			},
+			input:     "Alice Walker <alice+[NAME_PLACEHOLDER]@example.org>",
+			wantObf:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			deobfIn:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			wantDeobf: "Alice Walker <alice+[NAME_PLACEHOLDER]@example.org>",
+		},
+		{
+			name: "10+ social handles _1 _10 _11 single-pass restoration without collision",
+			profile: core.Profile{
+				FullName: "Alice Walker",
+				Profiles: []core.SocialLink{
+					{Network: "P1", Username: "handle_one"},
+					{Network: "P2", Username: "handle_02"},
+					{Network: "P3", Username: "handle_03"},
+					{Network: "P4", Username: "handle_04"},
+					{Network: "P5", Username: "handle_05"},
+					{Network: "P6", Username: "handle_06"},
+					{Network: "P7", Username: "handle_07"},
+					{Network: "P8", Username: "handle_08"},
+					{Network: "P9", Username: "handle_09"},
+					{Network: "P10", Username: "handle_" + sanitizer.PlaceholderSocialHandle(1)},
+					{Network: "P11", Username: "handle_$1_" + sanitizer.PlaceholderFullName},
+				},
+			},
+			input:     "Handles: handle_one, handle_" + sanitizer.PlaceholderSocialHandle(1) + ", handle_$1_" + sanitizer.PlaceholderFullName + ", Alice Walker.",
+			wantObf:   "Handles: " + sanitizer.PlaceholderSocialHandle(1) + ", " + sanitizer.PlaceholderSocialHandle(10) + ", " + sanitizer.PlaceholderSocialHandle(11) + ", " + sanitizer.PlaceholderFullName + ".",
+			deobfIn:   "Handles: " + sanitizer.PlaceholderSocialHandle(1) + ", " + sanitizer.PlaceholderSocialHandle(10) + ", " + sanitizer.PlaceholderSocialHandle(11) + ", " + sanitizer.PlaceholderFullName + ".",
+			wantDeobf: "Handles: handle_one, handle_" + sanitizer.PlaceholderSocialHandle(1) + ", handle_$1_" + sanitizer.PlaceholderFullName + ", Alice Walker.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			session := sanitizer.NewSession(&tc.profile)
+			gotObf := session.ObfuscateString(tc.input)
+			if gotObf != tc.wantObf {
+				t.Errorf("ObfuscateString() = %q, want %q", gotObf, tc.wantObf)
+			}
+			gotDeobf := session.DeobfuscateString(tc.deobfIn)
+			if gotDeobf != tc.wantDeobf {
+				t.Errorf("DeobfuscateString() = %q, want %q", gotDeobf, tc.wantDeobf)
 			}
 		})
 	}

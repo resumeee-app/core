@@ -9,4 +9,4 @@ Job Description:
 {{.ExtractedCandidateJSON}}
 </extracted_candidate_data>
 
-Using only the extracted candidate data above, produce a valid JSON object with top-level keys "job_matching_score" (0 to 1) and "matching_summary" evaluating the match against the job description. Preserve any bracketed uppercase PII placeholder tokens (such as [FIELD_PLACEHOLDER] and [SOCIAL_*_PLACEHOLDER_N]) verbatim; never translate, transliterate, reformat, alter casing, drop brackets from, or modify them, including when embedded in company names or translated prose. Output valid JSON only.
+Using only the extracted candidate data above, produce a valid JSON object with top-level keys "job_matching_score" (0 to 1) and "matching_summary" evaluating the match against the job description. {{template "pii_placeholder_user_directive"}} Output valid JSON only.

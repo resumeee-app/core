@@ -12,4 +12,4 @@ Target Requirements:
 {{else}}{}
 {{end}}</main_profile_data>
 
-Produce a valid JSON object with top-level key "gap_report" matching the required schema (containing "overall_match_summary", "missing_requirements", and "strategic_recommendations"). Adhere strictly to the No Lies grounding rules. Preserve any bracketed uppercase PII placeholder tokens (such as [FIELD_PLACEHOLDER] and [SOCIAL_*_PLACEHOLDER_N]) verbatim; never translate, transliterate, reformat, alter casing, drop brackets from, or modify them, including when embedded in company names or translated prose. Output valid JSON only.
+Produce a valid JSON object with top-level key "gap_report" matching the required schema (containing "overall_match_summary", "missing_requirements", and "strategic_recommendations"). Adhere strictly to the No Lies grounding rules. {{template "pii_placeholder_user_directive"}} Output valid JSON only.

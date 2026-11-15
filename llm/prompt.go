@@ -21,16 +21,16 @@ var templateFS embed.FS
 // Compiled prompt templates parsed at package initialization from embedded templateFS assets.
 var (
 	// tailorSystemTmpl renders the system prompt for resume tailoring.
-	tailorSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/tailor_system.tmpl"))
+	tailorSystemTmpl = parseScrubbedPromptTemplate("templates/tailor_system.tmpl")
 
 	// tailorUserTmpl renders the user prompt for resume tailoring.
-	tailorUserTmpl = template.Must(template.ParseFS(templateFS, "templates/tailor_user.tmpl"))
+	tailorUserTmpl = parseScrubbedPromptTemplate("templates/tailor_user.tmpl")
 
 	// gapAnalysisSystemTmpl renders the system prompt for qualification gap analysis.
-	gapAnalysisSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_system.tmpl"))
+	gapAnalysisSystemTmpl = parseScrubbedPromptTemplate("templates/gap_analysis_system.tmpl")
 
 	// gapAnalysisUserTmpl renders the user prompt for qualification gap analysis.
-	gapAnalysisUserTmpl = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_user.tmpl"))
+	gapAnalysisUserTmpl = parseScrubbedPromptTemplate("templates/gap_analysis_user.tmpl")
 
 	// resumeExtractSystemTmpl renders the system prompt for raw resume extraction.
 	resumeExtractSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/resume_extract_system.tmpl"))
@@ -39,17 +39,23 @@ var (
 	resumeExtractUserTmpl = template.Must(template.ParseFS(templateFS, "templates/resume_extract_user.tmpl"))
 
 	// atsExtractSystemTmpl renders the system prompt for Stage 1 ATS extraction.
-	atsExtractSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_extract_system.tmpl"))
+	atsExtractSystemTmpl = parseScrubbedPromptTemplate("templates/ats_extract_system.tmpl")
 
 	// atsExtractUserTmpl renders the user prompt for Stage 1 ATS extraction.
-	atsExtractUserTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_extract_user.tmpl"))
+	atsExtractUserTmpl = parseScrubbedPromptTemplate("templates/ats_extract_user.tmpl")
 
 	// atsMatchSystemTmpl renders the system prompt for Stage 2 ATS job matching.
-	atsMatchSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_match_system.tmpl"))
+	atsMatchSystemTmpl = parseScrubbedPromptTemplate("templates/ats_match_system.tmpl")
 
 	// atsMatchUserTmpl renders the user prompt for Stage 2 ATS job matching.
-	atsMatchUserTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_match_user.tmpl"))
+	atsMatchUserTmpl = parseScrubbedPromptTemplate("templates/ats_match_user.tmpl")
 )
+
+// parseScrubbedPromptTemplate parses the embedded prompt template at path together with the
+// shared PII placeholder partials, keeping path as the root template executed on render.
+func parseScrubbedPromptTemplate(path string) *template.Template {
+	return template.Must(template.ParseFS(templateFS, path, "templates/pii_placeholder_rules.tmpl"))
+}
 
 // ReadTemplateFile reads an embedded prompt template file by filename from templates/.
 func ReadTemplateFile(name string) (string, error) {

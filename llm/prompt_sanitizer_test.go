@@ -742,6 +742,11 @@ func TestBuildATSMatchingPrompt_ScrubsExtractedCandidatePIIAndPreservesCaller(t 
 				Title:      "Staff Engineer for " + realName,
 				Highlights: []string{"Reached at " + realPhone + " regarding compiler metrics."},
 			},
+			{
+				Company:    "CloudScale",
+				Title:      "Principal Architect",
+				Highlights: []string{"Led distributed compiler infrastructure."},
+			},
 		},
 	}
 
@@ -756,14 +761,20 @@ func TestBuildATSMatchingPrompt_ScrubsExtractedCandidatePIIAndPreservesCaller(t 
 	if !strings.Contains(extracted.Summary, realName) {
 		t.Errorf("BuildATSMatchingPrompt mutated caller ExtractedCandidate.Summary: %q", extracted.Summary)
 	}
+	if extracted.Experiences[0].Company != realName+" Engines" {
+		t.Errorf("BuildATSMatchingPrompt mutated caller ExtractedCandidate.Experiences[0].Company: %q", extracted.Experiences[0].Company)
+	}
 
-	for _, pii := range []string{realEmail, realPhone, realWeb} {
+	for _, pii := range []string{realName, realEmail, realPhone, realWeb} {
 		if strings.Contains(payload.UserPrompt, pii) {
 			t.Errorf("BuildATSMatchingPrompt leaked %q into <extracted_candidate_data>:\n%s", pii, payload.UserPrompt)
 		}
 	}
-	if !strings.Contains(payload.UserPrompt, realName+" Engines") {
-		t.Errorf("BuildATSMatchingPrompt unexpectedly masked non-PII Company:\n%s", payload.UserPrompt)
+	if !strings.Contains(payload.UserPrompt, sanitizer.PlaceholderFullName+" Engines") {
+		t.Errorf("BuildATSMatchingPrompt failed to scrub candidate-owned Company:\n%s", payload.UserPrompt)
+	}
+	if !strings.Contains(payload.UserPrompt, `"company": "CloudScale"`) {
+		t.Errorf("BuildATSMatchingPrompt unexpectedly altered third-party Company:\n%s", payload.UserPrompt)
 	}
 	if !strings.Contains(payload.UserPrompt, "Staff Engineer for "+sanitizer.PlaceholderFullName) {
 		t.Errorf("BuildATSMatchingPrompt failed to scrub Experience Title:\n%s", payload.UserPrompt)

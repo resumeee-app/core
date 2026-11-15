@@ -2,4 +2,4 @@
 {{.ResumeText}}
 </resume_document>
 
-Parse the resume document above and produce a valid JSON object with top-level keys "extraction_confidence_score" (0 to 1), "extraction_summary", and "extracted_candidate" (containing "summary", "skills", "experiences", and "educations"). Preserve any bracketed uppercase PII placeholder tokens (such as [FIELD_PLACEHOLDER] and [SOCIAL_*_PLACEHOLDER_N]) verbatim; never translate, transliterate, reformat, alter casing, drop brackets from, or modify them, including when embedded in company names or translated prose. Output valid JSON only.
+Parse the resume document above and produce a valid JSON object with top-level keys "extraction_confidence_score" (0 to 1), "extraction_summary", and "extracted_candidate" (containing "summary", "skills", "experiences", and "educations"). {{template "pii_placeholder_user_directive"}} Output valid JSON only.

@@ -160,15 +160,18 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 		headers = map[string]string{"Authorization": "Bearer " + c.apiKey}
 	}
 
+	start := time.Now()
 	bodyBytes, statusCode, err := httpx.PostJSON(ctx, c.settings.HTTPClient, buildChatURL(c.settings.BaseURL), payload, headers, llm.ProviderOllama)
+	latency := time.Since(start)
 	if err != nil {
-		if bodyBytes == nil && statusCode == 0 {
-			return nil, err
-		}
-		return &llm.Response{RawBody: string(bodyBytes), StatusCode: statusCode}, err
+		return (&llm.Response{
+			RawBody:    string(bodyBytes),
+			StatusCode: statusCode,
+		}).PopulateTelemetry(c.Name(), model, latency), err
 	}
 
-	return parseChatResponse(bodyBytes, statusCode)
+	resp, err := parseChatResponse(bodyBytes, statusCode)
+	return resp.PopulateTelemetry(c.Name(), model, latency), err
 }
 
 // parseChatResponse unmarshals bodyBytes from /api/chat and checks for non-empty content.
@@ -180,11 +183,10 @@ func parseChatResponse(bodyBytes []byte, statusCode int) (*llm.Response, error) 
 			fmt.Errorf("%w: malformed ollama response: %v", llm.ErrInvalidResponse, err)
 	}
 
-	usage := core.TokenUsage{
+	usage := (core.TokenUsage{
 		PromptTokens:     parsed.PromptEvalCount,
 		CompletionTokens: parsed.EvalCount,
-		TotalTokens:      parsed.PromptEvalCount + parsed.EvalCount,
-	}
+	}).Normalize()
 
 	content := strings.TrimSpace(parsed.Message.Content)
 	if content == "" {

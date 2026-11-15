@@ -4,17 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// Timeout bounds applied to LLM worker stages and detached failure status persistence.
+// Timeout bounds and fallback token budgets applied to LLM worker stages and failure persistence.
 const (
 	// defaultLLMJobTimeout caps individual LLM generation calls when Config.LLMTimeout is unset.
 	defaultLLMJobTimeout = 10 * time.Minute
 	// failJobStatusTimeout bounds detached failure writes when the parent context has been cancelled.
 	failJobStatusTimeout = 5 * time.Second
+	// defaultTailoringFallbackTokens is committed when a tailoring generation call succeeds with zero reported token usage.
+	defaultTailoringFallbackTokens = 2000
 )
 
 // generationInputs holds all domain entities resolved prior to invoking resume tailoring.
@@ -31,6 +34,7 @@ type generationInputs struct {
 // processJob coordinates end-to-end execution of a background resume generation pipeline job.
 func (p *Pool) processJob(ctx context.Context, job core.GenerationJob) {
 	if p.branches == nil {
+		p.releaseJobQuota(ctx, job.ReservationID, "no branch store configured", core.LLMTelemetry{})
 		return
 	}
 
@@ -38,41 +42,35 @@ func (p *Pool) processJob(ctx context.Context, job core.GenerationJob) {
 		if p.logger != nil {
 			p.logger.Error("failed to update version status to processing", "version_id", job.VersionID, "err", err)
 		}
+		p.releaseJobQuota(ctx, job.ReservationID, err.Error(), core.LLMTelemetry{})
 		return
 	}
 
 	inputs, err := p.loadGenerationInputs(ctx, job)
 	if err != nil {
-		p.failJob(ctx, job.VersionID, err.Error())
+		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, err.Error(), core.LLMTelemetry{})
 		return
 	}
 
-	resp, ok := p.runTailoringGeneration(ctx, job, inputs)
+	resp, telemetry, ok := p.runTailoringGeneration(ctx, job, inputs)
 	if !ok {
 		return
 	}
 
-	if p.validator == nil {
-		p.failJob(ctx, job.VersionID, "no provenance validator configured")
-		return
-	}
-	valRes, err := p.validator.Validate(&resp.TailoredContent, inputs.snapshot, inputs.branch)
+	valRes, rendered, err := p.validateAndRenderVersion(ctx, inputs, resp)
 	if err != nil {
-		p.failJob(ctx, job.VersionID, fmt.Sprintf("provenance validation error: %v", err))
+		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, err.Error(), telemetry)
 		return
 	}
 
-	if p.renderer == nil {
-		p.failJob(ctx, job.VersionID, "no template renderer configured")
-		return
-	}
-	rendered, err := p.renderer.Render(ctx, inputs.template, inputs.profile, valRes.SanitizedContent)
-	if err != nil {
-		p.failJob(ctx, job.VersionID, fmt.Sprintf("template render error: %v", err))
+	if err := p.persistCompletedVersion(ctx, job, inputs, resp, valRes, rendered, telemetry); err != nil {
+		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, err.Error(), telemetry)
 		return
 	}
 
-	p.persistCompletedVersion(ctx, job, inputs, resp, valRes, rendered)
+	// Apply fallback estimation only after generation, validation, rendering, and persistence succeed.
+	telemetry.Usage = telemetry.Usage.WithFallback(defaultTailoringFallbackTokens)
+	p.commitJobQuota(ctx, job.ReservationID, telemetry)
 }
 
 // loadGenerationInputs resolves branch, profile, snapshot, optional preset/prior version, and template entities.
@@ -82,6 +80,9 @@ func (p *Pool) loadGenerationInputs(ctx context.Context, job core.GenerationJob)
 		v, err := p.branches.Version(ctx, "", job.VersionID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load version: %w", err)
+		}
+		if v == nil {
+			return nil, errors.New("failed to load version: empty version record")
 		}
 		branchID = v.BranchID
 	}
@@ -95,6 +96,9 @@ func (p *Pool) loadGenerationInputs(ctx context.Context, job core.GenerationJob)
 		userID = branch.UserID
 	}
 
+	if p.profiles == nil {
+		return nil, errors.New("no profile reader configured")
+	}
 	prof, err := p.profiles.Profile(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load profile: %w", err)
@@ -118,6 +122,9 @@ func (p *Pool) loadGenerationInputs(ctx context.Context, job core.GenerationJob)
 		}
 	}
 
+	if p.templates == nil {
+		return nil, errors.New("no template reader configured")
+	}
 	tmpl, err := p.templates.Template(ctx, userID, branch.TemplateSetID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load template set: %w", err)
@@ -134,11 +141,20 @@ func (p *Pool) loadGenerationInputs(ctx context.Context, job core.GenerationJob)
 	}, nil
 }
 
-// runTailoringGeneration builds the sanitized request, executes the Generator with timeout, and settles quota.
-func (p *Pool) runTailoringGeneration(ctx context.Context, job core.GenerationJob, inputs *generationInputs) (*core.GenerationResponse, bool) {
+// withLLMTimeout derives a context bounded by Config.LLMTimeout or defaultLLMJobTimeout.
+func (p *Pool) withLLMTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := p.llmTimeout
+	if timeout <= 0 {
+		timeout = defaultLLMJobTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+// runTailoringGeneration builds the sanitized request, executes the Generator with timeout, and resolves call telemetry.
+func (p *Pool) runTailoringGeneration(ctx context.Context, job core.GenerationJob, inputs *generationInputs) (*core.GenerationResponse, core.LLMTelemetry, bool) {
 	if p.generator == nil {
-		p.failJob(ctx, job.VersionID, "no LLM service configured")
-		return nil, false
+		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, "no LLM service configured", core.LLMTelemetry{})
+		return nil, core.LLMTelemetry{}, false
 	}
 
 	presetInstructions := ""
@@ -146,7 +162,7 @@ func (p *Pool) runTailoringGeneration(ctx context.Context, job core.GenerationJo
 		presetInstructions = inputs.preset.SystemInstructions
 	}
 
-	req := core.GenerationRequest{
+	genReq := core.GenerationRequest{
 		Model:              inputs.branch.ModelOverride,
 		ReasoningLevel:     inputs.branch.ReasoningLevel,
 		MainProfile:        inputs.snapshot,
@@ -158,14 +174,11 @@ func (p *Pool) runTailoringGeneration(ctx context.Context, job core.GenerationJo
 		PriorVersion:       inputs.priorContent,
 	}
 
-	timeout := p.llmTimeout
-	if timeout <= 0 {
-		timeout = defaultLLMJobTimeout
-	}
-	llmCtx, cancel := context.WithTimeout(ctx, timeout)
+	genCtx, cancel := p.withLLMTimeout(ctx)
 	defer cancel()
 
-	resp, err := p.generator.GenerateTailoredResume(llmCtx, req)
+	genResp, err := p.generator.GenerateTailoredResume(genCtx, genReq)
+	telemetry := core.ResolveTelemetry(genResp.EffectiveTelemetry(), err)
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Error("llm generation failed", "version_id", job.VersionID, "error", err)
@@ -174,36 +187,108 @@ func (p *Pool) runTailoringGeneration(ctx context.Context, job core.GenerationJo
 		if errors.Is(err, context.DeadlineExceeded) {
 			errMsg = "Resume tailoring timed out after 10 minutes."
 		}
-		p.releaseJobQuota(ctx, job.ReservationID, errMsg)
-		p.failJob(ctx, job.VersionID, errMsg)
-		return nil, false
+		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, errMsg, telemetry)
+		return nil, core.LLMTelemetry{}, false
 	}
-	if resp == nil {
-		errMsg := "llm returned empty generation response"
-		p.releaseJobQuota(ctx, job.ReservationID, errMsg)
-		p.failJob(ctx, job.VersionID, errMsg)
-		return nil, false
+	if genResp == nil {
+		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, "llm returned empty generation response", telemetry)
+		return nil, core.LLMTelemetry{}, false
 	}
 
-	if p.quotas != nil && job.ReservationID != "" {
-		_ = p.quotas.CommitUsage(ctx, job.ReservationID, resp.Usage)
-	}
-	return resp, true
+	return genResp, telemetry, true
 }
 
-// releaseJobQuota releases reserved tenant quota units when a job fails prior to commitment.
-func (p *Pool) releaseJobQuota(ctx context.Context, reservationID, reason string) {
-	if p.quotas != nil && reservationID != "" {
-		_ = p.quotas.ReleaseQuota(ctx, reservationID, reason)
+// validateAndRenderVersion validates generated content against source provenance and renders final outputs.
+func (p *Pool) validateAndRenderVersion(ctx context.Context, inputs *generationInputs, resp *core.GenerationResponse) (*core.ValidationResult, *core.RenderOutput, error) {
+	if p.validator == nil {
+		return nil, nil, errors.New("no provenance validator configured")
+	}
+	valRes, err := p.validator.Validate(&resp.TailoredContent, inputs.snapshot, inputs.branch)
+	if err != nil {
+		return nil, nil, fmt.Errorf("provenance validation error: %w", err)
+	}
+	if valRes == nil {
+		return nil, nil, errors.New("provenance validation error: empty validation result")
+	}
+	if p.renderer == nil {
+		return nil, nil, errors.New("no template renderer configured")
+	}
+	rendered, err := p.renderer.Render(ctx, inputs.template, inputs.profile, valRes.SanitizedContent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("template render error: %w", err)
+	}
+	if rendered == nil {
+		return nil, nil, errors.New("template render error: empty render output")
+	}
+	return valRes, rendered, nil
+}
+
+// detachedQuotaContext ensures quota settlement runs under an uncancelled bounded context when ctx is done.
+func detachedQuotaContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), failJobStatusTimeout)
+	}
+	if ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), failJobStatusTimeout)
+}
+
+// commitJobQuota commits normalized call telemetry for a successfully completed job reservation.
+func (p *Pool) commitJobQuota(ctx context.Context, reservationID string, telemetry core.LLMTelemetry) {
+	if p.quotas == nil || reservationID == "" {
+		return
+	}
+	quotaCtx, cancel := detachedQuotaContext(ctx)
+	defer cancel()
+	if err := p.quotas.CommitUsage(quotaCtx, reservationID, telemetry.Normalize()); err != nil && p.logger != nil {
+		p.logger.Error("failed to commit job quota usage", "reservation_id", reservationID, "err", err)
 	}
 }
 
-// persistCompletedVersion updates version fields with sanitized content and rendered outputs and marks it complete.
-func (p *Pool) persistCompletedVersion(ctx context.Context, job core.GenerationJob, inputs *generationInputs, resp *core.GenerationResponse, valRes *core.ValidationResult, rendered *core.RenderOutput) {
+// releaseJobQuota releases reserved tenant quota units alongside call telemetry when a job fails prior to commitment.
+func (p *Pool) releaseJobQuota(ctx context.Context, reservationID, reason string, telemetry core.LLMTelemetry) {
+	if p.quotas == nil || reservationID == "" {
+		return
+	}
+	quotaCtx, cancel := detachedQuotaContext(ctx)
+	defer cancel()
+	if err := p.quotas.ReleaseQuota(quotaCtx, reservationID, reason, telemetry.Normalize()); err != nil && p.logger != nil {
+		p.logger.Error("failed to release job quota", "reservation_id", reservationID, "err", err)
+	}
+}
+
+// failJobWithQuota releases any pending quota reservation with telemetry before marking the version failed.
+func (p *Pool) failJobWithQuota(ctx context.Context, versionID, reservationID, errMsg string, telemetry core.LLMTelemetry) {
+	p.releaseJobQuota(ctx, reservationID, errMsg, telemetry)
+	p.failJob(ctx, versionID, errMsg)
+}
+
+// resolveVersionProviderModel prefers non-empty resolved call telemetry over branch overrides and existing metadata.
+func resolveVersionProviderModel(ver *core.BranchVersion, b *core.Branch, telemetry core.LLMTelemetry) (string, string) {
+	provider := strings.TrimSpace(telemetry.Provider)
+	if provider == "" && b != nil {
+		provider = strings.TrimSpace(b.ProviderOverride)
+	}
+	if provider == "" && ver != nil {
+		provider = ver.ProviderUsed
+	}
+
+	model := strings.TrimSpace(telemetry.Model)
+	if model == "" && b != nil {
+		model = strings.TrimSpace(b.ModelOverride)
+	}
+	if model == "" && ver != nil {
+		model = ver.ModelUsed
+	}
+	return provider, model
+}
+
+// persistCompletedVersion updates version fields with sanitized content, rendered outputs, and resolved model metadata.
+func (p *Pool) persistCompletedVersion(ctx context.Context, job core.GenerationJob, inputs *generationInputs, resp *core.GenerationResponse, valRes *core.ValidationResult, rendered *core.RenderOutput, telemetry core.LLMTelemetry) error {
 	ver, err := p.branches.Version(ctx, inputs.branch.ID, job.VersionID)
 	if err != nil {
-		p.failJob(ctx, job.VersionID, fmt.Sprintf("failed to get version: %v", err))
-		return
+		return fmt.Errorf("failed to get version: %w", err)
 	}
 
 	status := core.VersionStatusCompleted
@@ -214,12 +299,7 @@ func (p *Pool) persistCompletedVersion(ctx context.Context, job core.GenerationJ
 	ver.Status = status
 	ver.MainRevisionUsed = inputs.snapshot.MainRevision
 	ver.TemplateSetIDUsed = inputs.branch.TemplateSetID
-	if ver.ProviderUsed == "" {
-		ver.ProviderUsed = inputs.branch.ProviderOverride
-	}
-	if ver.ModelUsed == "" {
-		ver.ModelUsed = inputs.branch.ModelOverride
-	}
+	ver.ProviderUsed, ver.ModelUsed = resolveVersionProviderModel(ver, inputs.branch, telemetry)
 	ver.TailoredContent = valRes.SanitizedContent
 	if resp.GapReport.MatchScore == nil {
 		score := core.CalculateDeterministicMatchScore(resp.GapReport.MissingRequirements)
@@ -232,8 +312,7 @@ func (p *Pool) persistCompletedVersion(ctx context.Context, job core.GenerationJ
 	ver.PlainTextOutput = rendered.PlainText
 
 	if err := p.branches.CompleteVersion(ctx, ver); err != nil {
-		p.failJob(ctx, job.VersionID, fmt.Sprintf("failed to complete version: %v", err))
-		return
+		return fmt.Errorf("failed to complete version: %w", err)
 	}
 
 	if p.logger != nil {
@@ -244,6 +323,7 @@ func (p *Pool) persistCompletedVersion(ctx context.Context, job core.GenerationJ
 			"warnings_count", len(valRes.Warnings),
 		)
 	}
+	return nil
 }
 
 // failJob records a failed execution status and error diagnostics using a bounded detached timeout context.

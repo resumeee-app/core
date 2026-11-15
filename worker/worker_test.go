@@ -22,10 +22,12 @@ type mockLLM struct {
 	mu           sync.Mutex
 	delay        time.Duration
 	fail         bool
+	failErr      error
 	failErrMsg   string
 	shouldPanic  bool
 	panicVal     any
 	customResp   *core.GenerationResponse
+	telemetry    core.LLMTelemetry
 	requestCount int
 	capturedCtx  context.Context
 }
@@ -36,10 +38,12 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req core.Generatio
 	m.capturedCtx = ctx
 	delay := m.delay
 	fail := m.fail
+	failErr := m.failErr
 	failErrMsg := m.failErrMsg
 	shouldPanic := m.shouldPanic
 	panicVal := m.panicVal
 	custom := m.customResp
+	telemetry := m.telemetry
 	m.mu.Unlock()
 
 	if shouldPanic {
@@ -54,6 +58,9 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req core.Generatio
 		}
 	}
 
+	if failErr != nil {
+		return nil, failErr
+	}
 	if fail {
 		return nil, errors.New(failErrMsg)
 	}
@@ -109,15 +116,20 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req core.Generatio
 		GapReport: core.GapReport{
 			OverallMatchSummary: "Candidate strongly matches requirements.",
 		},
+		Telemetry: telemetry,
 	}, nil
 }
 
-func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &resp.GapReport, nil
+	return &core.GapAnalysisResponse{
+		GapReport: resp.GapReport,
+		Usage:     resp.Usage,
+		Telemetry: resp.Telemetry,
+	}, nil
 }
 
 func (m *mockLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
@@ -366,12 +378,16 @@ func (m *blockingMockLLM) GenerateTailoredResume(ctx context.Context, _ core.Gen
 	}
 }
 
-func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &resp.GapReport, nil
+	return &core.GapAnalysisResponse{
+		GapReport: resp.GapReport,
+		Usage:     resp.Usage,
+		Telemetry: resp.Telemetry,
+	}, nil
 }
 
 func (m *blockingMockLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
@@ -805,39 +821,48 @@ type mockResumeExtractor struct {
 	mu         sync.Mutex
 	delay      time.Duration
 	fail       bool
+	failErr    error
 	failErrMsg string
 	result     *core.JSONResume
 	usage      core.TokenUsage
+	telemetry  core.LLMTelemetry
 }
 
-func (m *mockResumeExtractor) ExtractResume(ctx context.Context, _, _, _ string) (*core.JSONResume, core.TokenUsage, error) {
+func (m *mockResumeExtractor) ExtractResume(ctx context.Context, _, _, _ string) (*core.JSONResume, core.LLMTelemetry, error) {
 	m.mu.Lock()
 	delay := m.delay
 	fail := m.fail
+	failErr := m.failErr
 	failErrMsg := m.failErrMsg
 	result := m.result
-	usage := m.usage
+	telemetry := m.telemetry
+	if telemetry.Usage.IsZero() && !m.usage.IsZero() {
+		telemetry.Usage = m.usage
+	}
 	m.mu.Unlock()
 
 	if delay > 0 {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return nil, core.TokenUsage{}, ctx.Err()
+			return nil, telemetry, ctx.Err()
 		}
 	}
+	if failErr != nil {
+		return nil, telemetry, failErr
+	}
 	if fail {
-		return nil, core.TokenUsage{}, errors.New(failErrMsg)
+		return nil, telemetry, errors.New(failErrMsg)
 	}
 	if result != nil {
-		return result, usage, nil
+		return result, telemetry, nil
 	}
 	return &core.JSONResume{
 		Basics: core.JSONResumeBasics{
 			Name:  "Test Candidate",
 			Email: "candidate@test.com",
 		},
-	}, usage, nil
+	}, telemetry, nil
 }
 
 func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
@@ -1459,15 +1484,19 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 }
 
 type callbackResumeExtractor struct {
-	fn func(ctx context.Context, text, provider, model string) (*core.JSONResume, error)
+	fn    func(ctx context.Context, text, provider, model string) (*core.JSONResume, error)
+	fnTel func(ctx context.Context, text, provider, model string) (*core.JSONResume, core.LLMTelemetry, error)
 }
 
-func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.TokenUsage, error) {
+func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.LLMTelemetry, error) {
+	if c.fnTel != nil {
+		return c.fnTel(ctx, text, provider, model)
+	}
 	if c.fn != nil {
 		res, err := c.fn(ctx, text, provider, model)
-		return res, core.TokenUsage{}, err
+		return res, core.LLMTelemetry{}, err
 	}
-	return &core.JSONResume{}, core.TokenUsage{}, nil
+	return &core.JSONResume{}, core.LLMTelemetry{}, nil
 }
 
 type callbackLLM struct {
@@ -1481,12 +1510,16 @@ func (m *callbackLLM) GenerateTailoredResume(ctx context.Context, req core.Gener
 	return &core.GenerationResponse{TailoredContent: core.TailoredContent{Summary: "OK"}}, nil
 }
 
-func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &resp.GapReport, nil
+	return &core.GapAnalysisResponse{
+		GapReport: resp.GapReport,
+		Usage:     resp.Usage,
+		Telemetry: resp.Telemetry,
+	}, nil
 }
 
 func (m *callbackLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
@@ -1943,6 +1976,9 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+
+	// Ensure post-persistence quota commit has settled before reading aggregate quota.
+	pool.Stop()
 
 	// Verify committed quota: monthly tokens should reflect actual 350 tokens rather than 1000 estimate
 	quota, err := store.Quota(ctx, "user-quota-worker")

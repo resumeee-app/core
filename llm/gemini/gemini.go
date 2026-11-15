@@ -147,15 +147,19 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	sdkReq := operations.CreateInteractionRequest{
 		Body: operations.NewCreateInteractionRequestBody(body),
 	}
+	start := time.Now()
 	res, err := c.sdk.Interactions.Create(
 		ctx,
 		sdkReq,
 		operations.WithRetries(retry.Config{Strategy: "none"}),
 	)
+	latency := time.Since(start)
 	if err != nil {
-		return mapSDKError(err)
+		resp, mappedErr := mapSDKError(err)
+		return resp.PopulateTelemetry(c.Name(), model, latency), mappedErr
 	}
-	return extractInteractionResponse(res)
+	resp, extractErr := extractInteractionResponse(res)
+	return resp.PopulateTelemetry(c.Name(), model, latency), extractErr
 }
 
 // buildInteractionRequest translates req into a GenAI SDK CreateModelInteraction payload.
@@ -284,10 +288,7 @@ func extractInteractionUsage(inter *interactions.Interaction) core.TokenUsage {
 	if u.TotalTokens != nil {
 		usage.TotalTokens = *u.TotalTokens
 	}
-	if usage.TotalTokens == 0 && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	}
-	return usage
+	return usage.Normalize()
 }
 
 // mapThinkingLevel translates domain reasoning effort onto Gemini 3+ interaction thinking levels.
@@ -350,7 +351,7 @@ func mapSDKError(err error) (*llm.Response, error) {
 			fmt.Errorf("%w: malformed gemini response: %v", llm.ErrInvalidResponse, err)
 	}
 
-	return nil, fmt.Errorf("gemini interactions request failed: %w", err)
+	return &llm.Response{}, fmt.Errorf("gemini interactions request failed: %w", err)
 }
 
 // httpStatusFromMeta returns resp.StatusCode when non-zero, otherwise fallbackStatus.

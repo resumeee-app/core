@@ -922,8 +922,15 @@ func TestService_EditVersionPreservesGapReport(t *testing.T) {
 	}
 }
 
+var (
+	_ branch.Generator    = (*stubGenerator)(nil)
+	_ branch.Generator    = (*stubATSSimulator)(nil)
+	_ branch.QuotaManager = (*spyQuotaRepo)(nil)
+)
+
 type stubGenerator struct {
 	gapReport *core.GapReport
+	gapResp   *core.GapAnalysisResponse
 	genResp   *core.GenerationResponse
 	err       error
 }
@@ -932,12 +939,20 @@ func (s *stubGenerator) GenerateTailoredResume(_ context.Context, _ core.Generat
 	return s.genResp, s.err
 }
 
-func (s *stubGenerator) GenerateGapAnalysis(_ context.Context, _ core.GenerationRequest) (*core.GapReport, error) {
+func (s *stubGenerator) GenerateGapAnalysis(_ context.Context, _ core.GenerationRequest) (*core.GapAnalysisResponse, error) {
+	if s.gapResp != nil {
+		cp := *s.gapResp
+		return &cp, s.err
+	}
 	if s.gapReport != nil {
-		return s.gapReport, s.err
+		return &core.GapAnalysisResponse{GapReport: *s.gapReport}, s.err
 	}
 	if s.genResp != nil {
-		return &s.genResp.GapReport, s.err
+		return &core.GapAnalysisResponse{
+			GapReport: s.genResp.GapReport,
+			Usage:     s.genResp.Usage,
+			Telemetry: s.genResp.Telemetry,
+		}, s.err
 	}
 	return nil, s.err
 }
@@ -1636,11 +1651,12 @@ type spyQuotaRepo struct {
 	}
 	commits []struct {
 		ReservationID string
-		Usage         core.TokenUsage
+		Telemetry     core.LLMTelemetry
 	}
 	releases []struct {
 		ReservationID string
 		Reason        string
+		Telemetry     core.LLMTelemetry
 	}
 }
 
@@ -1673,28 +1689,30 @@ func (s *spyQuotaRepo) Quota(_ context.Context, userID string) (*core.TenantQuot
 	return &core.TenantQuota{UserID: userID}, nil
 }
 
-func (s *spyQuotaRepo) CommitUsage(_ context.Context, reservationID string, usage core.TokenUsage) error {
+func (s *spyQuotaRepo) CommitUsage(_ context.Context, reservationID string, telemetry core.LLMTelemetry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.commits = append(s.commits, struct {
 		ReservationID string
-		Usage         core.TokenUsage
+		Telemetry     core.LLMTelemetry
 	}{
 		ReservationID: reservationID,
-		Usage:         usage,
+		Telemetry:     telemetry,
 	})
 	return nil
 }
 
-func (s *spyQuotaRepo) ReleaseQuota(_ context.Context, reservationID string, reason string) error {
+func (s *spyQuotaRepo) ReleaseQuota(_ context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.releases = append(s.releases, struct {
 		ReservationID string
 		Reason        string
+		Telemetry     core.LLMTelemetry
 	}{
 		ReservationID: reservationID,
 		Reason:        reason,
+		Telemetry:     telemetry,
 	})
 	return nil
 }
@@ -1884,6 +1902,10 @@ func (s *stubATSSimulator) SimulateATS(_ context.Context, req core.ATSSimulation
 	s.calls++
 	s.lastReq = req
 	if s.atsErr != nil {
+		if s.atsResp != nil {
+			cp := *s.atsResp
+			return &cp, s.atsErr
+		}
 		return nil, s.atsErr
 	}
 	if s.atsResp != nil {
@@ -2156,7 +2178,7 @@ func TestService_SimulateATS(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("SimulateATS failed: %v", err)
 		}
-		if len(spyQuota.commits) != 1 || spyQuota.commits[0].Usage.TotalTokens != 800 {
+		if len(spyQuota.commits) != 1 || spyQuota.commits[0].Telemetry.Usage.TotalTokens != 800 {
 			t.Errorf("expected 1 quota commit with fallback 800 tokens, got %+v", spyQuota.commits)
 		}
 

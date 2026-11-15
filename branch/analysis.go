@@ -23,27 +23,35 @@ const (
 )
 
 // reserveOperationQuota reserves quota for op and returns a completion callback to commit or release it.
-func (s *Service) reserveOperationQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, fallbackTokens int) (func(core.TokenUsage, error), error) {
+func (s *Service) reserveOperationQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, fallbackTokens int) (func(core.LLMTelemetry, error), error) {
 	if s.generator == nil || s.quotas == nil {
-		return func(core.TokenUsage, error) {}, nil
+		return func(core.LLMTelemetry, error) {}, nil
 	}
 	rec, err := s.quotas.ReserveQuota(ctx, userID, op, estimatedTokens, s.dailyRequestLimit, s.monthlyTokenLimit)
 	if err != nil {
 		return nil, err
 	}
-	return func(usage core.TokenUsage, retErr error) {
+	return s.newQuotaFinalizer(ctx, rec, fallbackTokens), nil
+}
+
+// newQuotaFinalizer builds a deferred callback that releases or commits a quota reservation with normalized call telemetry.
+func (s *Service) newQuotaFinalizer(ctx context.Context, rec *core.LLMUsageRecord, fallbackTokens int) func(core.LLMTelemetry, error) {
+	return func(telemetry core.LLMTelemetry, retErr error) {
 		if rec == nil {
 			return
 		}
+		telemetry = core.ResolveTelemetry(telemetry, retErr)
 		if retErr != nil {
-			_ = s.quotas.ReleaseQuota(ctx, rec.ID, retErr.Error())
+			if err := s.quotas.ReleaseQuota(ctx, rec.ID, retErr.Error(), telemetry); err != nil && s.logger != nil {
+				s.logger.Error("failed to release quota reservation", "reservation_id", rec.ID, "err", err)
+			}
 			return
 		}
-		if usage.TotalTokens == 0 {
-			usage.TotalTokens = fallbackTokens
+		telemetry.Usage = telemetry.Usage.WithFallback(fallbackTokens)
+		if err := s.quotas.CommitUsage(ctx, rec.ID, telemetry); err != nil && s.logger != nil {
+			s.logger.Error("failed to commit quota usage", "reservation_id", rec.ID, "err", err)
 		}
-		_ = s.quotas.CommitUsage(ctx, rec.ID, usage)
-	}, nil
+	}
 }
 
 // tryAcquireATSInFlight records an active ATS simulation for versionID unless one is already running.
@@ -67,15 +75,15 @@ func (s *Service) releaseATSInFlight(versionID string) {
 // AnalyzeGaps performs fast decoupled gap analysis for a branch against the main profile snapshot.
 func (s *Service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*core.GapReport, error) {
 	var (
-		retErr error
-		usage  core.TokenUsage
+		retErr    error
+		telemetry core.LLMTelemetry
 	)
 	finishQuota, err := s.reserveOperationQuota(ctx, userID, core.OperationGapAnalysis, gapAnalysisEstimatedTokens, gapAnalysisFallbackTokens)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		finishQuota(usage, retErr)
+		finishQuota(telemetry, retErr)
 	}()
 
 	branch, err := s.branches.Branch(ctx, userID, branchID)
@@ -90,7 +98,8 @@ func (s *Service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*co
 	}
 
 	activeVer := s.loadOptionalActiveVersion(ctx, branch, "could not fetch active version for gap analysis")
-	report, err := s.computeGapReport(ctx, branch, snapshot, activeVer)
+	report, callTel, err := s.computeGapReport(ctx, branch, snapshot, activeVer)
+	telemetry = callTel
 	if err != nil {
 		retErr = err
 		return nil, retErr
@@ -127,7 +136,7 @@ func (s *Service) loadOptionalActiveVersion(ctx context.Context, branch *core.Br
 }
 
 // computeGapReport delegates gap analysis to the configured Generator or falls back to cached/empty data.
-func (s *Service) computeGapReport(ctx context.Context, branch *core.Branch, snapshot *core.MainProfileSnapshot, activeVer *core.BranchVersion) (*core.GapReport, error) {
+func (s *Service) computeGapReport(ctx context.Context, branch *core.Branch, snapshot *core.MainProfileSnapshot, activeVer *core.BranchVersion) (*core.GapReport, core.LLMTelemetry, error) {
 	if s.generator != nil {
 		req := core.GenerationRequest{
 			Model:          branch.ModelOverride,
@@ -135,24 +144,26 @@ func (s *Service) computeGapReport(ctx context.Context, branch *core.Branch, sna
 			MainProfile:    snapshot,
 			BranchContext:  *branch,
 		}
-		report, err := s.generator.GenerateGapAnalysis(ctx, req)
+		resp, err := s.generator.GenerateGapAnalysis(ctx, req)
+		telemetry := core.ResolveTelemetry(resp.EffectiveTelemetry(), err)
 		if err != nil {
-			return nil, fmt.Errorf("gap analysis generation failed: %w", err)
+			return nil, telemetry, fmt.Errorf("gap analysis generation failed: %w", err)
 		}
 		// Reject (nil, nil) explicitly so AnalyzeGaps releases the quota reservation instead of dereferencing nil.
-		if report == nil {
-			return nil, errors.New("gap analysis generation failed: llm service returned no gap report")
+		if resp == nil {
+			return nil, telemetry, errors.New("gap analysis generation failed: llm service returned no gap report")
 		}
-		return report, nil
+		report := resp.GapReport
+		return &report, telemetry, nil
 	}
 
 	if activeVer != nil && activeVer.GapReport != nil {
-		return activeVer.GapReport, nil
+		return activeVer.GapReport, core.LLMTelemetry{}, nil
 	}
 	return &core.GapReport{
 		OverallMatchSummary: "No qualification gaps detected or LLM service unconfigured.",
 		MissingRequirements: []core.GapItem{},
-	}, nil
+	}, core.LLMTelemetry{}, nil
 }
 
 // persistGapReport saves report onto both branch and its active version when present.
@@ -194,23 +205,23 @@ func (s *Service) SimulateATS(ctx context.Context, userID, branchID string, opts
 	}
 
 	var (
-		retErr error
-		usage  core.TokenUsage
+		retErr    error
+		telemetry core.LLMTelemetry
 	)
 	finishQuota, err := s.reserveOperationQuota(ctx, userID, core.OperationATSSimulation, atsSimulationEstimatedTokens, atsSimulationFallbackTokens)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
-		finishQuota(usage, retErr)
+		finishQuota(telemetry, retErr)
 	}()
 
-	atsScore, llmUsage, err := s.executeATSSimulation(ctx, branch, snapshot, resumeText, formatUsed)
+	atsScore, callTel, err := s.executeATSSimulation(ctx, branch, snapshot, resumeText, formatUsed)
+	telemetry = callTel
 	if err != nil {
 		retErr = err
 		return nil, retErr
 	}
-	usage = llmUsage
 
 	if err := s.branches.UpdateVersionATSScore(ctx, ver.ID, atsScore); err != nil {
 		retErr = err
@@ -299,10 +310,10 @@ func (s *Service) loadATSSimulationInputs(ctx context.Context, userID string, br
 }
 
 // executeATSSimulation computes an ATS score via Generator or deterministic fallback and normalizes it.
-func (s *Service) executeATSSimulation(ctx context.Context, branch *core.Branch, snapshot *core.MainProfileSnapshot, resumeText, formatUsed string) (*core.ATSScore, core.TokenUsage, error) {
+func (s *Service) executeATSSimulation(ctx context.Context, branch *core.Branch, snapshot *core.MainProfileSnapshot, resumeText, formatUsed string) (*core.ATSScore, core.LLMTelemetry, error) {
 	var (
-		atsScore *core.ATSScore
-		usage    core.TokenUsage
+		atsScore  *core.ATSScore
+		telemetry core.LLMTelemetry
 	)
 	if s.generator != nil {
 		simResp, err := s.generator.SimulateATS(ctx, core.ATSSimulationRequest{
@@ -313,13 +324,13 @@ func (s *Service) executeATSSimulation(ctx context.Context, branch *core.Branch,
 			BranchContext:  *branch,
 			MainProfile:    snapshot,
 		})
+		telemetry = core.ResolveTelemetry(simResp.EffectiveTelemetry(), err)
 		if err != nil {
-			return nil, usage, fmt.Errorf("ats simulation failed: %w", err)
+			return nil, telemetry, fmt.Errorf("ats simulation failed: %w", err)
 		}
 		if simResp != nil {
 			scoreCopy := simResp.Score
 			atsScore = &scoreCopy
-			usage = simResp.Usage
 		}
 	}
 	if atsScore == nil {
@@ -330,7 +341,7 @@ func (s *Service) executeATSSimulation(ctx context.Context, branch *core.Branch,
 		atsScore.EvaluatedAt = &now
 	}
 	atsScore.Normalize()
-	return atsScore, usage, nil
+	return atsScore, telemetry, nil
 }
 
 // resolveVersionResumeText returns rendered resume text and its effective format for ver.

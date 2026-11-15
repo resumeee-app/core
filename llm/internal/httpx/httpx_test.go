@@ -2,6 +2,8 @@ package httpx_test
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -91,4 +93,163 @@ func TestSettings_FinalizeTimeoutIsolation(t *testing.T) {
 	if origDefault.Timeout != httpx.DefaultTimeout {
 		t.Fatalf("expected shared default client timeout %v unchanged, got %v", httpx.DefaultTimeout, origDefault.Timeout)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type failingReadCloser struct {
+	err error
+}
+
+func (f failingReadCloser) Read([]byte) (int, error) {
+	return 0, f.err
+}
+
+func (f failingReadCloser) Close() error {
+	return nil
+}
+
+func TestPostJSON_StatusAndErrorPreservation(t *testing.T) {
+	t.Run("success encodes JSON payload, headers, and returns 200 body", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				t.Errorf("expected POST, got %s", r.Method)
+			}
+			if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+				t.Errorf("expected application/json Content-Type, got %q", ct)
+			}
+			if h := r.Header.Get("X-Custom"); h != "val" {
+				t.Errorf("expected X-Custom=val, got %q", h)
+			}
+			var got map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			if got["hello"] != "world" {
+				t.Errorf("unexpected payload: %+v", got)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}))
+		defer srv.Close()
+
+		body, status, err := httpx.PostJSON(
+			context.Background(),
+			srv.Client(),
+			srv.URL,
+			map[string]string{"hello": "world"},
+			map[string]string{"X-Custom": "val"},
+			"test-provider",
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if status != http.StatusOK || string(body) != `{"ok":true}` {
+			t.Fatalf("got status=%d body=%q, want 200 `{\"ok\":true}`", status, string(body))
+		}
+	})
+
+	t.Run("non-200 responses return body, status code, and mapped error", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			statusCode int
+			body       string
+			wantErr    error
+		}{
+			{"400 bad request", http.StatusBadRequest, `{"err":"bad"}`, llm.ErrBadRequest},
+			{"401 unauthorized", http.StatusUnauthorized, `unauth`, llm.ErrUnauthorized},
+			{"403 forbidden", http.StatusForbidden, `forbid`, llm.ErrUnauthorized},
+			{"429 rate limited", http.StatusTooManyRequests, `slow down`, llm.ErrRateLimited},
+			{"500 upstream", http.StatusInternalServerError, `boom`, llm.ErrUpstream},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(tc.statusCode)
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				defer srv.Close()
+
+				body, status, err := httpx.PostJSON(context.Background(), srv.Client(), srv.URL, map[string]string{"a": "b"}, nil, "test-provider")
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected %v, got %v", tc.wantErr, err)
+				}
+				if status != tc.statusCode || string(body) != tc.body {
+					t.Fatalf("got status=%d body=%q, want status=%d body=%q", status, string(body), tc.statusCode, tc.body)
+				}
+			})
+		}
+	})
+
+	t.Run("body read error preserves non-zero resp.StatusCode", func(t *testing.T) {
+		readErr := errors.New("stream reset")
+		cases := []int{http.StatusOK, http.StatusBadGateway}
+		for _, code := range cases {
+			client := &http.Client{
+				Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: code,
+						Body:       failingReadCloser{err: readErr},
+					}, nil
+				}),
+			}
+			body, status, err := httpx.PostJSON(context.Background(), client, "https://example.test/v1", map[string]string{"k": "v"}, nil, "test-provider")
+			if !errors.Is(err, readErr) {
+				t.Fatalf("status %d: expected wrapped read error %v, got %v", code, readErr, err)
+			}
+			if body != nil {
+				t.Fatalf("status %d: expected nil body on read error, got %q", code, string(body))
+			}
+			if status != code {
+				t.Fatalf("status %d: expected preserved StatusCode %d, got %d", code, code, status)
+			}
+		}
+	})
+
+	t.Run("transport failure and timeout return nil body and status 0", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(150 * time.Millisecond):
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		body, status, err := httpx.PostJSON(ctx, srv.Client(), srv.URL, map[string]string{"k": "v"}, nil, "test-provider")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+		}
+		if body != nil || status != 0 {
+			t.Fatalf("expected (nil, 0) on transport timeout, got (%q, %d)", string(body), status)
+		}
+
+		nilRespClient := &http.Client{
+			Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return nil, nil
+			}),
+		}
+		body, status, err = httpx.PostJSON(context.Background(), nilRespClient, "https://example.test/v1", map[string]string{"k": "v"}, nil, "test-provider")
+		if err == nil || body != nil || status != 0 {
+			t.Fatalf("expected error with (nil, 0) for nil http.Response, got (%q, %d, %v)", string(body), status, err)
+		}
+	})
+
+	t.Run("nil response body preserves status code without panicking", func(t *testing.T) {
+		nilBodyClient := &http.Client{
+			Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: nil}, nil
+			}),
+		}
+		body, status, err := httpx.PostJSON(context.Background(), nilBodyClient, "https://example.test/v1", map[string]string{"k": "v"}, nil, "test-provider")
+		if !errors.Is(err, llm.ErrUpstream) || len(body) != 0 || status != http.StatusServiceUnavailable {
+			t.Fatalf("expected ErrUpstream with status 503 and empty body for nil Body, got (%q, %d, %v)", string(body), status, err)
+		}
+	})
 }

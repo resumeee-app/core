@@ -218,7 +218,12 @@ func PostJSON(ctx context.Context, client *http.Client, url string, payload any,
 	if err != nil {
 		return nil, 0, fmt.Errorf("%s http request failed: %w", provider, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	if resp == nil {
+		return nil, 0, fmt.Errorf("%s http request returned empty response", provider)
+	}
+	if resp.Body != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 
 	bodyBytes, err := ReadBoundedBody(resp.Body)
 	if err != nil {

@@ -39,11 +39,11 @@ type TemplateReader interface {
 	Template(ctx context.Context, userID, id string) (*core.TemplateSet, error)
 }
 
-// QuotaManager reserves, commits, and releases tenant LLM quota units.
+// QuotaManager reserves, commits, and releases tenant LLM quota units and call telemetry.
 type QuotaManager interface {
 	ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error)
-	CommitUsage(ctx context.Context, reservationID string, usage core.TokenUsage) error
-	ReleaseQuota(ctx context.Context, reservationID string, reason string) error
+	CommitUsage(ctx context.Context, reservationID string, telemetry core.LLMTelemetry) error
+	ReleaseQuota(ctx context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error
 }
 
 // JobEnqueuer submits asynchronous resume generation jobs to the worker pool.
@@ -54,7 +54,7 @@ type JobEnqueuer interface {
 // Generator executes AI-backed resume tailoring, gap analysis, and ATS simulations.
 type Generator interface {
 	GenerateTailoredResume(ctx context.Context, req core.GenerationRequest) (*core.GenerationResponse, error)
-	GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error)
+	GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error)
 	SimulateATS(ctx context.Context, req core.ATSSimulationRequest) (*core.ATSSimulationResponse, error)
 }
 

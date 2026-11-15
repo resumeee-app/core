@@ -219,10 +219,14 @@ func TestService_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 		},
 	}
 
-	report, err := svc.GenerateGapAnalysis(context.Background(), req)
+	resp, err := svc.GenerateGapAnalysis(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if resp == nil {
+		t.Fatal("expected non-nil gap analysis response")
+	}
+	report := resp.GapReport
 
 	if strings.Contains(report.OverallMatchSummary, sanitizer.PlaceholderFullName) {
 		t.Errorf("gap report overall summary contains placeholder: %s", report.OverallMatchSummary)

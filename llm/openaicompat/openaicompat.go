@@ -152,15 +152,19 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 		headers = map[string]string{"Authorization": "Bearer " + c.apiKey}
 	}
 
+	start := time.Now()
 	bodyBytes, statusCode, err := httpx.PostJSON(ctx, c.settings.HTTPClient, buildEndpointURL(c.settings.BaseURL), payload, headers, llm.ProviderCompat)
+	latency := time.Since(start)
 	if err != nil {
-		if bodyBytes == nil && statusCode == 0 {
-			return nil, err
+		resp := &llm.Response{
+			RawBody:    string(bodyBytes),
+			StatusCode: statusCode,
 		}
-		return &llm.Response{RawBody: string(bodyBytes), StatusCode: statusCode}, err
+		return resp.PopulateTelemetry(c.Name(), model, latency), err
 	}
 
-	return parseCompatResponse(bodyBytes, statusCode)
+	resp, parseErr := parseCompatResponse(bodyBytes, statusCode)
+	return resp.PopulateTelemetry(c.Name(), model, latency), parseErr
 }
 
 // buildRequestPayload translates req into a chat completions payload and injects inline schema
@@ -191,7 +195,7 @@ func buildRequestPayload(model string, req llm.Request) (requestBody, error) {
 	}, nil
 }
 
-// parseCompatResponse decodes bodyBytes and enforces choice availability and usage backfill.
+// parseCompatResponse decodes bodyBytes, extracts normalized usage, and enforces choice availability.
 func parseCompatResponse(bodyBytes []byte, statusCode int) (*llm.Response, error) {
 	rawBody := string(bodyBytes)
 	var parsed compatResponse
@@ -199,18 +203,16 @@ func parseCompatResponse(bodyBytes []byte, statusCode int) (*llm.Response, error
 		return &llm.Response{RawBody: rawBody, StatusCode: statusCode},
 			fmt.Errorf("%w: malformed compat response: %v", llm.ErrInvalidResponse, err)
 	}
-	if len(parsed.Choices) == 0 {
-		return &llm.Response{RawBody: rawBody, StatusCode: statusCode},
-			fmt.Errorf("%w: no choices returned by compat endpoint", llm.ErrInvalidResponse)
-	}
 
 	usage := core.TokenUsage{
 		PromptTokens:     parsed.Usage.PromptTokens,
 		CompletionTokens: parsed.Usage.CompletionTokens,
 		TotalTokens:      parsed.Usage.TotalTokens,
-	}
-	if usage.TotalTokens == 0 && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}.Normalize()
+
+	if len(parsed.Choices) == 0 {
+		return &llm.Response{RawBody: rawBody, StatusCode: statusCode, Usage: usage},
+			fmt.Errorf("%w: no choices returned by compat endpoint", llm.ErrInvalidResponse)
 	}
 
 	return &llm.Response{

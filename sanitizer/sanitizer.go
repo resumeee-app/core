@@ -337,14 +337,15 @@ func cloneSnapshot(snap *core.MainProfileSnapshot) *core.MainProfileSnapshot {
 			res.Education[i].Facts = cloneSlice(edu.Facts)
 		}
 	}
+	res.Certifications = cloneSlice(snap.Certifications)
 	res.Facts = cloneSlice(snap.Facts)
 	return &res
 }
 
 // ObfuscateSnapshot returns a copy-on-write clone of snap with candidate PII scrubbed from
-// free-text and URL fields passed to LLMs. Unscrubbed slices and maps (such as Skills,
-// Certifications, Profile.Profiles, and Profile.Metadata) share backing storage with snap
-// and must not be mutated in place by callers.
+// free-text, company, and URL fields passed to LLMs. Unscrubbed slices and maps (such as
+// Skills, Profile.Profiles, and Profile.Metadata) share backing storage with snap and must
+// not be mutated in place by callers.
 func (s *Session) ObfuscateSnapshot(snap *core.MainProfileSnapshot) *core.MainProfileSnapshot {
 	if snap == nil {
 		return nil
@@ -358,6 +359,7 @@ func (s *Session) ObfuscateSnapshot(snap *core.MainProfileSnapshot) *core.MainPr
 	res.Profile.Summary = s.ObfuscateString(res.Profile.Summary)
 
 	for i := range res.Experiences {
+		res.Experiences[i].Company = s.ObfuscateString(res.Experiences[i].Company)
 		res.Experiences[i].RoleTitle = s.ObfuscateString(res.Experiences[i].RoleTitle)
 		res.Experiences[i].DutiesSummary = s.ObfuscateString(res.Experiences[i].DutiesSummary)
 		for j := range res.Experiences[i].Facts {
@@ -382,6 +384,11 @@ func (s *Session) ObfuscateSnapshot(snap *core.MainProfileSnapshot) *core.MainPr
 			res.Education[i].Facts[j].Statement = s.ObfuscateString(res.Education[i].Facts[j].Statement)
 			res.Education[i].Facts[j].Impact = s.ObfuscateString(res.Education[i].Facts[j].Impact)
 		}
+	}
+
+	for i := range res.Certifications {
+		res.Certifications[i].URL = s.ObfuscateString(res.Certifications[i].URL)
+		res.Certifications[i].Summary = s.ObfuscateString(res.Certifications[i].Summary)
 	}
 
 	for i := range res.Facts {
@@ -419,12 +426,13 @@ func cloneTailoredContent(tc *core.TailoredContent) *core.TailoredContent {
 			res.Education[i].Bullets = cloneSlice(edu.Bullets)
 		}
 	}
+	res.Certifications = cloneSlice(tc.Certifications)
 	return &res
 }
 
 // ObfuscatePriorVersion returns a copy-on-write clone of prior tailored content with candidate
-// PII scrubbed from narrative, bullet, and project fields passed to LLMs. Unscrubbed slices
-// (such as SkillGroups and Certifications) share backing storage with prior.
+// PII scrubbed from narrative, company, bullet, project, and certification URL fields passed
+// to LLMs. Unscrubbed slices (such as SkillGroups) share backing storage with prior.
 func (s *Session) ObfuscatePriorVersion(prior *core.TailoredContent) *core.TailoredContent {
 	if prior == nil {
 		return nil
@@ -437,6 +445,7 @@ func (s *Session) ObfuscatePriorVersion(prior *core.TailoredContent) *core.Tailo
 	res.Summary = s.ObfuscateString(res.Summary)
 
 	for i := range res.Experiences {
+		res.Experiences[i].Company = s.ObfuscateString(res.Experiences[i].Company)
 		res.Experiences[i].RoleTitle = s.ObfuscateString(res.Experiences[i].RoleTitle)
 		res.Experiences[i].DutiesSummary = s.ObfuscateString(res.Experiences[i].DutiesSummary)
 		for j := range res.Experiences[i].Bullets {
@@ -458,6 +467,10 @@ func (s *Session) ObfuscatePriorVersion(prior *core.TailoredContent) *core.Tailo
 		for j := range res.Education[i].Bullets {
 			res.Education[i].Bullets[j].Text = s.ObfuscateString(res.Education[i].Bullets[j].Text)
 		}
+	}
+
+	for i := range res.Certifications {
+		res.Certifications[i].URL = s.ObfuscateString(res.Certifications[i].URL)
 	}
 
 	return res
@@ -490,9 +503,10 @@ func (s *Session) ObfuscateRequest(req core.GenerationRequest) core.GenerationRe
 	return res
 }
 
-// DeobfuscateTailoredContent restores original contact details into LLM-authored narrative and
-// bullet fields of TailoredContent. Structured entity headers (company, role title, project
-// identity, education, certifications) are canonically populated by provenance.Validate.
+// DeobfuscateTailoredContent restores original contact details into LLM-authored narrative,
+// bullet, and certification summary fields of TailoredContent. Structured entity headers
+// (company, role title, project identity, education headers, certification identity/URL)
+// are canonically populated by provenance.Validate.
 func (s *Session) DeobfuscateTailoredContent(content *core.TailoredContent) {
 	if s == nil || content == nil || len(s.deobfRules) == 0 {
 		return
@@ -511,6 +525,16 @@ func (s *Session) DeobfuscateTailoredContent(content *core.TailoredContent) {
 		for j := range content.Projects[i].Bullets {
 			content.Projects[i].Bullets[j].Text = s.DeobfuscateString(content.Projects[i].Bullets[j].Text)
 		}
+	}
+
+	for i := range content.Education {
+		for j := range content.Education[i].Bullets {
+			content.Education[i].Bullets[j].Text = s.DeobfuscateString(content.Education[i].Bullets[j].Text)
+		}
+	}
+
+	for i := range content.Certifications {
+		content.Certifications[i].Summary = s.DeobfuscateString(content.Certifications[i].Summary)
 	}
 }
 

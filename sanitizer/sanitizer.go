@@ -572,3 +572,42 @@ func (s *Session) DeobfuscateATSScore(score *core.ATSScore) {
 		}
 	}
 }
+
+// ObfuscateExtractedCandidate returns a deep clone of candidate with contact PII scrubbed from
+// narrative fields (Summary, Experiences[].Title, Experiences[].Highlights), leaving caller slices
+// unmutated and preserving non-PII Company, Educations, Skills, and Certifications metadata.
+func (s *Session) ObfuscateExtractedCandidate(candidate *core.ATSExtractedCandidate) *core.ATSExtractedCandidate {
+	if candidate == nil {
+		return nil
+	}
+	res := &core.ATSExtractedCandidate{
+		Summary: s.ObfuscateString(candidate.Summary),
+	}
+	if candidate.Skills != nil {
+		res.Skills = make([]string, len(candidate.Skills))
+		copy(res.Skills, candidate.Skills)
+	}
+	if candidate.Experiences != nil {
+		res.Experiences = make([]core.ATSExtractedExperience, len(candidate.Experiences))
+		for i, exp := range candidate.Experiences {
+			clonedExp := exp
+			clonedExp.Title = s.ObfuscateString(exp.Title)
+			if exp.Highlights != nil {
+				clonedExp.Highlights = make([]string, len(exp.Highlights))
+				for j, h := range exp.Highlights {
+					clonedExp.Highlights[j] = s.ObfuscateString(h)
+				}
+			}
+			res.Experiences[i] = clonedExp
+		}
+	}
+	if candidate.Educations != nil {
+		res.Educations = make([]core.ATSExtractedEducation, len(candidate.Educations))
+		copy(res.Educations, candidate.Educations)
+	}
+	if candidate.Certifications != nil {
+		res.Certifications = make([]string, len(candidate.Certifications))
+		copy(res.Certifications, candidate.Certifications)
+	}
+	return res
+}

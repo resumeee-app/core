@@ -855,9 +855,10 @@ func (f *fakePromptCompiler) CompileATSExtractionPrompt(req core.ATSSimulationRe
 func (f *fakePromptCompiler) CompileATSMatchingPrompt(b core.Branch, profile *core.MainProfileSnapshot, extracted *core.ATSExtractedCandidate) (*core.PromptPreview, error) {
 	session := sanitizer.NewSessionFromSnapshot(profile)
 	obfBranch := session.ObfuscateBranchContext(b)
+	obfExtracted := session.ObfuscateExtractedCandidate(extracted)
 	var summary string
-	if extracted != nil {
-		summary = extracted.Summary
+	if obfExtracted != nil {
+		summary = obfExtracted.Summary
 	}
 	return &core.PromptPreview{
 		SystemPrompt: fmt.Sprintf("Workflow: %s", core.PromptWorkflowATSMatching),

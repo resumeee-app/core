@@ -15,6 +15,9 @@ func (s *Service) PromptPreview(ctx context.Context, userID, branchID string, op
 	if err != nil {
 		return nil, err
 	}
+	if s.promptCompiler == nil {
+		return nil, fmt.Errorf("%w: prompt compiler not configured", core.ErrValidation)
+	}
 
 	branch, err := s.branches.Branch(ctx, userID, branchID)
 	if err != nil {
@@ -24,13 +27,6 @@ func (s *Service) PromptPreview(ctx context.Context, userID, branchID string, op
 	if err != nil {
 		return nil, err
 	}
-	prof, err := s.profiles.Profile(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if s.promptCompiler == nil {
-		return nil, fmt.Errorf("%w: prompt compiler not configured", core.ErrValidation)
-	}
 
 	b := *branch
 	applyPromptPreviewOverrides(&b, opts)
@@ -38,11 +34,14 @@ func (s *Service) PromptPreview(ctx context.Context, userID, branchID string, op
 	var preview *core.PromptPreview
 	switch workflow {
 	case core.PromptWorkflowTailoring:
-		req := s.buildPreviewGenerationRequest(ctx, userID, &b, snapshot, prof)
-		preview, err = s.promptCompiler.CompilePrompt(req)
+		preview, err = s.compileTailoringPreview(ctx, userID, &b, snapshot, opts)
 	case core.PromptWorkflowGapAnalysis:
-		req := s.buildPreviewGenerationRequest(ctx, userID, &b, snapshot, prof)
-		preview, err = s.promptCompiler.CompileGapAnalysisPrompt(req)
+		preview, err = s.promptCompiler.CompileGapAnalysisPrompt(core.GenerationRequest{
+			Model:          b.ModelOverride,
+			ReasoningLevel: b.ReasoningLevel,
+			MainProfile:    snapshot,
+			BranchContext:  b,
+		})
 	case core.PromptWorkflowATSExtraction:
 		preview, err = s.compileATSExtractionPreview(ctx, userID, &b, snapshot, opts)
 	case core.PromptWorkflowATSMatching:
@@ -66,11 +65,18 @@ func previewWorkflow(opts *core.PromptPreviewOptions) (core.PromptWorkflow, erro
 	return core.NormalizePromptWorkflow(opts.Workflow)
 }
 
-// buildPreviewGenerationRequest constructs a generation request combining draft branch overrides,
-// preset instructions, and prior tailored content.
-func (s *Service) buildPreviewGenerationRequest(ctx context.Context, userID string, b *core.Branch, snapshot *core.MainProfileSnapshot, prof *core.Profile) core.GenerationRequest {
-	preset, presetInstructions, priorContent := s.loadPreviewPresetAndPrior(ctx, userID, b)
-	return core.GenerationRequest{
+// compileTailoringPreview loads user writing rules, preset instructions, and prior tailored content
+// before compiling a tailoring prompt preview.
+func (s *Service) compileTailoringPreview(ctx context.Context, userID string, b *core.Branch, snapshot *core.MainProfileSnapshot, opts *core.PromptPreviewOptions) (*core.PromptPreview, error) {
+	prof, err := s.profiles.Profile(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	preset, presetInstructions, priorContent, err := s.loadPreviewPresetAndPrior(ctx, userID, b, opts)
+	if err != nil {
+		return nil, err
+	}
+	return s.promptCompiler.CompilePrompt(core.GenerationRequest{
 		Model:              b.ModelOverride,
 		ReasoningLevel:     b.ReasoningLevel,
 		MainProfile:        snapshot,
@@ -80,7 +86,7 @@ func (s *Service) buildPreviewGenerationRequest(ctx context.Context, userID stri
 		TargetLanguage:     preset.EffectiveLanguage(),
 		BranchContext:      *b,
 		PriorVersion:       priorContent,
-	}
+	})
 }
 
 // compileATSExtractionPreview gathers candidate snapshot and resume text inputs and compiles Stage 1 ATS extraction prompts.
@@ -101,37 +107,33 @@ func (s *Service) compileATSExtractionPreview(ctx context.Context, userID string
 
 // resolvePreviewResumeText obtains rendered or draft resume text for dry-run ATS extraction previews.
 func (s *Service) resolvePreviewResumeText(ctx context.Context, userID string, b *core.Branch, snapshot *core.MainProfileSnapshot, opts *core.PromptPreviewOptions) (string, string, error) {
-	var requestedFormat string
+	var requestedFormat, explicitVersionID, draftResumeText string
 	if opts != nil {
 		requestedFormat = opts.Format
-		if strings.TrimSpace(opts.ResumeText) != "" {
-			formatUsed, err := core.NormalizeATSFormat(requestedFormat)
-			if err != nil {
-				return "", "", err
-			}
-			return opts.ResumeText, formatUsed, nil
-		}
+		explicitVersionID = opts.VersionID
+		draftResumeText = opts.ResumeText
 	}
 
-	var targetVersionID string
-	if opts != nil && strings.TrimSpace(opts.VersionID) != "" {
-		targetVersionID = strings.TrimSpace(opts.VersionID)
-	} else if b.ActiveVersionID != nil && strings.TrimSpace(*b.ActiveVersionID) != "" {
-		targetVersionID = strings.TrimSpace(*b.ActiveVersionID)
-	}
-	if targetVersionID == "" {
-		return "", "", fmt.Errorf("%w: branch has no completed version or draft resume text to preview", core.ErrValidation)
-	}
-
-	ver, err := s.Version(ctx, b.ID, targetVersionID)
+	formatUsed, err := core.NormalizeATSFormat(requestedFormat)
 	if err != nil {
 		return "", "", err
 	}
-	if ver.Status != core.VersionStatusCompleted && ver.Status != core.VersionStatusCompletedWithWarnings {
-		return "", "", fmt.Errorf("%w: ATS preview requires a completed version (status is %s)", core.ErrValidation, ver.Status)
+	if strings.TrimSpace(draftResumeText) != "" {
+		return draftResumeText, formatUsed, nil
 	}
 
-	return s.resolveVersionResumeText(ctx, userID, b, ver, snapshot, requestedFormat)
+	ver, err := s.resolveCompletedVersion(
+		ctx,
+		b,
+		explicitVersionID,
+		"branch has no completed version or draft resume text to preview",
+		"ATS preview requires a completed version",
+	)
+	if err != nil {
+		return "", "", err
+	}
+
+	return s.resolveVersionResumeText(ctx, userID, b, ver, snapshot, formatUsed)
 }
 
 // applyPromptPreviewOverrides applies optional unsaved UI draft overrides to b.
@@ -163,16 +165,25 @@ func applyPromptPreviewOverrides(b *core.Branch, opts *core.PromptPreviewOptions
 }
 
 // loadPreviewPresetAndPrior fetches optional preset instructions and active version content for preview compilation.
-func (s *Service) loadPreviewPresetAndPrior(ctx context.Context, userID string, b *core.Branch) (*core.Preset, string, *core.TailoredContent) {
+func (s *Service) loadPreviewPresetAndPrior(ctx context.Context, userID string, b *core.Branch, opts *core.PromptPreviewOptions) (*core.Preset, string, *core.TailoredContent, error) {
+	explicitPreset := opts != nil && opts.PresetID != nil && strings.TrimSpace(*opts.PresetID) != ""
 	var preset *core.Preset
 	var presetInstructions string
 	if b.PresetID != nil && *b.PresetID != "" && s.presets != nil {
 		p, err := s.presets.Preset(ctx, userID, *b.PresetID)
-		if err == nil && p != nil {
+		if err != nil {
+			if explicitPreset {
+				return nil, "", nil, fmt.Errorf("failed to load preset %s: %w", *b.PresetID, err)
+			}
+			if s.logger != nil {
+				s.logger.Warn("failed to load preset for prompt preview", "branch_id", b.ID, "preset_id", *b.PresetID, "err", err)
+			}
+		} else if p != nil {
+			if p.UserID != userID && !p.IsBuiltIn() {
+				return nil, "", nil, fmt.Errorf("%w: preset %s belongs to another tenant", core.ErrForbidden, *b.PresetID)
+			}
 			preset = p
 			presetInstructions = p.SystemInstructions
-		} else if err != nil && s.logger != nil {
-			s.logger.Warn("failed to load preset for prompt preview", "branch_id", b.ID, "preset_id", *b.PresetID, "err", err)
 		}
 	}
 
@@ -185,5 +196,5 @@ func (s *Service) loadPreviewPresetAndPrior(ctx context.Context, userID string, 
 			s.logger.Warn("failed to load active version for prompt preview", "branch_id", b.ID, "version_id", *b.ActiveVersionID, "err", err)
 		}
 	}
-	return preset, presetInstructions, priorContent
+	return preset, presetInstructions, priorContent, nil
 }

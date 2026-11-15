@@ -240,27 +240,45 @@ func (s *Service) resolveATSTarget(ctx context.Context, userID, branchID string,
 		return nil, nil, fmt.Errorf("%w: job description (target_requirements) is required to calculate ATS score", core.ErrValidation)
 	}
 
-	var targetVersionID string
-	if opts != nil && strings.TrimSpace(opts.VersionID) != "" {
-		targetVersionID = strings.TrimSpace(opts.VersionID)
-	} else if branch.ActiveVersionID != nil && strings.TrimSpace(*branch.ActiveVersionID) != "" {
-		targetVersionID = strings.TrimSpace(*branch.ActiveVersionID)
+	var explicitVersionID string
+	if opts != nil {
+		explicitVersionID = opts.VersionID
 	}
-	if targetVersionID == "" {
-		return nil, nil, fmt.Errorf("%w: branch has no completed tailored version to evaluate", core.ErrValidation)
-	}
-
-	ver, err := s.Version(ctx, branch.ID, targetVersionID)
+	ver, err := s.resolveCompletedVersion(
+		ctx,
+		branch,
+		explicitVersionID,
+		"branch has no completed tailored version to evaluate",
+		"ATS score can only be generated for a completed tailored version",
+	)
 	if err != nil {
 		return nil, nil, err
-	}
-	if ver.Status != core.VersionStatusCompleted && ver.Status != core.VersionStatusCompletedWithWarnings {
-		return nil, nil, fmt.Errorf("%w: ATS score can only be generated for a completed tailored version (status is %s)", core.ErrValidation, ver.Status)
 	}
 	if ver.ATSScore != nil {
 		return nil, nil, fmt.Errorf("%w: ATS score has already been generated for version %s", core.ErrConflict, ver.ID)
 	}
 	return branch, ver, nil
+}
+
+// resolveCompletedVersion resolves either explicitVersionID or b.ActiveVersionID and verifies
+// the referenced version exists and has completed generation successfully.
+func (s *Service) resolveCompletedVersion(ctx context.Context, b *core.Branch, explicitVersionID, missingMsg, incompletePrefix string) (*core.BranchVersion, error) {
+	targetVersionID := strings.TrimSpace(explicitVersionID)
+	if targetVersionID == "" && b.ActiveVersionID != nil {
+		targetVersionID = strings.TrimSpace(*b.ActiveVersionID)
+	}
+	if targetVersionID == "" {
+		return nil, fmt.Errorf("%w: %s", core.ErrValidation, missingMsg)
+	}
+
+	ver, err := s.Version(ctx, b.ID, targetVersionID)
+	if err != nil {
+		return nil, err
+	}
+	if ver.Status != core.VersionStatusCompleted && ver.Status != core.VersionStatusCompletedWithWarnings {
+		return nil, fmt.Errorf("%w: %s (status is %s)", core.ErrValidation, incompletePrefix, ver.Status)
+	}
+	return ver, nil
 }
 
 // loadATSSimulationInputs loads the candidate snapshot (failing closed if configured) and resolves resume text.

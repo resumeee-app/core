@@ -78,8 +78,8 @@ type PromptOptions struct {
 // PromptCompilerOption configures a PromptCompiler instance.
 type PromptCompilerOption func(*PromptCompiler)
 
-// WithPromptRegistry binds a provider Registry to PromptCompiler so CompilePrompt dynamically
-// omits or appends <response_schema> according to resolved client capabilities.
+// WithPromptRegistry binds a provider Registry to PromptCompiler so preview compilation methods
+// dynamically omit or append <response_schema> according to resolved client capabilities.
 func WithPromptRegistry(reg *Registry) PromptCompilerOption {
 	return func(c *PromptCompiler) {
 		c.registry = reg
@@ -379,7 +379,6 @@ func BuildGapAnalysisPrompt(req core.GenerationRequest) (*PromptPayload, error) 
 	return BuildGapAnalysisPromptWithOptions(req, PromptOptions{NativeStructuredOutput: false})
 }
 
-// BuildGapAnalysisPromptWithOptions constructs a gap-analysis prompt payload and omits
 // BuildGapAnalysisPromptWithOptions constructs a qualification gap-analysis prompt and omits
 // the inline <response_schema> block when opts.NativeStructuredOutput is true.
 func BuildGapAnalysisPromptWithOptions(req core.GenerationRequest, opts PromptOptions) (*PromptPayload, error) {
@@ -469,7 +468,7 @@ type atsMatchPromptContext struct {
 
 // promptTagRegex matches internal prompt XML delimiter tags across all prompt templates
 // to prevent embedded tag smuggling from untrusted inputs.
-var promptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|raw_resume_text|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|instructions|json_schema_hints|grounding_and_provenance_rules|gap_analysis_guidelines|schema_and_tailoring_hints|language_and_localization_rules|target_context|main_profile_data|prior_active_version|response_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
+var promptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|raw_resume_text|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|instructions|json_schema_hints|grounding_and_provenance_rules|gap_analysis_guidelines|schema_and_tailoring_hints|language_and_localization_rules|target_context|main_profile_data|prior_active_version|response_schema|json_output_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
 
 // sanitizePromptValue strips matching outer wrapper tags and escapes embedded XML delimiter tags in untrusted text.
 func sanitizePromptValue(content, stripOuterTag string) string {
@@ -477,9 +476,9 @@ func sanitizePromptValue(content, stripOuterTag string) string {
 	if stripOuterTag != "" {
 		openTag := "<" + stripOuterTag + ">"
 		closeTag := "</" + stripOuterTag + ">"
-		if strings.HasPrefix(strings.ToLower(trimmed), strings.ToLower(openTag)) &&
-			strings.HasSuffix(strings.ToLower(trimmed), strings.ToLower(closeTag)) &&
-			len(trimmed) >= len(openTag)+len(closeTag) {
+		if len(trimmed) >= len(openTag)+len(closeTag) &&
+			strings.EqualFold(trimmed[:len(openTag)], openTag) &&
+			strings.EqualFold(trimmed[len(trimmed)-len(closeTag):], closeTag) {
 			trimmed = strings.TrimSpace(trimmed[len(openTag) : len(trimmed)-len(closeTag)])
 		}
 	}
@@ -540,15 +539,12 @@ func BuildATSMatchingPromptWithOptions(b core.Branch, extracted *core.ATSExtract
 		return nil, fmt.Errorf("failed to render ats match system prompt template: %w", err)
 	}
 
-	candidateJSONBytes, err := serializeExtractedCandidate(extracted, opts.CompactJSON)
+	candidateJSONBytes, err := serializeExtractedCandidate(extracted, session, opts.CompactJSON)
 	if err != nil {
 		return nil, err
 	}
 
-	obfBranch := b
-	if session != nil {
-		obfBranch = session.ObfuscateBranchContext(b)
-	}
+	obfBranch := session.ObfuscateBranchContext(b)
 
 	ctx := atsMatchPromptContext{
 		TargetRole:             sanitizePromptValue(obfBranch.TargetRole, ""),
@@ -569,9 +565,9 @@ func BuildATSMatchingPromptWithOptions(b core.Branch, extracted *core.ATSExtract
 	}, nil
 }
 
-// serializeExtractedCandidate normalizes and JSON-marshals a Stage 1 extracted candidate payload.
-func serializeExtractedCandidate(extracted *core.ATSExtractedCandidate, compact bool) ([]byte, error) {
-	candidate := extracted
+// serializeExtractedCandidate clones, obfuscates PII, normalizes, and JSON-marshals a Stage 1 extracted candidate payload.
+func serializeExtractedCandidate(extracted *core.ATSExtractedCandidate, session *sanitizer.Session, compact bool) ([]byte, error) {
+	candidate := session.ObfuscateExtractedCandidate(extracted)
 	if candidate == nil {
 		candidate = &core.ATSExtractedCandidate{}
 	}

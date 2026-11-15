@@ -973,7 +973,7 @@ func TestPromptCompiler_AdditionalWorkflowPreviews(t *testing.T) {
 			t.Fatalf("CompileATSExtractionPrompt failed: %v", err)
 		}
 		if !strings.Contains(prev.SystemPrompt, "<response_schema>") {
-			t.Errorf("llama3.2 fallback should include <response_schema>")
+			t.Errorf("local-model fallback should include <response_schema>")
 		}
 		if strings.Contains(prev.UserPrompt, "Ada Lovelace") {
 			t.Errorf("ATS extraction preview leaked candidate FullName")
@@ -983,10 +983,17 @@ func TestPromptCompiler_AdditionalWorkflowPreviews(t *testing.T) {
 		}
 	})
 
-	t.Run("ats matching preview resolves capability and uses readable extracted JSON", func(t *testing.T) {
+	t.Run("ats matching preview resolves capability and uses readable extracted JSON without PII", func(t *testing.T) {
 		extracted := &core.ATSExtractedCandidate{
-			Summary: "Built analytical compilers.",
+			Summary: "Ada Lovelace (ada@analytical.org) built analytical compilers.",
 			Skills:  []string{"Go", "LLVM"},
+			Experiences: []core.ATSExtractedExperience{
+				{
+					Company:    "Analytical Systems",
+					Title:      "Lead Architect",
+					Highlights: []string{"Contact +44 20 7946 0958 for Ada Lovelace architecture notes."},
+				},
+			},
 		}
 		prev, err := compilerNative.CompileATSMatchingPrompt(branch, snap, extracted)
 		if err != nil {
@@ -998,8 +1005,13 @@ func TestPromptCompiler_AdditionalWorkflowPreviews(t *testing.T) {
 		if !strings.Contains(prev.UserPrompt, "\n  \"") {
 			t.Errorf("ATS matching preview should preserve indented JSON:\n%s", prev.UserPrompt)
 		}
-		if strings.Contains(prev.UserPrompt, "Ada Lovelace") {
-			t.Errorf("ATS matching preview leaked candidate name in TargetRequirements")
+		for _, pii := range []string{"Ada Lovelace", "ada@analytical.org", "+44 20 7946 0958"} {
+			if strings.Contains(prev.UserPrompt, pii) {
+				t.Errorf("ATS matching preview leaked PII %q:\n%s", pii, prev.UserPrompt)
+			}
+		}
+		if extracted.Educations != nil || extracted.Certifications != nil {
+			t.Errorf("CompileATSMatchingPrompt mutated caller nil slices: %+v", extracted)
 		}
 		if strings.Count(prev.UserPrompt, "</target_job_description>") != 1 {
 			t.Errorf("ATS matching preview failed to escape delimiter tag:\n%s", prev.UserPrompt)

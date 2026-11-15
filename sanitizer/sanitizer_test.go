@@ -989,3 +989,73 @@ func TestSession_ObfuscateBranchContext_Consistency(t *testing.T) {
 		t.Errorf("nil session mutated branch context: %+v", gotNil)
 	}
 }
+
+func TestSession_ObfuscateExtractedCandidate(t *testing.T) {
+	realName := "Jordan Vance"
+	realEmail := "jordan.vance@example.org"
+	realPhone := "+1 415 555 0199"
+	realWeb := "https://jordanvance.dev"
+
+	prof := &core.Profile{
+		FullName: realName,
+		Email:    realEmail,
+		Phone:    realPhone,
+		Profiles: []core.SocialLink{
+			{Network: "website", URL: realWeb},
+		},
+	}
+	session := sanitizer.NewSession(prof)
+
+	orig := &core.ATSExtractedCandidate{
+		Summary: realName + " (" + realEmail + ") builds reliable systems at " + realWeb + ".",
+		Skills:  nil, // intentionally nil to verify caller slice is never mutated in-place
+		Experiences: []core.ATSExtractedExperience{
+			{
+				Company: realName + " Systems",
+				Title:   "Principal Engineer for " + realName,
+				Highlights: []string{
+					"Contact " + realPhone + " for " + realName + " architecture review.",
+				},
+			},
+		},
+	}
+
+	got := session.ObfuscateExtractedCandidate(orig)
+	if got == nil || got == orig {
+		t.Fatalf("expected non-nil cloned ATSExtractedCandidate")
+	}
+
+	// Verify caller struct and slices are completely unmutated.
+	if orig.Skills != nil || orig.Educations != nil || orig.Certifications != nil {
+		t.Errorf("caller nil slices mutated: %+v", orig)
+	}
+	if !strings.Contains(orig.Summary, realName) {
+		t.Errorf("caller Summary mutated: %q", orig.Summary)
+	}
+
+	// Verify candidate PII is scrubbed across Summary, Title, and Highlights while preserving Company.
+	for _, pii := range []string{realName, realEmail, realPhone, realWeb} {
+		if strings.Contains(got.Summary, pii) {
+			t.Errorf("obfuscated Summary leaked %q: %q", pii, got.Summary)
+		}
+		if strings.Contains(got.Experiences[0].Highlights[0], pii) {
+			t.Errorf("obfuscated Highlight leaked %q: %q", pii, got.Experiences[0].Highlights[0])
+		}
+	}
+	if strings.Contains(got.Experiences[0].Title, realName) {
+		t.Errorf("obfuscated Experience Title leaked name: %q", got.Experiences[0].Title)
+	}
+	if got.Experiences[0].Company != realName+" Systems" {
+		t.Errorf("expected non-PII Company preserved, got %q", got.Experiences[0].Company)
+	}
+
+	// Nil safety and copy-on-write cloning even on nil session.
+	var nilSession *sanitizer.Session
+	if nilSession.ObfuscateExtractedCandidate(nil) != nil {
+		t.Errorf("expected nil candidate to remain nil")
+	}
+	nilGot := nilSession.ObfuscateExtractedCandidate(orig)
+	if nilGot == orig || nilGot.Summary != orig.Summary {
+		t.Errorf("expected nil session to clone candidate unchanged, got %+v", nilGot)
+	}
+}

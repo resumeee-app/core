@@ -284,29 +284,52 @@ func TestService_EditVersionProvenanceFailure(t *testing.T) {
 
 // 3. Batch Sync and Backpressure Saturation
 func TestService_BatchSyncAndBackpressure(t *testing.T) {
-	env := setupTestBranchEnv(t, 1) // Capacity of 1 to test backpressure saturation
 	ctx := context.Background()
+	defaultUser := "default-backpressure"
+	store := newSeededBranchStore(ctx, defaultUser)
+	spyQuota := &contextCapturingQuotaRepo{inner: store}
+	notifier := &stubNotifier{}
+	fixedNow := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 
-	// Create a second branch
+	svc := branch.New(branch.Config{
+		Branches:            store,
+		Profiles:            store,
+		Presets:             store,
+		Templates:           store,
+		Quotas:              spyQuota,
+		JobNotifier:         notifier,
+		Validator:           provenance.New(),
+		Renderer:            renderer.New(),
+		PromptCompiler:      &fakePromptCompiler{},
+		MaxPendingPerTenant: 1,
+		JobTTL:              15 * time.Minute,
+		Clock:               func() time.Time { return fixedNow },
+	})
+
+	b1 := &core.Branch{
+		ID:            "branch-bp-1",
+		UserID:        defaultUser,
+		Name:          "Backend Architect",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
 	b2 := &core.Branch{
-		ID:            "branch-2-" + uuid.New().String(),
-		UserID:        env.defaultUser,
+		ID:            "branch-bp-2",
+		UserID:        defaultUser,
 		Name:          "Frontend Architect",
 		TemplateSetID: core.TemplateStandardCleanID,
 	}
-	_, err := env.svc.CreateBranch(ctx, b2)
-	if err != nil {
+	if _, err := svc.CreateBranch(ctx, b1); err != nil {
+		t.Fatalf("failed to create branch 1: %v", err)
+	}
+	if _, err := svc.CreateBranch(ctx, b2); err != nil {
 		t.Fatalf("failed to create branch 2: %v", err)
 	}
 
-	// Increment main revision to make branches stale
-	_, err = env.profileRepo.IncrementMainRevision(ctx, env.defaultUser)
-	if err != nil {
+	if _, err := store.IncrementMainRevision(ctx, defaultUser); err != nil {
 		t.Fatalf("failed to increment main revision: %v", err)
 	}
 
-	// Verify staleness
-	staleBranches, err := env.svc.ListBranches(ctx, env.defaultUser, true)
+	staleBranches, err := svc.ListBranches(ctx, defaultUser, true)
 	if err != nil {
 		t.Fatalf("failed to list stale branches: %v", err)
 	}
@@ -314,13 +337,52 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 		t.Fatalf("expected at least 2 stale branches, got %d", len(staleBranches))
 	}
 
-	// Batch sync all stale branches: queue capacity is 1, so 1 should enqueue and 2nd hit ErrQueueFull
-	enqueuedIDs, err := env.svc.SyncBranches(ctx, env.defaultUser, []string{env.branchID, b2.ID})
+	// MaxPendingPerTenant is 1: 1st branch persists pending + notifies, 2nd hits ErrPendingLimitExceeded/ErrQueueFull.
+	enqueuedIDs, err := svc.SyncBranches(ctx, defaultUser, []string{b1.ID, b2.ID})
+	if !errors.Is(err, core.ErrPendingLimitExceeded) {
+		t.Fatalf("expected core.ErrPendingLimitExceeded on saturated batch sync, got %v", err)
+	}
 	if !errors.Is(err, core.ErrQueueFull) {
-		t.Fatalf("expected core.ErrQueueFull on saturated batch sync, got %v", err)
+		t.Fatalf("expected error to match core.ErrQueueFull, got %v", err)
 	}
 	if len(enqueuedIDs) != 1 {
 		t.Fatalf("expected exactly 1 enqueued version ID before saturation, got %d", len(enqueuedIDs))
+	}
+	if notifier.Count() != 1 {
+		t.Errorf("expected exactly 1 JobNotifier.Notify() call, got %d", notifier.Count())
+	}
+
+	persistedVer, err := svc.Version(ctx, b1.ID, enqueuedIDs[0])
+	if err != nil {
+		t.Fatalf("failed to load persisted pending version: %v", err)
+	}
+	if persistedVer.ReservationID == "" {
+		t.Errorf("expected persisted pending version to retain ReservationID")
+	}
+	wantExpiry := fixedNow.Add(15 * time.Minute)
+	if persistedVer.ExpiresAt == nil || !persistedVer.ExpiresAt.Equal(wantExpiry) {
+		t.Errorf("expected ExpiresAt=%v, got %v", wantExpiry, persistedVer.ExpiresAt)
+	}
+
+	// Verify zero leaked quota: 2 reservations attempted, 1st active (pending), 2nd released on cap rejection.
+	records, err := store.ListUsageRecords(ctx, defaultUser, 10)
+	if err != nil {
+		t.Fatalf("ListUsageRecords failed: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 usage records, got %d", len(records))
+	}
+	var pendingCount, releasedCount int
+	for _, r := range records {
+		switch r.Status {
+		case core.ReservationStatusPending:
+			pendingCount++
+		case core.ReservationStatusReleased:
+			releasedCount++
+		}
+	}
+	if pendingCount != 1 || releasedCount != 1 {
+		t.Errorf("expected 1 pending and 1 released reservation (zero leak), got pending=%d released=%d", pendingCount, releasedCount)
 	}
 }
 
@@ -339,6 +401,12 @@ func TestService_GenerateVersion(t *testing.T) {
 	}
 	if ver.VersionNumber != 2 {
 		t.Errorf("expected version number 2 (after initial v1), got %d", ver.VersionNumber)
+	}
+	if ver.ReservationID == "" {
+		t.Errorf("expected ReservationID populated on pending version")
+	}
+	if ver.ExpiresAt == nil {
+		t.Errorf("expected ExpiresAt populated on pending version")
 	}
 	if len(env.enqueuer.jobs) != 1 {
 		t.Errorf("expected 1 enqueued job, got %d", len(env.enqueuer.jobs))
@@ -2366,4 +2434,1758 @@ func TestService_SimulateATS(t *testing.T) {
 			t.Errorf("expected LLM simulator to be invoked only once across concurrent requests, got %d", simSlow.calls)
 		}
 	})
+}
+
+type stubNotifier struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (n *stubNotifier) Notify() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.calls++
+}
+
+func (n *stubNotifier) Count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.calls
+}
+
+type releaseCall struct {
+	reservationID string
+	reason        string
+	ctxErr        error
+	hasDeadline   bool
+}
+
+type contextCapturingQuotaRepo struct {
+	inner    branch.QuotaManager
+	mu       sync.Mutex
+	releases []releaseCall
+}
+
+func (q *contextCapturingQuotaRepo) ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error) {
+	return q.inner.ReserveQuota(ctx, userID, op, estimatedTokens, dailyLimit, monthlyLimit)
+}
+
+func (q *contextCapturingQuotaRepo) CommitUsage(ctx context.Context, reservationID string, telemetry core.LLMTelemetry) error {
+	return q.inner.CommitUsage(ctx, reservationID, telemetry)
+}
+
+func (q *contextCapturingQuotaRepo) ReleaseQuota(ctx context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error {
+	_, hasDeadline := ctx.Deadline()
+	q.mu.Lock()
+	q.releases = append(q.releases, releaseCall{
+		reservationID: reservationID,
+		reason:        reason,
+		ctxErr:        ctx.Err(),
+		hasDeadline:   hasDeadline,
+	})
+	q.mu.Unlock()
+	return q.inner.ReleaseQuota(ctx, reservationID, reason, telemetry)
+}
+
+func (q *contextCapturingQuotaRepo) Releases() []releaseCall {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]releaseCall, len(q.releases))
+	copy(out, q.releases)
+	return out
+}
+
+type spyAbortStore struct {
+	*fakeBranchStore
+	mu              sync.Mutex
+	abortedCalls    []string
+	abortedStatuses map[string][]core.VersionStatus
+	cancelCtxFn     func()
+}
+
+func (s *spyAbortStore) AbortBranchVersions(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error) {
+	if s.cancelCtxFn != nil {
+		s.cancelCtxFn()
+	}
+
+	released, err := s.fakeBranchStore.AbortBranchVersions(ctx, branchID, reason)
+	if err == nil {
+		versionsAfter, _ := s.ListVersions(ctx, branchID)
+		statuses := make([]core.VersionStatus, 0, len(versionsAfter))
+		for _, v := range versionsAfter {
+			statuses = append(statuses, v.Status)
+		}
+		s.mu.Lock()
+		s.abortedCalls = append(s.abortedCalls, branchID)
+		if s.abortedStatuses == nil {
+			s.abortedStatuses = make(map[string][]core.VersionStatus)
+		}
+		s.abortedStatuses[branchID] = statuses
+		s.mu.Unlock()
+	}
+	return released, err
+}
+
+func (s *spyAbortStore) SubmitPendingVersion(ctx context.Context, version *core.BranchVersion, opts core.PendingJobOptions) ([]core.ReleasedReservation, error) {
+	if s.cancelCtxFn != nil {
+		s.cancelCtxFn()
+	}
+	return s.fakeBranchStore.SubmitPendingVersion(ctx, version, opts)
+}
+
+func TestService_AdmissionControlAndNotifications(t *testing.T) {
+	cases := []struct {
+		name               string
+		maxPending         int
+		jobTTL             time.Duration
+		cleanupTimeout     time.Duration
+		useNotifier        bool
+		enqueuerCap        int
+		preSeedPending     int
+		cancelCtxOnSubmit  bool
+		wantErr            error
+		wantNotifierCalls  int
+		wantEnqueuerJobs   int
+		wantPendingVersion bool
+		wantReleasedCount  int
+	}{
+		{
+			name:               "notifier wakes workers without calling JobEnqueuer and persists ReservationID and ExpiresAt",
+			maxPending:         2,
+			jobTTL:             20 * time.Minute,
+			useNotifier:        true,
+			wantNotifierCalls:  1,
+			wantPendingVersion: true,
+		},
+		{
+			name:               "default MaxPendingPerTenant and JobTTL applied when unset",
+			maxPending:         0,
+			jobTTL:             0,
+			useNotifier:        true,
+			preSeedPending:     core.DefaultMaxPendingPerTenant - 1,
+			wantNotifierCalls:  1,
+			wantPendingVersion: true,
+		},
+		{
+			name:              "default MaxPendingPerTenant rejects once 25 other branches have pending versions",
+			maxPending:        -1,
+			jobTTL:            -1,
+			useNotifier:       true,
+			preSeedPending:    core.DefaultMaxPendingPerTenant,
+			wantErr:           core.ErrPendingLimitExceeded,
+			wantReleasedCount: 1,
+		},
+		{
+			name:               "JobEnqueuer failure does not fail persisted pending version or release quota",
+			maxPending:         5,
+			useNotifier:        false,
+			enqueuerCap:        0, // closed below to force ErrQueueFull from Enqueue
+			wantEnqueuerJobs:   0,
+			wantPendingVersion: true,
+			wantReleasedCount:  0,
+		},
+		{
+			name:              "cancelled caller context still releases quota via detached cleanup context on cap error",
+			maxPending:        1,
+			cleanupTimeout:    2 * time.Second,
+			useNotifier:       true,
+			preSeedPending:    1,
+			cancelCtxOnSubmit: true,
+			wantErr:           core.ErrPendingLimitExceeded,
+			wantReleasedCount: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			userID := "user-admission-" + uuid.New().String()
+			baseStore := newSeededBranchStore(ctx, userID)
+			quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
+			notifier := &stubNotifier{}
+			enqueuer := newStubEnqueuer(10)
+			if tc.name == "JobEnqueuer failure does not fail persisted pending version or release quota" {
+				enqueuer.closed = true
+			}
+
+			fixedNow := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+
+			callCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			var store branch.Store = baseStore
+			if tc.cancelCtxOnSubmit {
+				store = &spyAbortStore{
+					fakeBranchStore: baseStore,
+					cancelCtxFn:     cancel,
+				}
+			}
+
+			cfg := branch.Config{
+				Branches:            store,
+				Profiles:            baseStore,
+				Presets:             baseStore,
+				Templates:           baseStore,
+				Quotas:              quotaSpy,
+				MaxPendingPerTenant: tc.maxPending,
+				JobTTL:              tc.jobTTL,
+				CleanupTimeout:      tc.cleanupTimeout,
+				Clock:               func() time.Time { return fixedNow },
+			}
+			if tc.useNotifier {
+				cfg.JobNotifier = notifier
+				cfg.JobEnqueuer = enqueuer
+			} else {
+				cfg.JobEnqueuer = enqueuer
+			}
+			svc := branch.New(cfg)
+
+			for i := 0; i < tc.preSeedPending; i++ {
+				extraBranch := &core.Branch{
+					ID:            fmt.Sprintf("branch-seed-%d", i),
+					UserID:        userID,
+					Name:          fmt.Sprintf("Seed Branch %d", i),
+					TemplateSetID: core.TemplateStandardCleanID,
+				}
+				if _, err := svc.CreateBranch(ctx, extraBranch); err != nil {
+					t.Fatalf("CreateBranch seed %d failed: %v", i, err)
+				}
+				seedVer := &core.BranchVersion{
+					ID:            fmt.Sprintf("ver-seed-%d", i),
+					UserID:        userID,
+					BranchID:      extraBranch.ID,
+					Status:        core.VersionStatusPending,
+					ReservationID: fmt.Sprintf("res-seed-%d", i),
+				}
+				if err := baseStore.CreateVersion(ctx, seedVer); err != nil {
+					t.Fatalf("CreateVersion seed %d failed: %v", i, err)
+				}
+			}
+
+			targetBranch := &core.Branch{
+				ID:            "branch-target-" + uuid.New().String(),
+				UserID:        userID,
+				Name:          "Target Branch",
+				TemplateSetID: core.TemplateStandardCleanID,
+			}
+			if _, err := svc.CreateBranch(ctx, targetBranch); err != nil {
+				t.Fatalf("CreateBranch target failed: %v", err)
+			}
+
+			ver, err := svc.GenerateVersion(callCtx, userID, targetBranch.ID)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+				if !errors.Is(err, core.ErrQueueFull) {
+					t.Fatalf("expected ErrPendingLimitExceeded to match ErrQueueFull, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tc.wantPendingVersion {
+				if ver == nil || ver.Status != core.VersionStatusPending {
+					t.Fatalf("expected pending version, got %+v", ver)
+				}
+				if ver.ReservationID == "" {
+					t.Errorf("expected non-empty ReservationID")
+				}
+				expectedTTL := tc.jobTTL
+				if expectedTTL <= 0 {
+					expectedTTL = core.DefaultJobTTL
+				}
+				wantExpiry := fixedNow.Add(expectedTTL)
+				if ver.ExpiresAt == nil || !ver.ExpiresAt.Equal(wantExpiry) {
+					t.Errorf("expected ExpiresAt=%v, got %v", wantExpiry, ver.ExpiresAt)
+				}
+				reloaded, getErr := svc.Version(ctx, targetBranch.ID, ver.ID)
+				if getErr != nil {
+					t.Fatalf("expected persisted version in store: %v", getErr)
+				}
+				if reloaded.Status != core.VersionStatusPending || reloaded.ReservationID != ver.ReservationID {
+					t.Errorf("reloaded version mismatch: %+v", reloaded)
+				}
+			}
+
+			if notifier.Count() != tc.wantNotifierCalls {
+				t.Errorf("expected %d notifier calls, got %d", tc.wantNotifierCalls, notifier.Count())
+			}
+			if len(enqueuer.jobs) != tc.wantEnqueuerJobs {
+				t.Errorf("expected %d enqueuer jobs, got %d", tc.wantEnqueuerJobs, len(enqueuer.jobs))
+			}
+
+			releases := quotaSpy.Releases()
+			if len(releases) != tc.wantReleasedCount {
+				t.Fatalf("expected %d quota releases, got %d (%+v)", tc.wantReleasedCount, len(releases), releases)
+			}
+			for _, rel := range releases {
+				if rel.ctxErr != nil {
+					t.Errorf("expected detached cleanup context to have nil Err, got %v", rel.ctxErr)
+				}
+				if !rel.hasDeadline {
+					t.Errorf("expected detached cleanup context to have bounded deadline")
+				}
+			}
+		})
+	}
+}
+
+func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
+	cases := []struct {
+		name              string
+		existingStatus    core.VersionStatus
+		maxPending        int
+		wantErr           error
+		wantSuperseded    bool
+		wantReleasedCount int
+		wantFinalVersions int
+	}{
+		{
+			name:              "supersedes existing pending version and releases its quota even at MaxPendingPerTenant=1",
+			existingStatus:    core.VersionStatusPending,
+			maxPending:        1,
+			wantSuperseded:    true,
+			wantReleasedCount: 1,
+			wantFinalVersions: 2,
+		},
+		{
+			name:              "rejects with ErrConflict when branch already has processing version and releases new quota",
+			existingStatus:    core.VersionStatusProcessing,
+			maxPending:        5,
+			wantErr:           core.ErrConflict,
+			wantSuperseded:    false,
+			wantReleasedCount: 1,
+			wantFinalVersions: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			userID := "user-supersedence"
+			store := newSeededBranchStore(ctx, userID)
+			quotaSpy := &contextCapturingQuotaRepo{inner: store}
+			notifier := &stubNotifier{}
+
+			svc := branch.New(branch.Config{
+				Branches:            store,
+				Profiles:            store,
+				Presets:             store,
+				Templates:           store,
+				Quotas:              quotaSpy,
+				JobNotifier:         notifier,
+				MaxPendingPerTenant: tc.maxPending,
+			})
+
+			b := &core.Branch{
+				ID:            "branch-sup-" + uuid.New().String(),
+				UserID:        userID,
+				Name:          "Supersedence Branch",
+				TemplateSetID: core.TemplateStandardCleanID,
+			}
+			if _, err := svc.CreateBranch(ctx, b); err != nil {
+				t.Fatalf("CreateBranch failed: %v", err)
+			}
+
+			// Reserve quota and seed prior version
+			priorRec, err := quotaSpy.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 1000000)
+			if err != nil {
+				t.Fatalf("ReserveQuota prior failed: %v", err)
+			}
+			priorVer := &core.BranchVersion{
+				ID:            "ver-prior-1",
+				UserID:        userID,
+				BranchID:      b.ID,
+				Status:        tc.existingStatus,
+				ReservationID: priorRec.ID,
+			}
+			if err := store.CreateVersion(ctx, priorVer); err != nil {
+				t.Fatalf("CreateVersion prior failed: %v", err)
+			}
+
+			newVer, err := svc.GenerateVersion(ctx, userID, b.ID)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if newVer.Status != core.VersionStatusPending || newVer.ReservationID == "" {
+					t.Errorf("expected new pending version with ReservationID, got %+v", newVer)
+				}
+			}
+
+			reloadedPrior, err := svc.Version(ctx, b.ID, priorVer.ID)
+			if err != nil {
+				t.Fatalf("Version prior failed: %v", err)
+			}
+			if tc.wantSuperseded {
+				if reloadedPrior.Status != core.VersionStatusCancelled {
+					t.Errorf("expected prior version to be cancelled, got %s", reloadedPrior.Status)
+				}
+			} else if reloadedPrior.Status != tc.existingStatus {
+				t.Errorf("expected prior version to remain %s, got %s", tc.existingStatus, reloadedPrior.Status)
+			}
+
+			releases := quotaSpy.Releases()
+			if len(releases) != tc.wantReleasedCount {
+				t.Fatalf("expected %d quota release(s), got %d", tc.wantReleasedCount, len(releases))
+			}
+			if tc.wantSuperseded && releases[0].reservationID != priorRec.ID {
+				t.Errorf("expected superseded reservation %s to be released, got %s", priorRec.ID, releases[0].reservationID)
+			}
+			if tc.wantErr != nil && releases[0].reservationID == priorRec.ID {
+				t.Errorf("expected newly reserved quota (not prior processing reservation %s) to be released", priorRec.ID)
+			}
+
+			versions, err := svc.ListVersions(ctx, b.ID)
+			if err != nil {
+				t.Fatalf("ListVersions failed: %v", err)
+			}
+			if len(versions) != tc.wantFinalVersions {
+				t.Errorf("expected %d versions, got %d", tc.wantFinalVersions, len(versions))
+			}
+		})
+	}
+}
+
+func TestService_SyncBranchesPartialBatchAndDefaultHandling(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-sync-partial"
+	store := newSeededBranchStore(ctx, userID)
+	quotaSpy := &contextCapturingQuotaRepo{inner: store}
+	notifier := &stubNotifier{}
+
+	svc := branch.New(branch.Config{
+		Branches:            store,
+		Profiles:            store,
+		Presets:             store,
+		Templates:           store,
+		Quotas:              quotaSpy,
+		JobNotifier:         notifier,
+		Renderer:            renderer.New(),
+		MaxPendingPerTenant: 1,
+	})
+
+	b1 := &core.Branch{ID: "br-sync-1", UserID: userID, Name: "Sync 1", TemplateSetID: core.TemplateStandardCleanID}
+	b2 := &core.Branch{ID: "br-sync-2", UserID: userID, Name: "Sync 2", TemplateSetID: core.TemplateStandardCleanID}
+	if _, err := svc.CreateBranch(ctx, b1); err != nil {
+		t.Fatalf("CreateBranch b1: %v", err)
+	}
+	if _, err := svc.CreateBranch(ctx, b2); err != nil {
+		t.Fatalf("CreateBranch b2: %v", err)
+	}
+
+	defaultID := core.DefaultBranchID(userID)
+	ids, err := svc.SyncBranches(ctx, userID, []string{defaultID, b1.ID, b2.ID})
+	if !errors.Is(err, core.ErrPendingLimitExceeded) {
+		t.Fatalf("expected ErrPendingLimitExceeded, got %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 version IDs (default sync + 1st pending), got %d (%v)", len(ids), ids)
+	}
+	if notifier.Count() != 1 {
+		t.Errorf("expected 1 notifier call for b1 only, got %d", notifier.Count())
+	}
+
+	releases := quotaSpy.Releases()
+	if len(releases) != 1 {
+		t.Fatalf("expected exactly 1 released reservation for rejected b2, got %d", len(releases))
+	}
+}
+
+func TestService_CancelVersion(t *testing.T) {
+	cases := []struct {
+		name              string
+		initialStatus     core.VersionStatus
+		callerUserID      string
+		targetBranchID    string
+		targetVersionID   string
+		wantErr           error
+		wantReleasedCount int
+	}{
+		{
+			name:              "cancels pending version and releases quota via detached context",
+			initialStatus:     core.VersionStatusPending,
+			callerUserID:      "owner-user",
+			wantReleasedCount: 1,
+		},
+		{
+			name:              "rejects processing version with ErrConflict without releasing quota",
+			initialStatus:     core.VersionStatusProcessing,
+			callerUserID:      "owner-user",
+			wantErr:           core.ErrConflict,
+			wantReleasedCount: 0,
+		},
+		{
+			name:              "rejects completed version with ErrConflict without releasing quota",
+			initialStatus:     core.VersionStatusCompleted,
+			callerUserID:      "owner-user",
+			wantErr:           core.ErrConflict,
+			wantReleasedCount: 0,
+		},
+		{
+			name:              "rejects failed version with ErrConflict without releasing quota",
+			initialStatus:     core.VersionStatusFailed,
+			callerUserID:      "owner-user",
+			wantErr:           core.ErrConflict,
+			wantReleasedCount: 0,
+		},
+		{
+			name:              "rejects already cancelled version with ErrConflict",
+			initialStatus:     core.VersionStatusCancelled,
+			callerUserID:      "owner-user",
+			wantErr:           core.ErrConflict,
+			wantReleasedCount: 0,
+		},
+		{
+			name:              "denies cross-tenant cancellation with ErrNotFound",
+			initialStatus:     core.VersionStatusPending,
+			callerUserID:      "attacker-user",
+			wantErr:           core.ErrNotFound,
+			wantReleasedCount: 0,
+		},
+		{
+			name:              "missing version returns ErrNotFound",
+			initialStatus:     core.VersionStatusPending,
+			callerUserID:      "owner-user",
+			targetVersionID:   "ver-nonexistent",
+			wantErr:           core.ErrNotFound,
+			wantReleasedCount: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			owner := "owner-user"
+			store := newSeededBranchStore(ctx, owner)
+			quotaSpy := &contextCapturingQuotaRepo{inner: store}
+			svc := branch.New(branch.Config{
+				Branches:       store,
+				Profiles:       store,
+				Presets:        store,
+				Templates:      store,
+				Quotas:         quotaSpy,
+				CleanupTimeout: 2 * time.Second,
+			})
+
+			b := &core.Branch{
+				ID:            "branch-cancel-" + uuid.New().String(),
+				UserID:        owner,
+				Name:          "Cancel Target",
+				TemplateSetID: core.TemplateStandardCleanID,
+			}
+			if _, err := svc.CreateBranch(ctx, b); err != nil {
+				t.Fatalf("CreateBranch failed: %v", err)
+			}
+
+			rec, err := quotaSpy.ReserveQuota(ctx, owner, core.OperationResumeTailoring, 2000, 50, 1000000)
+			if err != nil {
+				t.Fatalf("ReserveQuota failed: %v", err)
+			}
+			ver := &core.BranchVersion{
+				ID:            "ver-cancel-" + uuid.New().String(),
+				UserID:        owner,
+				BranchID:      b.ID,
+				Status:        tc.initialStatus,
+				ReservationID: rec.ID,
+			}
+			if err := store.CreateVersion(ctx, ver); err != nil {
+				t.Fatalf("CreateVersion failed: %v", err)
+			}
+
+			branchID := tc.targetBranchID
+			if branchID == "" {
+				branchID = b.ID
+			}
+			versionID := tc.targetVersionID
+			if versionID == "" {
+				versionID = ver.ID
+			}
+
+			cancelled, err := svc.CancelVersion(ctx, tc.callerUserID, branchID, versionID)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("CancelVersion failed: %v", err)
+				}
+				if cancelled.Status != core.VersionStatusCancelled {
+					t.Errorf("expected cancelled status, got %s", cancelled.Status)
+				}
+				if cancelled.ErrorMessage != "cancelled by user" {
+					t.Errorf("expected reason 'cancelled by user', got %q", cancelled.ErrorMessage)
+				}
+				if cancelled.ReservationID != rec.ID {
+					t.Errorf("expected ReservationID %s preserved on returned version, got %q", rec.ID, cancelled.ReservationID)
+				}
+			}
+
+			releases := quotaSpy.Releases()
+			if len(releases) != tc.wantReleasedCount {
+				t.Fatalf("expected %d quota release(s), got %d", tc.wantReleasedCount, len(releases))
+			}
+			if tc.wantReleasedCount == 1 {
+				if releases[0].reservationID != rec.ID || !releases[0].hasDeadline || releases[0].ctxErr != nil {
+					t.Errorf("unexpected release record: %+v", releases[0])
+				}
+			}
+		})
+	}
+}
+
+func TestService_MutationSupersedence(t *testing.T) {
+	cases := []struct {
+		name           string
+		action         func(t *testing.T, ctx context.Context, env *testBranchEnv, svc *branch.Service, b *core.Branch, v1 *core.BranchVersion)
+		expectedReason string
+	}{
+		{
+			name: "EditVersion supersedes pending versions and releases quota",
+			action: func(t *testing.T, ctx context.Context, env *testBranchEnv, svc *branch.Service, b *core.Branch, v1 *core.BranchVersion) {
+				t.Helper()
+				content := core.TailoredContent{
+					Summary: "Manual edit summary",
+					Experiences: []core.TailoredExperience{
+						{
+							SourceEntityID: env.validExpID,
+							Company:        "Acme Corp",
+							RoleTitle:      "Lead Systems Architect",
+							StartDate:      core.NewDate(2020, 1, 1),
+							Bullets: []core.TailoredBullet{
+								{
+									Text:          "Optimized distributed consensus throughput by 40%.",
+									SourceFactIDs: []string{env.validFactID},
+								},
+							},
+						},
+					},
+				}
+				if _, err := svc.EditVersion(ctx, env.defaultUser, b.ID, v1.ID, content); err != nil {
+					t.Fatalf("EditVersion failed: %v", err)
+				}
+			},
+			expectedReason: "superseded by manual edit",
+		},
+		{
+			name: "UpdateBranch config change supersedes pending versions and releases quota",
+			action: func(t *testing.T, ctx context.Context, _ *testBranchEnv, svc *branch.Service, b *core.Branch, _ *core.BranchVersion) {
+				t.Helper()
+				b.TargetRequirements = "Updated JD requirements"
+				if _, err := svc.UpdateBranch(ctx, b); err != nil {
+					t.Fatalf("UpdateBranch failed: %v", err)
+				}
+			},
+			expectedReason: "superseded by branch update",
+		},
+		{
+			name: "UpdateBranch active version rollback supersedes pending versions and releases quota",
+			action: func(t *testing.T, ctx context.Context, _ *testBranchEnv, svc *branch.Service, b *core.Branch, v1 *core.BranchVersion) {
+				t.Helper()
+				b.ActiveVersionID = &v1.ID
+				if _, err := svc.UpdateBranch(ctx, b); err != nil {
+					t.Fatalf("UpdateBranch rollback failed: %v", err)
+				}
+			},
+			expectedReason: "superseded by branch update",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			env := setupTestBranchEnv(t, 10)
+			store := env.db.(*fakeBranchStore)
+			quotaSpy := &contextCapturingQuotaRepo{inner: store}
+			notifier := &stubNotifier{}
+
+			svc := branch.New(branch.Config{
+				Branches:       store,
+				Profiles:       store,
+				Presets:        store,
+				Templates:      store,
+				Quotas:         quotaSpy,
+				JobNotifier:    notifier,
+				Validator:      provenance.New(),
+				Renderer:       renderer.New(),
+				PromptCompiler: &fakePromptCompiler{},
+			})
+
+			// Create a completed v2 so rollback back to v1 is distinct
+			v1, err := svc.Version(ctx, env.branchID, env.v1ID)
+			if err != nil {
+				t.Fatalf("Version v1 failed: %v", err)
+			}
+			v2 := &core.BranchVersion{
+				ID:                "ver-completed-v2-" + uuid.New().String(),
+				UserID:            env.defaultUser,
+				BranchID:          env.branchID,
+				Status:            core.VersionStatusCompleted,
+				MainRevisionUsed:  1,
+				TemplateSetIDUsed: core.TemplateStandardCleanID,
+				SourceType:        core.SourceTypeLLMGeneration,
+			}
+			if err := store.CreateVersion(ctx, v2); err != nil {
+				t.Fatalf("CreateVersion v2: %v", err)
+			}
+			if err := store.CompleteVersion(ctx, v2); err != nil {
+				t.Fatalf("CompleteVersion v2: %v", err)
+			}
+
+			// Queue a pending version on env.branchID
+			pendingVer, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID)
+			if err != nil {
+				t.Fatalf("GenerateVersion pending failed: %v", err)
+			}
+
+			b, err := svc.Branch(ctx, env.defaultUser, env.branchID)
+			if err != nil {
+				t.Fatalf("Branch failed: %v", err)
+			}
+
+			tc.action(t, ctx, env, svc, b, v1)
+
+			afterPending, err := svc.Version(ctx, env.branchID, pendingVer.ID)
+			if err != nil {
+				t.Fatalf("Version pending reload failed: %v", err)
+			}
+			if afterPending.Status != core.VersionStatusCancelled {
+				t.Errorf("expected pending version to be cancelled, got %s", afterPending.Status)
+			}
+			if afterPending.ErrorMessage != tc.expectedReason {
+				t.Errorf("expected reason %q, got %q", tc.expectedReason, afterPending.ErrorMessage)
+			}
+
+			releases := quotaSpy.Releases()
+			if len(releases) != 1 {
+				t.Fatalf("expected 1 quota release, got %d", len(releases))
+			}
+			if releases[0].reservationID != pendingVer.ReservationID {
+				t.Errorf("expected reservation %s released, got %s", pendingVer.ReservationID, releases[0].reservationID)
+			}
+			if releases[0].reason != tc.expectedReason {
+				t.Errorf("expected release reason %q, got %q", tc.expectedReason, releases[0].reason)
+			}
+		})
+	}
+}
+
+func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
+	ctx := context.Background()
+	owner := "delete-owner"
+	baseStore := newSeededBranchStore(ctx, owner)
+	spyStore := &spyAbortStore{fakeBranchStore: baseStore}
+	quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
+
+	svc := branch.New(branch.Config{
+		Branches:  spyStore,
+		Profiles:  baseStore,
+		Presets:   baseStore,
+		Templates: baseStore,
+		Quotas:    quotaSpy,
+	})
+
+	b := &core.Branch{
+		ID:            "branch-delete-abort",
+		UserID:        owner,
+		Name:          "Branch To Delete",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
+	if _, err := svc.CreateBranch(ctx, b); err != nil {
+		t.Fatalf("CreateBranch failed: %v", err)
+	}
+
+	resPending, err := quotaSpy.ReserveQuota(ctx, owner, core.OperationResumeTailoring, 2000, 50, 1000000)
+	if err != nil {
+		t.Fatalf("ReserveQuota pending failed: %v", err)
+	}
+	resProcessing, err := quotaSpy.ReserveQuota(ctx, owner, core.OperationResumeTailoring, 2000, 50, 1000000)
+	if err != nil {
+		t.Fatalf("ReserveQuota processing failed: %v", err)
+	}
+
+	vPending := &core.BranchVersion{
+		ID:            "ver-del-pending",
+		UserID:        owner,
+		BranchID:      b.ID,
+		Status:        core.VersionStatusPending,
+		ReservationID: resPending.ID,
+	}
+	vProcessing := &core.BranchVersion{
+		ID:            "ver-del-processing",
+		UserID:        owner,
+		BranchID:      b.ID,
+		Status:        core.VersionStatusProcessing,
+		ClaimedBy:     "worker-1",
+		ReservationID: resProcessing.ID,
+	}
+	if err := baseStore.CreateVersion(ctx, vPending); err != nil {
+		t.Fatalf("CreateVersion pending: %v", err)
+	}
+	if err := baseStore.CreateVersion(ctx, vProcessing); err != nil {
+		t.Fatalf("CreateVersion processing: %v", err)
+	}
+
+	t.Run("cross-tenant DeleteBranch denied before aborting versions", func(t *testing.T) {
+		err := svc.DeleteBranch(ctx, "other-tenant", b.ID)
+		if !errors.Is(err, core.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for cross-tenant delete, got %v", err)
+		}
+		if len(spyStore.abortedCalls) != 0 {
+			t.Errorf("expected AbortBranchVersions NOT to be called on unauthorized delete, got %v", spyStore.abortedCalls)
+		}
+		if len(quotaSpy.Releases()) != 0 {
+			t.Errorf("expected zero quota releases on unauthorized delete")
+		}
+	})
+
+	for _, badUserID := range []struct {
+		name   string
+		userID string
+	}{
+		{name: "empty userID DeleteBranch rejected before aborting versions", userID: ""},
+		{name: "whitespace userID DeleteBranch rejected before aborting versions", userID: "   "},
+	} {
+		t.Run(badUserID.name, func(t *testing.T) {
+			err := svc.DeleteBranch(ctx, badUserID.userID, b.ID)
+			if !errors.Is(err, core.ErrValidation) {
+				t.Fatalf("expected ErrValidation for %q DeleteBranch, got %v", badUserID.userID, err)
+			}
+			if len(spyStore.abortedCalls) != 0 {
+				t.Errorf("expected AbortBranchVersions NOT to be called, got %v", spyStore.abortedCalls)
+			}
+			if len(quotaSpy.Releases()) != 0 {
+				t.Errorf("expected zero quota releases on rejected delete, got %+v", quotaSpy.Releases())
+			}
+			gotPending, err := svc.Version(ctx, b.ID, vPending.ID)
+			if err != nil || gotPending.Status != core.VersionStatusPending {
+				t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+			}
+			gotProcessing, err := svc.Version(ctx, b.ID, vProcessing.ID)
+			if err != nil || gotProcessing.Status != core.VersionStatusProcessing {
+				t.Errorf("expected victim processing version untouched, got %+v err=%v", gotProcessing, err)
+			}
+		})
+	}
+
+	t.Run("default branch DeleteBranch rejected before aborting", func(t *testing.T) {
+		err := svc.DeleteBranch(ctx, owner, core.DefaultBranchID(owner))
+		if !errors.Is(err, core.ErrDefaultBranchImmutable) {
+			t.Fatalf("expected ErrDefaultBranchImmutable, got %v", err)
+		}
+	})
+
+	t.Run("owner DeleteBranch aborts pending and processing versions and releases all quota", func(t *testing.T) {
+		if err := svc.DeleteBranch(ctx, owner, b.ID); err != nil {
+			t.Fatalf("DeleteBranch failed: %v", err)
+		}
+
+		statuses := spyStore.abortedStatuses[b.ID]
+		if len(statuses) != 2 {
+			t.Fatalf("expected 2 version statuses aborted before branch deletion, got %v", statuses)
+		}
+		for _, st := range statuses {
+			if st != core.VersionStatusCancelled {
+				t.Errorf("expected aborted version status cancelled, got %s", st)
+			}
+		}
+
+		releases := quotaSpy.Releases()
+		if len(releases) != 2 {
+			t.Fatalf("expected 2 released quota reservations, got %d", len(releases))
+		}
+		releasedIDs := map[string]bool{}
+		for _, r := range releases {
+			releasedIDs[r.reservationID] = true
+			if r.reason != "branch deleted" {
+				t.Errorf("expected reason 'branch deleted', got %q", r.reason)
+			}
+			if r.ctxErr != nil || !r.hasDeadline {
+				t.Errorf("expected detached bounded context, got %+v", r)
+			}
+		}
+		if !releasedIDs[resPending.ID] || !releasedIDs[resProcessing.ID] {
+			t.Errorf("missing expected reservation IDs in releases: %+v", releases)
+		}
+
+		if _, err := svc.Branch(ctx, owner, b.ID); !errors.Is(err, core.ErrNotFound) {
+			t.Errorf("expected deleted branch to return ErrNotFound, got %v", err)
+		}
+	})
+}
+
+func TestFakeBranchStore_LeaseGuardsAndLifecycle(t *testing.T) {
+	ctx := context.Background()
+	userID := "store-guard-user"
+	store := newSeededBranchStore(ctx, userID)
+
+	b := &core.Branch{
+		ID:            "br-store-guard",
+		UserID:        userID,
+		Name:          "Store Guard",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
+	if err := store.CreateBranch(ctx, b); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	t0 := time.Date(2026, 11, 15, 8, 0, 0, 0, time.UTC)
+	v := &core.BranchVersion{
+		ID:            "ver-lease-1",
+		UserID:        userID,
+		BranchID:      b.ID,
+		ReservationID: "res-lease-1",
+	}
+	if _, err := store.SubmitPendingVersion(ctx, v, core.PendingJobOptions{
+		MaxPendingPerTenant: 5,
+		TTL:                 10 * time.Minute,
+		Now:                 t0,
+	}); err != nil {
+		t.Fatalf("SubmitPendingVersion: %v", err)
+	}
+
+	claimed, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{
+		WorkerID:               "worker-a",
+		Now:                    t0.Add(time.Minute),
+		LeaseDuration:          2 * time.Minute,
+		MaxConcurrentPerTenant: 1,
+	})
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimNextVersion failed: claimed=%v err=%v", claimed, err)
+	}
+	if claimed.Status != core.VersionStatusProcessing || claimed.ClaimedBy != "worker-a" || claimed.AttemptCount != 1 {
+		t.Fatalf("unexpected claimed version: %+v", claimed)
+	}
+
+	// Lease renewal by wrong worker fails
+	if err := store.RenewVersionLease(ctx, claimed.ID, "worker-b", t0.Add(5*time.Minute)); !errors.Is(err, core.ErrLeaseExpired) {
+		t.Errorf("expected ErrLeaseExpired for wrong worker renewal, got %v", err)
+	}
+
+	// Requeue and reclaim by worker-b; stale worker-a CompleteVersion must fail with ErrLeaseExpired
+	if err := store.RequeueVersionForRetry(ctx, claimed.ID, "worker-a", t0.Add(2*time.Minute), "transient"); err != nil {
+		t.Fatalf("RequeueVersionForRetry failed: %v", err)
+	}
+	reclaimed, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{
+		WorkerID:      "worker-b",
+		Now:           t0.Add(2 * time.Minute),
+		LeaseDuration: 2 * time.Minute,
+	})
+	if err != nil || reclaimed == nil || reclaimed.ClaimedBy != "worker-b" || reclaimed.AttemptCount != 2 {
+		t.Fatalf("expected reclaim by worker-b, got %+v, err=%v", reclaimed, err)
+	}
+
+	staleComplete := *claimed
+	staleComplete.Status = core.VersionStatusCompleted
+	if err := store.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrLeaseExpired) {
+		t.Errorf("expected ErrLeaseExpired for stale worker-a CompleteVersion, got %v", err)
+	}
+
+	// Expire lease and verify terminal guards
+	released, err := store.FailExpiredVersionLeases(ctx, t0.Add(10*time.Minute), "lease timed out")
+	if err != nil {
+		t.Fatalf("FailExpiredVersionLeases: %v", err)
+	}
+	if len(released) != 1 || released[0].ReservationID != "res-lease-1" {
+		t.Fatalf("expected 1 released reservation from expired lease, got %+v", released)
+	}
+	if err := store.UpdateVersionStatus(ctx, reclaimed.ID, core.VersionStatusProcessing, ""); !errors.Is(err, core.ErrConflict) {
+		t.Errorf("expected ErrConflict updating terminal failed version, got %v", err)
+	}
+	if err := store.CompleteVersion(ctx, reclaimed); !errors.Is(err, core.ErrConflict) {
+		t.Errorf("expected ErrConflict completing failed version, got %v", err)
+	}
+}
+
+func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
+	setupTailoredWithActiveAndProcessing := func(t *testing.T, withSecondCompleted bool) (
+		context.Context,
+		*fakeBranchStore,
+		*contextCapturingQuotaRepo,
+		*branch.Service,
+		*core.Branch,
+		*core.BranchVersion,
+		*core.BranchVersion,
+		*core.BranchVersion,
+	) {
+		t.Helper()
+		ctx := context.Background()
+		userID := "user-epoch-" + uuid.New().String()
+		baseStore := newSeededBranchStore(ctx, userID)
+		quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
+		svc := branch.New(branch.Config{
+			Branches:       baseStore,
+			Profiles:       baseStore,
+			Presets:        baseStore,
+			Templates:      baseStore,
+			Quotas:         quotaSpy,
+			CleanupTimeout: 2 * time.Second,
+		})
+
+		b, err := svc.CreateBranch(ctx, &core.Branch{
+			ID:                 "branch-epoch-" + uuid.New().String(),
+			UserID:             userID,
+			Name:               "Principal Go Engineer",
+			TargetRequirements: "Go, PostgreSQL, distributed systems",
+			TemplateSetID:      core.TemplateStandardCleanID,
+		})
+		if err != nil {
+			t.Fatalf("CreateBranch failed: %v", err)
+		}
+
+		v1 := &core.BranchVersion{
+			ID:                "ver-epoch-1-" + uuid.New().String(),
+			UserID:            userID,
+			BranchID:          b.ID,
+			Status:            core.VersionStatusCompleted,
+			MainRevisionUsed:  1,
+			TemplateSetIDUsed: core.TemplateStandardCleanID,
+			SourceType:        core.SourceTypeLLMGeneration,
+		}
+		if err := baseStore.CreateVersion(ctx, v1); err != nil {
+			t.Fatalf("CreateVersion v1 failed: %v", err)
+		}
+		if err := baseStore.CompleteVersion(ctx, v1); err != nil {
+			t.Fatalf("CompleteVersion v1 failed: %v", err)
+		}
+
+		if withSecondCompleted {
+			v2 := &core.BranchVersion{
+				ID:                "ver-epoch-2-" + uuid.New().String(),
+				UserID:            userID,
+				BranchID:          b.ID,
+				Status:            core.VersionStatusCompleted,
+				MainRevisionUsed:  1,
+				TemplateSetIDUsed: core.TemplateStandardCleanID,
+				SourceType:        core.SourceTypeLLMGeneration,
+			}
+			if err := baseStore.CreateVersion(ctx, v2); err != nil {
+				t.Fatalf("CreateVersion v2 failed: %v", err)
+			}
+			if err := baseStore.CompleteVersion(ctx, v2); err != nil {
+				t.Fatalf("CompleteVersion v2 failed: %v", err)
+			}
+		}
+
+		pendingVer, err := svc.GenerateVersion(ctx, userID, b.ID)
+		if err != nil {
+			t.Fatalf("GenerateVersion failed: %v", err)
+		}
+		claimedVer, err := baseStore.ClaimNextVersion(ctx, core.ClaimJobRequest{
+			WorkerID:      "worker-1",
+			LeaseDuration: 2 * time.Minute,
+		})
+		if err != nil || claimedVer == nil || claimedVer.ID != pendingVer.ID {
+			t.Fatalf("ClaimNextVersion failed: claimed=%+v err=%v", claimedVer, err)
+		}
+
+		loadedBranch, err := svc.Branch(ctx, userID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch reload failed: %v", err)
+		}
+		return ctx, baseStore, quotaSpy, svc, loadedBranch, v1, pendingVer, claimedVer
+	}
+
+	t.Run("rollback of ActiveVersionID cancels higher-numbered processing version, releases quota, and blocks stale CompleteVersion", func(t *testing.T) {
+		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedV3 := setupTailoredWithActiveAndProcessing(t, true)
+		callCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		spyStore := &spyAbortStore{
+			fakeBranchStore: baseStore,
+			cancelCtxFn:     cancel,
+		}
+		svcWithCancel := branch.New(branch.Config{
+			Branches:       spyStore,
+			Profiles:       baseStore,
+			Presets:        baseStore,
+			Templates:      baseStore,
+			Quotas:         quotaSpy,
+			CleanupTimeout: 2 * time.Second,
+		})
+
+		b.ActiveVersionID = &v1.ID
+		updated, err := svcWithCancel.UpdateBranch(callCtx, b)
+		if err != nil {
+			t.Fatalf("UpdateBranch rollback failed: %v", err)
+		}
+		if updated.ActiveVersionID == nil || *updated.ActiveVersionID != v1.ID {
+			t.Fatalf("expected ActiveVersionID=%s, got %v", v1.ID, updated.ActiveVersionID)
+		}
+
+		reloadedV3, err := svc.Version(ctx, b.ID, pendingVer.ID)
+		if err != nil {
+			t.Fatalf("Version v3 reload failed: %v", err)
+		}
+		if reloadedV3.Status != core.VersionStatusCancelled {
+			t.Errorf("expected processing v3 to be cancelled, got %s", reloadedV3.Status)
+		}
+		if reloadedV3.ErrorMessage != "superseded by branch update" {
+			t.Errorf("expected reason 'superseded by branch update', got %q", reloadedV3.ErrorMessage)
+		}
+
+		releases := quotaSpy.Releases()
+		if len(releases) != 1 {
+			t.Fatalf("expected 1 quota release, got %d (%+v)", len(releases), releases)
+		}
+		if releases[0].reservationID != pendingVer.ReservationID || !releases[0].hasDeadline || releases[0].ctxErr != nil {
+			t.Errorf("unexpected quota release details: %+v", releases[0])
+		}
+
+		staleComplete := *claimedV3
+		staleComplete.Status = core.VersionStatusCompleted
+		if err := baseStore.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected stale CompleteVersion to return ErrConflict, got %v", err)
+		}
+
+		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch refetch failed: %v", err)
+		}
+		if afterBranch.ActiveVersionID == nil || *afterBranch.ActiveVersionID != v1.ID {
+			t.Errorf("expected ActiveVersionID to remain %s, got %v", v1.ID, afterBranch.ActiveVersionID)
+		}
+	})
+
+	t.Run("TargetRequirements change cancels processing version, releases quota, and blocks stale CompleteVersion", func(t *testing.T) {
+		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedV2 := setupTailoredWithActiveAndProcessing(t, false)
+
+		b.TargetRequirements = "Rust, Raft consensus, zero-copy networking"
+		updated, err := svc.UpdateBranch(ctx, b)
+		if err != nil {
+			t.Fatalf("UpdateBranch failed: %v", err)
+		}
+		if updated.ActiveVersionID == nil || *updated.ActiveVersionID != v1.ID {
+			t.Fatalf("expected ActiveVersionID=%s, got %v", v1.ID, updated.ActiveVersionID)
+		}
+
+		reloadedV2, err := svc.Version(ctx, b.ID, pendingVer.ID)
+		if err != nil {
+			t.Fatalf("Version v2 reload failed: %v", err)
+		}
+		if reloadedV2.Status != core.VersionStatusCancelled {
+			t.Errorf("expected processing v2 to be cancelled, got %s", reloadedV2.Status)
+		}
+
+		releases := quotaSpy.Releases()
+		if len(releases) != 1 || releases[0].reservationID != pendingVer.ReservationID {
+			t.Fatalf("expected reservation %s released, got %+v", pendingVer.ReservationID, releases)
+		}
+
+		staleComplete := *claimedV2
+		staleComplete.Status = core.VersionStatusCompleted
+		if err := baseStore.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected stale CompleteVersion to return ErrConflict, got %v", err)
+		}
+
+		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch refetch failed: %v", err)
+		}
+		if afterBranch.ActiveVersionID == nil || *afterBranch.ActiveVersionID != v1.ID {
+			t.Errorf("expected ActiveVersionID to remain %s, got %v", v1.ID, afterBranch.ActiveVersionID)
+		}
+	})
+
+	t.Run("store rejects stale processing CompleteVersion via epoch bump even before abort runs", func(t *testing.T) {
+		ctx, baseStore, _, svc, b, v1, _, claimedV3 := setupTailoredWithActiveAndProcessing(t, true)
+
+		b.ActiveVersionID = &v1.ID
+		if err := baseStore.UpdateBranch(ctx, b); err != nil {
+			t.Fatalf("direct store UpdateBranch failed: %v", err)
+		}
+
+		staleComplete := *claimedV3
+		staleComplete.Status = core.VersionStatusCompleted
+		if err := baseStore.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected ErrConflict from epoch guard while still processing, got %v", err)
+		}
+
+		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch refetch failed: %v", err)
+		}
+		if afterBranch.ActiveVersionID == nil || *afterBranch.ActiveVersionID != v1.ID {
+			t.Errorf("expected ActiveVersionID to remain %s, got %v", v1.ID, afterBranch.ActiveVersionID)
+		}
+	})
+
+	t.Run("non-config metadata update does not abort in-flight processing version", func(t *testing.T) {
+		ctx, baseStore, quotaSpy, svc, b, _, pendingVer, claimedV2 := setupTailoredWithActiveAndProcessing(t, false)
+
+		b.Name = "Renamed Metadata Only"
+		b.PinnedEntityIDs = []string{}
+		b.ExcludedEntityIDs = []string{}
+		updated, err := svc.UpdateBranch(ctx, b)
+		if err != nil {
+			t.Fatalf("UpdateBranch metadata failed: %v", err)
+		}
+		if updated.Name != "Renamed Metadata Only" {
+			t.Fatalf("expected updated Name, got %q", updated.Name)
+		}
+
+		reloadedV2, err := svc.Version(ctx, b.ID, pendingVer.ID)
+		if err != nil {
+			t.Fatalf("Version v2 reload failed: %v", err)
+		}
+		if reloadedV2.Status != core.VersionStatusProcessing {
+			t.Errorf("expected processing v2 to remain processing, got %s", reloadedV2.Status)
+		}
+		if len(quotaSpy.Releases()) != 0 {
+			t.Errorf("expected zero quota releases on metadata update, got %+v", quotaSpy.Releases())
+		}
+
+		validComplete := *claimedV2
+		validComplete.Status = core.VersionStatusCompleted
+		if err := baseStore.CompleteVersion(ctx, &validComplete); err != nil {
+			t.Fatalf("expected CompleteVersion to succeed after metadata update, got %v", err)
+		}
+
+		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch refetch failed: %v", err)
+		}
+		if afterBranch.ActiveVersionID == nil || *afterBranch.ActiveVersionID != pendingVer.ID {
+			t.Errorf("expected ActiveVersionID=%s, got %v", pendingVer.ID, afterBranch.ActiveVersionID)
+		}
+		if afterBranch.Name != "Renamed Metadata Only" {
+			t.Errorf("expected Name preserved after CompleteVersion, got %q", afterBranch.Name)
+		}
+	})
+}
+
+func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-clock-" + uuid.New().String()
+	store := newSeededBranchStore(ctx, userID)
+	fixedNow := time.Date(2024, 3, 15, 9, 30, 0, 0, time.UTC)
+
+	exp := &core.WorkExperience{
+		ID:        "exp-clock-1",
+		UserID:    userID,
+		Company:   "Acme Corp",
+		RoleTitle: "Staff Engineer",
+		StartDate: core.NewDate(2020, 1, 1),
+	}
+	if err := store.CreateExperience(ctx, exp); err != nil {
+		t.Fatalf("CreateExperience failed: %v", err)
+	}
+	fact := &core.Fact{
+		ID:        "fact-clock-1",
+		UserID:    userID,
+		OwnerID:   exp.ID,
+		OwnerType: core.OwnerTypeWorkExperience,
+		Statement: "Built deterministic Go services.",
+	}
+	if err := store.CreateFact(ctx, fact); err != nil {
+		t.Fatalf("CreateFact failed: %v", err)
+	}
+
+	svc := branch.New(branch.Config{
+		Branches:  store,
+		Profiles:  store,
+		Presets:   store,
+		Templates: store,
+		Quotas:    store,
+		Validator: provenance.New(),
+		Renderer:  renderer.New(),
+		Clock:     func() time.Time { return fixedNow },
+	})
+
+	tailored, err := svc.CreateBranch(ctx, &core.Branch{
+		ID:                 "branch-clock-" + uuid.New().String(),
+		UserID:             userID,
+		Name:               "Clock Branch",
+		TargetRequirements: "Go, PostgreSQL, deterministic services",
+		TemplateSetID:      core.TemplateStandardCleanID,
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch failed: %v", err)
+	}
+
+	v1 := &core.BranchVersion{
+		ID:                "ver-clock-1",
+		UserID:            userID,
+		BranchID:          tailored.ID,
+		Status:            core.VersionStatusCompleted,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
+		SourceType:        core.SourceTypeLLMGeneration,
+		MarkdownOutput:    "# Staff Engineer\nBuilt deterministic Go services.",
+	}
+	if err := store.CreateVersion(ctx, v1); err != nil {
+		t.Fatalf("CreateVersion failed: %v", err)
+	}
+	if err := store.CompleteVersion(ctx, v1); err != nil {
+		t.Fatalf("CompleteVersion failed: %v", err)
+	}
+
+	edited, err := svc.EditVersion(ctx, userID, tailored.ID, v1.ID, core.TailoredContent{
+		Summary: "Go systems engineer",
+		Experiences: []core.TailoredExperience{
+			{
+				SourceEntityID: exp.ID,
+				Company:        exp.Company,
+				RoleTitle:      exp.RoleTitle,
+				StartDate:      exp.StartDate,
+				Bullets: []core.TailoredBullet{
+					{
+						Text:          "Built deterministic Go services.",
+						SourceFactIDs: []string{fact.ID},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EditVersion failed: %v", err)
+	}
+	if !edited.CreatedAt.Equal(fixedNow) {
+		t.Errorf("EditVersion CreatedAt = %v, want %v", edited.CreatedAt, fixedNow)
+	}
+
+	defBranch, err := svc.Branch(ctx, userID, core.DefaultBranchID(userID))
+	if err != nil {
+		t.Fatalf("Branch default failed: %v", err)
+	}
+	defBranch.TemplateSetID = core.TemplateDetailedImmigrationCVID
+	updatedDef, err := svc.UpdateBranch(ctx, defBranch)
+	if err != nil {
+		t.Fatalf("UpdateBranch default failed: %v", err)
+	}
+	if updatedDef.ActiveVersionID == nil {
+		t.Fatalf("expected ActiveVersionID on re-rendered default branch")
+	}
+	defVer, err := svc.Version(ctx, defBranch.ID, *updatedDef.ActiveVersionID)
+	if err != nil {
+		t.Fatalf("Version default failed: %v", err)
+	}
+	if !defVer.CreatedAt.Equal(fixedNow) {
+		t.Errorf("default branch re-render CreatedAt = %v, want %v", defVer.CreatedAt, fixedNow)
+	}
+
+	score, err := svc.SimulateATS(ctx, userID, tailored.ID, &core.ATSSimulationOptions{
+		VersionID: edited.ID,
+	})
+	if err != nil {
+		t.Fatalf("SimulateATS deterministic failed: %v", err)
+	}
+	if score.EvaluatedAt == nil || !score.EvaluatedAt.Equal(fixedNow) {
+		t.Errorf("SimulateATS deterministic EvaluatedAt = %v, want %v", score.EvaluatedAt, fixedNow)
+	}
+
+	svcWithGen := branch.New(branch.Config{
+		Branches:  store,
+		Profiles:  store,
+		Templates: store,
+		Quotas:    store,
+		Renderer:  renderer.New(),
+		Generator: &stubATSSimulator{},
+		Clock:     func() time.Time { return fixedNow },
+	})
+	genScore, err := svcWithGen.SimulateATS(ctx, userID, tailored.ID, &core.ATSSimulationOptions{
+		VersionID: v1.ID,
+	})
+	if err != nil {
+		t.Fatalf("SimulateATS generator failed: %v", err)
+	}
+	if genScore.EvaluatedAt == nil || !genScore.EvaluatedAt.Equal(fixedNow) {
+		t.Errorf("SimulateATS generator EvaluatedAt = %v, want %v", genScore.EvaluatedAt, fixedNow)
+	}
+}
+
+type permissiveTenantStore struct {
+	*fakeBranchStore
+}
+
+func (s *permissiveTenantStore) Branch(ctx context.Context, _ string, id string) (*core.Branch, error) {
+	return s.fakeBranchStore.Branch(ctx, "", id)
+}
+
+func (s *permissiveTenantStore) ListBranches(ctx context.Context, _ string) ([]core.Branch, error) {
+	s.mu.Lock()
+	var ids []string
+	for _, b := range s.branches {
+		ids = append(ids, b.ID)
+	}
+	s.mu.Unlock()
+
+	var all []core.Branch
+	for _, id := range ids {
+		b, err := s.fakeBranchStore.Branch(ctx, "", id)
+		if err == nil {
+			all = append(all, *b)
+		}
+	}
+	return all, nil
+}
+
+func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t *testing.T) {
+	setupVictim := func(t *testing.T, withProfiles bool, permissive bool) (
+		context.Context,
+		*fakeBranchStore,
+		*spyQuotaRepo,
+		*stubNotifier,
+		*branch.Service,
+		*core.Branch,
+		*core.BranchVersion,
+	) {
+		t.Helper()
+		ctx := context.Background()
+		victim := "victim-user"
+		store := newSeededBranchStore(ctx, victim)
+		if _, err := store.IncrementMainRevision(ctx, victim); err != nil {
+			t.Fatalf("IncrementMainRevision: %v", err)
+		}
+		victimBranch := &core.Branch{
+			ID:                 "br-victim-gen",
+			UserID:             victim,
+			Name:               "Victim Branch",
+			TargetRequirements: "Go, distributed systems",
+			TemplateSetID:      core.TemplateStandardCleanID,
+		}
+		if err := store.CreateBranch(ctx, victimBranch); err != nil {
+			t.Fatalf("CreateBranch victim: %v", err)
+		}
+		victimPending := &core.BranchVersion{
+			ID:            "ver-victim-pending",
+			UserID:        victim,
+			BranchID:      victimBranch.ID,
+			Status:        core.VersionStatusPending,
+			ReservationID: "res-victim-existing",
+		}
+		if err := store.CreateVersion(ctx, victimPending); err != nil {
+			t.Fatalf("CreateVersion victim pending: %v", err)
+		}
+
+		quotaSpy := &spyQuotaRepo{}
+		notifier := &stubNotifier{}
+		var branchStore branch.Store = store
+		if permissive {
+			branchStore = &permissiveTenantStore{fakeBranchStore: store}
+		}
+		var profiles branch.ProfileReader
+		if withProfiles {
+			profiles = store
+		}
+		svc := branch.New(branch.Config{
+			Branches:    branchStore,
+			Profiles:    profiles,
+			Presets:     store,
+			Templates:   store,
+			Quotas:      quotaSpy,
+			JobNotifier: notifier,
+		})
+		return ctx, store, quotaSpy, notifier, svc, victimBranch, victimPending
+	}
+
+	for _, invalidUser := range []struct {
+		label  string
+		userID string
+	}{
+		{label: "empty userID", userID: ""},
+		{label: "whitespace userID", userID: "   "},
+	} {
+		for _, withProfiles := range []bool{true, false} {
+			profileLabel := "profiles_nil"
+			if withProfiles {
+				profileLabel = "profiles_configured"
+			}
+
+			t.Run("GenerateVersion/"+invalidUser.label+"/"+profileLabel, func(t *testing.T) {
+				ctx, _, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withProfiles, false)
+
+				_, err := svc.GenerateVersion(ctx, invalidUser.userID, victimBranch.ID)
+				if !errors.Is(err, core.ErrValidation) {
+					t.Fatalf("expected ErrValidation, got %v", err)
+				}
+
+				quotaSpy.mu.Lock()
+				resCount := len(quotaSpy.reservations)
+				relCount := len(quotaSpy.releases)
+				quotaSpy.mu.Unlock()
+				if resCount != 0 || relCount != 0 {
+					t.Errorf("expected zero quota reservations/releases, got reservations=%d releases=%d", resCount, relCount)
+				}
+				if notifier.Count() != 0 {
+					t.Errorf("expected zero worker notifications, got %d", notifier.Count())
+				}
+				gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+				if err != nil || gotPending.Status != core.VersionStatusPending {
+					t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+				}
+			})
+
+			t.Run("SyncBranches_explicit/"+invalidUser.label+"/"+profileLabel, func(t *testing.T) {
+				ctx, _, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withProfiles, false)
+
+				ids, err := svc.SyncBranches(ctx, invalidUser.userID, []string{victimBranch.ID})
+				if !errors.Is(err, core.ErrValidation) {
+					t.Fatalf("expected ErrValidation, got %v", err)
+				}
+				if len(ids) != 0 {
+					t.Errorf("expected zero synced IDs, got %v", ids)
+				}
+
+				quotaSpy.mu.Lock()
+				resCount := len(quotaSpy.reservations)
+				relCount := len(quotaSpy.releases)
+				quotaSpy.mu.Unlock()
+				if resCount != 0 || relCount != 0 {
+					t.Errorf("expected zero quota reservations/releases, got reservations=%d releases=%d", resCount, relCount)
+				}
+				if notifier.Count() != 0 {
+					t.Errorf("expected zero worker notifications, got %d", notifier.Count())
+				}
+				gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+				if err != nil || gotPending.Status != core.VersionStatusPending {
+					t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+				}
+			})
+
+			t.Run("SyncBranches_allStale/"+invalidUser.label+"/"+profileLabel, func(t *testing.T) {
+				ctx, _, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withProfiles, false)
+
+				ids, err := svc.SyncBranches(ctx, invalidUser.userID, nil)
+				if !errors.Is(err, core.ErrValidation) {
+					t.Fatalf("expected ErrValidation, got %v", err)
+				}
+				if len(ids) != 0 {
+					t.Errorf("expected zero synced IDs, got %v", ids)
+				}
+				quotaSpy.mu.Lock()
+				resCount := len(quotaSpy.reservations)
+				quotaSpy.mu.Unlock()
+				if resCount != 0 || notifier.Count() != 0 {
+					t.Errorf("expected zero reservations and notifications, got reservations=%d notifications=%d", resCount, notifier.Count())
+				}
+				gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+				if err != nil || gotPending.Status != core.VersionStatusPending {
+					t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+				}
+			})
+		}
+	}
+
+	t.Run("permissive store foreign branch rejected in GenerateVersion and SyncBranches", func(t *testing.T) {
+		ctx, store, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, false, true)
+		attacker := "attacker-user"
+		if err := store.UpsertProfile(ctx, &core.Profile{ID: "prof-att", UserID: attacker, FullName: "Attacker", MainRevision: 1}); err != nil {
+			t.Fatalf("UpsertProfile attacker: %v", err)
+		}
+
+		if _, err := svc.GenerateVersion(ctx, attacker, victimBranch.ID); !errors.Is(err, core.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for foreign GenerateVersion, got %v", err)
+		}
+		if _, err := svc.SyncBranches(ctx, attacker, []string{victimBranch.ID}); !errors.Is(err, core.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for foreign SyncBranches explicit, got %v", err)
+		}
+		ids, err := svc.SyncBranches(ctx, attacker, nil)
+		if err != nil {
+			t.Fatalf("unexpected error for empty stale list: %v", err)
+		}
+		if len(ids) != 0 {
+			t.Errorf("expected zero synced IDs when only foreign stale branch exists, got %v", ids)
+		}
+
+		quotaSpy.mu.Lock()
+		resCount := len(quotaSpy.reservations)
+		quotaSpy.mu.Unlock()
+		if resCount != 0 || notifier.Count() != 0 {
+			t.Errorf("expected zero reservations and notifications, got reservations=%d notifications=%d", resCount, notifier.Count())
+		}
+		gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+		if err != nil || gotPending.Status != core.VersionStatusPending {
+			t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+		}
+	})
+}
+
+func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testing.T) {
+	ctx := context.Background()
+	owner := "tenant-owner"
+	baseStore := newSeededBranchStore(ctx, owner)
+	permStore := &permissiveTenantStore{fakeBranchStore: baseStore}
+	quotaSpy := &spyQuotaRepo{}
+
+	exp := &core.WorkExperience{
+		ID:        "exp-tenant-1",
+		UserID:    owner,
+		Company:   "Acme",
+		RoleTitle: "Engineer",
+		StartDate: core.NewDate(2020, 1, 1),
+	}
+	if err := baseStore.CreateExperience(ctx, exp); err != nil {
+		t.Fatalf("CreateExperience: %v", err)
+	}
+	fact := &core.Fact{
+		ID:        "fact-tenant-1",
+		UserID:    owner,
+		OwnerID:   exp.ID,
+		OwnerType: core.OwnerTypeWorkExperience,
+		Statement: "Shipped core services.",
+	}
+	if err := baseStore.CreateFact(ctx, fact); err != nil {
+		t.Fatalf("CreateFact: %v", err)
+	}
+
+	victimBranch := &core.Branch{
+		ID:                 "br-tenant-victim",
+		UserID:             owner,
+		Name:               "Victim Tailored",
+		TargetRequirements: "Go, PostgreSQL",
+		TemplateSetID:      core.TemplateStandardCleanID,
+	}
+	if err := baseStore.CreateBranch(ctx, victimBranch); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	completedVer := &core.BranchVersion{
+		ID:               "ver-tenant-done",
+		UserID:           owner,
+		BranchID:         victimBranch.ID,
+		Status:           core.VersionStatusCompleted,
+		MainRevisionUsed: 1,
+		MarkdownOutput:   "# Resume\nShipped core services.",
+	}
+	if err := baseStore.CreateVersion(ctx, completedVer); err != nil {
+		t.Fatalf("CreateVersion completed: %v", err)
+	}
+	if err := baseStore.CompleteVersion(ctx, completedVer); err != nil {
+		t.Fatalf("CompleteVersion: %v", err)
+	}
+	pendingVer := &core.BranchVersion{
+		ID:            "ver-tenant-pending",
+		UserID:        owner,
+		BranchID:      victimBranch.ID,
+		Status:        core.VersionStatusPending,
+		ReservationID: "res-tenant-pending",
+	}
+	if err := baseStore.CreateVersion(ctx, pendingVer); err != nil {
+		t.Fatalf("CreateVersion pending: %v", err)
+	}
+
+	svc := branch.New(branch.Config{
+		Branches:       permStore,
+		Profiles:       baseStore,
+		Presets:        baseStore,
+		Templates:      baseStore,
+		Quotas:         quotaSpy,
+		Generator:      &stubATSSimulator{stubGenerator: stubGenerator{gapReport: &core.GapReport{OverallMatchSummary: "ok"}}},
+		PromptCompiler: &fakePromptCompiler{},
+	})
+
+	editPayload := core.TailoredContent{Summary: "Updated"}
+
+	for _, badUser := range []string{"", "   "} {
+		cases := []struct {
+			name string
+			call func() error
+		}{
+			{name: "ListBranches", call: func() error { _, err := svc.ListBranches(ctx, badUser, false); return err }},
+			{name: "Branch", call: func() error { _, err := svc.Branch(ctx, badUser, victimBranch.ID); return err }},
+			{name: "CreateBranch", call: func() error {
+				_, err := svc.CreateBranch(ctx, &core.Branch{UserID: badUser, Name: "New", TemplateSetID: core.TemplateStandardCleanID})
+				return err
+			}},
+			{name: "UpdateBranch", call: func() error {
+				_, err := svc.UpdateBranch(ctx, &core.Branch{ID: victimBranch.ID, UserID: badUser, Name: "Hack", TemplateSetID: core.TemplateStandardCleanID})
+				return err
+			}},
+			{name: "DeleteBranch", call: func() error { return svc.DeleteBranch(ctx, badUser, victimBranch.ID) }},
+			{name: "GenerateVersion", call: func() error { _, err := svc.GenerateVersion(ctx, badUser, victimBranch.ID); return err }},
+			{name: "SyncBranches", call: func() error { _, err := svc.SyncBranches(ctx, badUser, []string{victimBranch.ID}); return err }},
+			{name: "CancelVersion", call: func() error {
+				_, err := svc.CancelVersion(ctx, badUser, victimBranch.ID, pendingVer.ID)
+				return err
+			}},
+			{name: "EditVersion", call: func() error {
+				_, err := svc.EditVersion(ctx, badUser, victimBranch.ID, completedVer.ID, editPayload)
+				return err
+			}},
+			{name: "AnalyzeGaps", call: func() error { _, err := svc.AnalyzeGaps(ctx, badUser, victimBranch.ID); return err }},
+			{name: "SimulateATS", call: func() error {
+				_, err := svc.SimulateATS(ctx, badUser, victimBranch.ID, &core.ATSSimulationOptions{VersionID: completedVer.ID})
+				return err
+			}},
+			{name: "PromptPreview", call: func() error {
+				_, err := svc.PromptPreview(ctx, badUser, victimBranch.ID, nil)
+				return err
+			}},
+		}
+		for _, tc := range cases {
+			t.Run(fmt.Sprintf("%s/user=%q", tc.name, badUser), func(t *testing.T) {
+				if err := tc.call(); !errors.Is(err, core.ErrValidation) {
+					t.Errorf("expected ErrValidation for %s with user %q, got %v", tc.name, badUser, err)
+				}
+			})
+		}
+	}
+
+	t.Run("nil branch rejected by CreateBranch and UpdateBranch", func(t *testing.T) {
+		if _, err := svc.CreateBranch(ctx, nil); !errors.Is(err, core.ErrValidation) {
+			t.Errorf("CreateBranch(nil) expected ErrValidation, got %v", err)
+		}
+		if _, err := svc.UpdateBranch(ctx, nil); !errors.Is(err, core.ErrValidation) {
+			t.Errorf("UpdateBranch(nil) expected ErrValidation, got %v", err)
+		}
+	})
+
+	attacker := "attacker-tenant"
+	foreignCases := []struct {
+		name string
+		call func() error
+	}{
+		{name: "Branch", call: func() error { _, err := svc.Branch(ctx, attacker, victimBranch.ID); return err }},
+		{name: "UpdateBranch", call: func() error {
+			_, err := svc.UpdateBranch(ctx, &core.Branch{ID: victimBranch.ID, UserID: attacker, Name: "Hijack", TemplateSetID: core.TemplateStandardCleanID})
+			return err
+		}},
+		{name: "DeleteBranch", call: func() error { return svc.DeleteBranch(ctx, attacker, victimBranch.ID) }},
+		{name: "GenerateVersion", call: func() error { _, err := svc.GenerateVersion(ctx, attacker, victimBranch.ID); return err }},
+		{name: "SyncBranches", call: func() error { _, err := svc.SyncBranches(ctx, attacker, []string{victimBranch.ID}); return err }},
+		{name: "CancelVersion", call: func() error {
+			_, err := svc.CancelVersion(ctx, attacker, victimBranch.ID, pendingVer.ID)
+			return err
+		}},
+		{name: "EditVersion", call: func() error {
+			_, err := svc.EditVersion(ctx, attacker, victimBranch.ID, completedVer.ID, editPayload)
+			return err
+		}},
+		{name: "AnalyzeGaps", call: func() error { _, err := svc.AnalyzeGaps(ctx, attacker, victimBranch.ID); return err }},
+		{name: "SimulateATS", call: func() error {
+			_, err := svc.SimulateATS(ctx, attacker, victimBranch.ID, &core.ATSSimulationOptions{VersionID: completedVer.ID})
+			return err
+		}},
+		{name: "PromptPreview", call: func() error {
+			_, err := svc.PromptPreview(ctx, attacker, victimBranch.ID, nil)
+			return err
+		}},
+	}
+	for _, tc := range foreignCases {
+		t.Run("foreign_branch/"+tc.name, func(t *testing.T) {
+			if err := tc.call(); !errors.Is(err, core.ErrNotFound) {
+				t.Errorf("expected ErrNotFound for %s on foreign branch, got %v", tc.name, err)
+			}
+		})
+	}
+
+	quotaSpy.mu.Lock()
+	resCount := len(quotaSpy.reservations)
+	quotaSpy.mu.Unlock()
+	if resCount != 0 {
+		t.Errorf("expected zero quota reservations for invalid/foreign calls, got %d", resCount)
+	}
+	gotPending, err := svc.Version(ctx, victimBranch.ID, pendingVer.ID)
+	if err != nil || gotPending.Status != core.VersionStatusPending {
+		t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
+	}
+	gotBranch, err := svc.Branch(ctx, owner, victimBranch.ID)
+	if err != nil || gotBranch.Name != "Victim Tailored" {
+		t.Errorf("expected victim branch untouched, got %+v err=%v", gotBranch, err)
+	}
 }

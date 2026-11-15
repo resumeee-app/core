@@ -90,21 +90,23 @@ func (q *TenantQuota) ReleaseReservation(estimatedTokens int) {
 // LLMUsageRecord records an individual LLM operation reservation, provider telemetry,
 // token metrics, and terminal status.
 type LLMUsageRecord struct {
-	ID               string            `json:"id"`
-	UserID           string            `json:"user_id"`
-	Operation        LLMOperationType  `json:"operation"`
-	Provider         string            `json:"provider,omitempty"`
-	Model            string            `json:"model,omitempty"`
-	StatusCode       int               `json:"status_code,omitempty"`
-	Latency          time.Duration     `json:"latency,omitempty"`
-	EstimatedTokens  int               `json:"estimated_tokens"`
-	PromptTokens     int               `json:"prompt_tokens"`
-	CompletionTokens int               `json:"completion_tokens"`
-	TotalTokens      int               `json:"total_tokens"`
-	Status           ReservationStatus `json:"status"`
-	ErrorMessage     string            `json:"error_message,omitempty"`
-	CreatedAt        time.Time         `json:"created_at"`
-	CommittedAt      *time.Time        `json:"committed_at,omitempty"`
+	ID                 string            `json:"id"`
+	UserID             string            `json:"user_id"`
+	Operation          LLMOperationType  `json:"operation"`
+	Provider           string            `json:"provider,omitempty"`
+	Model              string            `json:"model,omitempty"`
+	StatusCode         int               `json:"status_code,omitempty"`
+	Latency            time.Duration     `json:"latency,omitempty"`
+	EstimatedTokens    int               `json:"estimated_tokens"`
+	PromptTokens       int               `json:"prompt_tokens"`
+	CompletionTokens   int               `json:"completion_tokens"`
+	TotalTokens        int               `json:"total_tokens"`
+	Status             ReservationStatus `json:"status"`
+	ErrorMessage       string            `json:"error_message,omitempty"`
+	DailyWindowStart   time.Time         `json:"daily_window_start"`
+	MonthlyWindowStart time.Time         `json:"monthly_window_start"`
+	CreatedAt          time.Time         `json:"created_at"`
+	CommittedAt        *time.Time        `json:"committed_at,omitempty"`
 }
 
 // QuotaStore provides atomic accounting and persistence for tenant LLM quotas and usage records.

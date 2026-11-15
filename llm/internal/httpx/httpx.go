@@ -182,20 +182,7 @@ func WrapBoundedClientWithLimit(client *http.Client, limitBytes int64) *http.Cli
 // CheckStatusError maps non-200 upstream HTTP status codes to canonical domain llm sentinel errors
 // without embedding raw upstream response body payloads into returned error messages.
 func CheckStatusError(provider string, statusCode int, body []byte) error {
-	switch {
-	case statusCode == http.StatusOK:
-		return nil
-	case statusCode == http.StatusBadRequest:
-		return fmt.Errorf("%w: %s api returned status 400 (%d bytes)", llm.ErrBadRequest, provider, len(body))
-	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
-		return fmt.Errorf("%w: %s api returned status %d (%d bytes)", llm.ErrUnauthorized, provider, statusCode, len(body))
-	case statusCode == http.StatusTooManyRequests:
-		return fmt.Errorf("%w: %s api returned status 429 (%d bytes)", llm.ErrRateLimited, provider, len(body))
-	case statusCode >= http.StatusInternalServerError:
-		return fmt.Errorf("%w: %s api returned status %d (%d bytes)", llm.ErrUpstream, provider, statusCode, len(body))
-	default:
-		return fmt.Errorf("%s api returned status %d (%d bytes)", provider, statusCode, len(body))
-	}
+	return llm.MapHTTPStatusError(provider, statusCode, string(body))
 }
 
 // PostJSON marshals payload as JSON, sends an HTTP POST to url with headers, reads a bounded

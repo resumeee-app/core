@@ -41,6 +41,21 @@ func TestTransportUtilities_BoundsAndStatusError(t *testing.T) {
 	if err := httpx.CheckStatusError("openai", http.StatusTooManyRequests, []byte("rate")); !errors.Is(err, llm.ErrRateLimited) {
 		t.Errorf("expected ErrRateLimited, got %v", err)
 	}
+	if err := httpx.CheckStatusError("openai", http.StatusTooManyRequests, []byte(`{"error":{"code":"insufficient_quota","message":"You exceeded your current quota, please check your plan and billing details."}}`)); !errors.Is(err, llm.ErrUpstreamQuota) {
+		t.Errorf("expected ErrUpstreamQuota for OpenAI insufficient_quota 429, got %v", err)
+	}
+	if err := httpx.CheckStatusError("anthropic", http.StatusBadRequest, []byte(`{"error":{"message":"Your credit balance is too low to access the Anthropic API."}}`)); !errors.Is(err, llm.ErrUpstreamQuota) {
+		t.Errorf("expected ErrUpstreamQuota for Anthropic credit balance low, got %v", err)
+	}
+	if err := httpx.CheckStatusError("openai", http.StatusPaymentRequired, []byte("payment required")); !errors.Is(err, llm.ErrUpstreamQuota) {
+		t.Errorf("expected ErrUpstreamQuota for 402 Payment Required, got %v", err)
+	}
+	if err := httpx.CheckStatusError("openai", http.StatusUnprocessableEntity, []byte("invalid model field")); !errors.Is(err, llm.ErrBadRequest) {
+		t.Errorf("expected ErrBadRequest for 422, got %v", err)
+	}
+	if err := httpx.CheckStatusError("openai", http.StatusNotFound, []byte("model not found")); !errors.Is(err, llm.ErrBadRequest) {
+		t.Errorf("expected ErrBadRequest for 404, got %v", err)
+	}
 	if err := httpx.CheckStatusError("openai", http.StatusBadGateway, []byte("502")); !errors.Is(err, llm.ErrUpstream) {
 		t.Errorf("expected ErrUpstream, got %v", err)
 	}

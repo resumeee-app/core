@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -99,6 +100,35 @@ func (b Branch) PresetName() string {
 	return ""
 }
 
+// equalOptionalString reports whether two optional string pointers are both nil or point to equal values.
+func equalOptionalString(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// GenerationOrActiveChanged reports whether other alters b's active version selection or generation-defining tailoring configuration.
+func (b *Branch) GenerationOrActiveChanged(other *Branch) bool {
+	if b == nil || other == nil {
+		return b != other
+	}
+	return !equalOptionalString(b.ActiveVersionID, other.ActiveVersionID) ||
+		b.TargetRole != other.TargetRole ||
+		b.TargetCompany != other.TargetCompany ||
+		b.TargetRequirements != other.TargetRequirements ||
+		b.CustomDirectives != other.CustomDirectives ||
+		b.BranchInstructions != other.BranchInstructions ||
+		!equalOptionalString(b.TailoringStrategyID, other.TailoringStrategyID) ||
+		!equalOptionalString(b.PresetID, other.PresetID) ||
+		b.TemplateSetID != other.TemplateSetID ||
+		b.ProviderOverride != other.ProviderOverride ||
+		b.ModelOverride != other.ModelOverride ||
+		b.ReasoningLevel != other.ReasoningLevel ||
+		!slices.Equal(b.PinnedEntityIDs, other.PinnedEntityIDs) ||
+		!slices.Equal(b.ExcludedEntityIDs, other.ExcludedEntityIDs)
+}
+
 // VersionStatus represents the lifecycle state of a BranchVersion.
 type VersionStatus string
 
@@ -118,7 +148,25 @@ const (
 
 	// VersionStatusFailed indicates generation terminated with an error.
 	VersionStatusFailed VersionStatus = "failed"
+
+	// VersionStatusCancelled indicates generation was cancelled before execution.
+	VersionStatusCancelled VersionStatus = "cancelled"
 )
+
+// IsTerminal reports whether s represents a finished lifecycle state that cannot transition further.
+func (s VersionStatus) IsTerminal() bool {
+	switch s {
+	case VersionStatusCompleted, VersionStatusCompletedWithWarnings, VersionStatusFailed, VersionStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsCompleted reports whether s represents a successful generation output state.
+func (s VersionStatus) IsCompleted() bool {
+	return s == VersionStatusCompleted || s == VersionStatusCompletedWithWarnings
+}
 
 // BranchVersion is an immutable snapshot tracking its generation lifecycle and outputs.
 type BranchVersion struct {
@@ -135,6 +183,7 @@ type BranchVersion struct {
 	ModelUsed          string           `json:"model_used"`
 	SourceType         SourceType       `json:"source_type"` // "llm_generation" or "manual_edit"
 	ParentVersionID    *string          `json:"parent_version_id,omitempty"`
+	ReservationID      string           `json:"reservation_id,omitempty"`
 	TailoredContent    *TailoredContent `json:"tailored_content,omitempty"`
 	GapReport          *GapReport       `json:"gap_report,omitempty"`
 	ATSScore           *ATSScore        `json:"ats_score,omitempty"`
@@ -143,7 +192,14 @@ type BranchVersion struct {
 	HTMLOutput         string           `json:"html_output,omitempty"`
 	MarkdownOutput     string           `json:"markdown_output,omitempty"`
 	PlainTextOutput    string           `json:"plain_text_output,omitempty"`
+	AttemptCount       int              `json:"attempt_count,omitempty"`
+	ClaimedBy          string           `json:"claimed_by,omitempty"`
+	ClaimedAt          *time.Time       `json:"claimed_at,omitempty"`
+	LeaseExpiresAt     *time.Time       `json:"lease_expires_at,omitempty"`
+	NextRetryAt        *time.Time       `json:"next_retry_at,omitempty"`
+	ExpiresAt          *time.Time       `json:"expires_at,omitempty"`
 	CreatedAt          time.Time        `json:"created_at"`
+	UpdatedAt          time.Time        `json:"updated_at"`
 	CompletedAt        *time.Time       `json:"completed_at,omitempty"`
 }
 
@@ -229,7 +285,22 @@ type BranchStore interface {
 	DeleteBranch(ctx context.Context, userID, id string) error
 
 	// Versioning
+	// Lease-mutating operations (RenewVersionLease, RequeueVersionForRetry, FailClaimedVersion,
+	// and claimed CompleteVersion) must return ErrNotFound when the version is missing and
+	// ErrLeaseExpired (wrapping ErrConflict) or ErrConflict when the version is no longer actively
+	// processing under the expected ClaimedBy worker.
 	CreateVersion(ctx context.Context, version *BranchVersion) error
+	SubmitPendingVersion(ctx context.Context, version *BranchVersion, opts PendingJobOptions) ([]ReleasedReservation, error)
+	SupersedePendingVersions(ctx context.Context, branchID, reason string) ([]ReleasedReservation, error)
+	AbortBranchVersions(ctx context.Context, branchID, reason string) ([]ReleasedReservation, error)
+	CancelVersion(ctx context.Context, userID, branchID, versionID, reason string) (*BranchVersion, error)
+	ClaimNextVersion(ctx context.Context, req ClaimJobRequest) (*BranchVersion, error)
+	RenewVersionLease(ctx context.Context, versionID, claimedBy string, leaseExpiresAt time.Time) error
+	RequeueVersionForRetry(ctx context.Context, versionID, claimedBy string, nextRetryAt time.Time, errMsg string) error
+	FailClaimedVersion(ctx context.Context, versionID, claimedBy, errMsg string) error
+	ExpirePendingVersions(ctx context.Context, now time.Time, reason string) ([]ReleasedReservation, error)
+	FailExpiredVersionLeases(ctx context.Context, now time.Time, reason string) ([]ReleasedReservation, error)
+	RecoverInterruptedVersions(ctx context.Context, reason string) ([]ReleasedReservation, error)
 	Version(ctx context.Context, branchID, versionID string) (*BranchVersion, error)
 	VersionByNumber(ctx context.Context, branchID string, versionNumber int) (*BranchVersion, error)
 	VersionsByIDs(ctx context.Context, versionIDs []string) ([]BranchVersion, error)

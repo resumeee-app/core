@@ -18,55 +18,69 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// Default tenant quota ceilings applied when Config limits are unset.
+// Default tenant quota ceilings and asynchronous job admission bounds applied when Config limits are unset.
 const (
 	// defaultDailyRequestLimit caps daily LLM requests per user when Config.DailyRequestLimit is zero or negative.
 	defaultDailyRequestLimit = 50
 	// defaultMonthlyTokenLimit caps monthly LLM tokens per user when Config.MonthlyTokenLimit is zero or negative.
 	defaultMonthlyTokenLimit = 1000000
+	// defaultCleanupTimeout bounds detached quota-release contexts when Config.CleanupTimeout is zero or negative.
+	defaultCleanupTimeout = 10 * time.Second
 )
 
 // Config defines the dependencies required to construct a branch Service.
 type Config struct {
-	Branches          Store
-	Profiles          ProfileReader
-	Presets           PresetReader
-	Templates         TemplateReader
-	Quotas            QuotaManager
-	JobEnqueuer       JobEnqueuer
-	Validator         ProvenanceValidator
-	Renderer          TemplateRenderer
-	Generator         Generator
-	PromptCompiler    PromptCompiler
-	Logger            *slog.Logger
-	DailyRequestLimit int
-	MonthlyTokenLimit int
+	Branches            Store
+	Profiles            ProfileReader
+	Presets             PresetReader
+	Templates           TemplateReader
+	Quotas              QuotaManager
+	JobEnqueuer         JobEnqueuer
+	JobNotifier         core.JobNotifier
+	Validator           ProvenanceValidator
+	Renderer            TemplateRenderer
+	Generator           Generator
+	PromptCompiler      PromptCompiler
+	Logger              *slog.Logger
+	DailyRequestLimit   int
+	MonthlyTokenLimit   int
+	MaxPendingPerTenant int
+	JobTTL              time.Duration
+	CleanupTimeout      time.Duration
+	Clock               func() time.Time
 }
 
 // Service manages resume branch lifecycles, version generation, gap analysis, and ATS scoring.
 type Service struct {
-	branches          Store
-	profiles          ProfileReader
-	presets           PresetReader
-	templates         TemplateReader
-	quotas            QuotaManager
-	jobEnqueuer       JobEnqueuer
-	validator         ProvenanceValidator
-	renderer          TemplateRenderer
-	generator         Generator
-	promptCompiler    PromptCompiler
-	logger            *slog.Logger
-	dailyRequestLimit int
-	monthlyTokenLimit int
-	atsInFlightMu     sync.Mutex
-	atsInFlight       map[string]bool
+	branches            Store
+	profiles            ProfileReader
+	presets             PresetReader
+	templates           TemplateReader
+	quotas              QuotaManager
+	jobEnqueuer         JobEnqueuer
+	jobNotifier         core.JobNotifier
+	validator           ProvenanceValidator
+	renderer            TemplateRenderer
+	generator           Generator
+	promptCompiler      PromptCompiler
+	logger              *slog.Logger
+	dailyRequestLimit   int
+	monthlyTokenLimit   int
+	maxPendingPerTenant int
+	jobTTL              time.Duration
+	cleanupTimeout      time.Duration
+	clock               func() time.Time
+	atsInFlightMu       sync.Mutex
+	atsInFlight         map[string]bool
 }
 
 // New constructs a branch Service with the supplied configuration and dependencies.
@@ -79,22 +93,133 @@ func New(cfg Config) *Service {
 	if monthlyLimit <= 0 {
 		monthlyLimit = defaultMonthlyTokenLimit
 	}
+	maxPending := cfg.MaxPendingPerTenant
+	if maxPending <= 0 {
+		maxPending = core.DefaultMaxPendingPerTenant
+	}
+	jobTTL := cfg.JobTTL
+	if jobTTL <= 0 {
+		jobTTL = core.DefaultJobTTL
+	}
+	cleanupTimeout := cfg.CleanupTimeout
+	if cleanupTimeout <= 0 {
+		cleanupTimeout = defaultCleanupTimeout
+	}
+	clock := cfg.Clock
+	if clock == nil {
+		clock = time.Now
+	}
 
 	return &Service{
-		branches:          cfg.Branches,
-		profiles:          cfg.Profiles,
-		presets:           cfg.Presets,
-		templates:         cfg.Templates,
-		quotas:            cfg.Quotas,
-		jobEnqueuer:       cfg.JobEnqueuer,
-		validator:         cfg.Validator,
-		renderer:          cfg.Renderer,
-		generator:         cfg.Generator,
-		promptCompiler:    cfg.PromptCompiler,
-		logger:            cfg.Logger,
-		dailyRequestLimit: dailyLimit,
-		monthlyTokenLimit: monthlyLimit,
-		atsInFlight:       make(map[string]bool),
+		branches:            cfg.Branches,
+		profiles:            cfg.Profiles,
+		presets:             cfg.Presets,
+		templates:           cfg.Templates,
+		quotas:              cfg.Quotas,
+		jobEnqueuer:         cfg.JobEnqueuer,
+		jobNotifier:         cfg.JobNotifier,
+		validator:           cfg.Validator,
+		renderer:            cfg.Renderer,
+		generator:           cfg.Generator,
+		promptCompiler:      cfg.PromptCompiler,
+		logger:              cfg.Logger,
+		dailyRequestLimit:   dailyLimit,
+		monthlyTokenLimit:   monthlyLimit,
+		maxPendingPerTenant: maxPending,
+		jobTTL:              jobTTL,
+		cleanupTimeout:      cleanupTimeout,
+		clock:               clock,
+		atsInFlight:         make(map[string]bool),
+	}
+}
+
+// now returns the current UTC timestamp from the configured service clock.
+func (s *Service) now() time.Time {
+	if s.clock != nil {
+		return s.clock().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// releaseReservationWithDetachedContext refunds a single quota reservation using a bounded detached context
+// so caller context cancellation cannot leak reserved tenant quota.
+func (s *Service) releaseReservationWithDetachedContext(reservationID, reason string) {
+	if s.quotas == nil || reservationID == "" {
+		return
+	}
+	timeout := s.cleanupTimeout
+	if timeout <= 0 {
+		timeout = defaultCleanupTimeout
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := s.quotas.ReleaseQuota(cleanupCtx, reservationID, reason, core.LLMTelemetry{}); err != nil && s.logger != nil {
+		s.logger.Warn("failed to release quota reservation", "reservation_id", reservationID, "reason", reason, "err", err)
+	}
+}
+
+// releaseReservationsWithDetachedContext refunds quota reservations for superseded, aborted,
+// expired, or cancelled versions using bounded detached contexts.
+func (s *Service) releaseReservationsWithDetachedContext(released []core.ReleasedReservation) {
+	if s.quotas == nil || len(released) == 0 {
+		return
+	}
+	for _, r := range released {
+		if r.ReservationID == "" {
+			continue
+		}
+		s.releaseReservationWithDetachedContext(r.ReservationID, r.Reason)
+	}
+}
+
+// supersedePendingVersions cancels queued pending versions on branchID and releases their quota reservations.
+func (s *Service) supersedePendingVersions(ctx context.Context, branchID, reason string) {
+	released, err := s.branches.SupersedePendingVersions(ctx, branchID, reason)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("failed to supersede pending versions", "branch_id", branchID, "reason", reason, "err", err)
+		}
+		return
+	}
+	s.releaseReservationsWithDetachedContext(released)
+}
+
+// abortBranchVersions cancels pending and processing versions on branchID and releases their quota reservations.
+func (s *Service) abortBranchVersions(ctx context.Context, branchID, reason string) error {
+	released, err := s.branches.AbortBranchVersions(ctx, branchID, reason)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("failed to abort branch versions", "branch_id", branchID, "reason", reason, "err", err)
+		}
+		return err
+	}
+	s.releaseReservationsWithDetachedContext(released)
+	return nil
+}
+
+// requireUserID ensures tenant-scoped branch operations receive a non-empty user identifier.
+func requireUserID(userID string) error {
+	if strings.TrimSpace(userID) == "" {
+		return fmt.Errorf("%w: user id is required", core.ErrValidation)
+	}
+	return nil
+}
+
+// notifyJob wakes background workers via JobNotifier or falls back to JobEnqueuer without
+// failing an already-persisted pending version if the wakeup signal cannot be delivered.
+func (s *Service) notifyJob(job core.GenerationJob) {
+	if s.jobNotifier != nil {
+		s.jobNotifier.Notify()
+		return
+	}
+	if s.jobEnqueuer != nil {
+		if err := s.jobEnqueuer.Enqueue(job); err != nil && s.logger != nil {
+			s.logger.Warn("failed to notify worker pool of pending generation job",
+				"version_id", job.VersionID,
+				"branch_id", job.BranchID,
+				"err", err,
+			)
+		}
 	}
 }
 
@@ -195,16 +320,26 @@ func (s *Service) populateBranchActiveMetrics(ctx context.Context, branch *core.
 
 // ListBranches returns all branches for userID, optionally filtering for branches stale against main.
 func (s *Service) ListBranches(ctx context.Context, userID string, staleOnly bool) ([]core.Branch, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
 	branches, err := s.branches.ListBranches(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	s.hydrateBranchListMetrics(ctx, branches)
+	owned := make([]core.Branch, 0, len(branches))
+	for _, b := range branches {
+		if b.UserID == userID {
+			owned = append(owned, b)
+		}
+	}
+
+	s.hydrateBranchListMetrics(ctx, owned)
 
 	if staleOnly {
 		filtered := []core.Branch{}
-		for _, b := range branches {
+		for _, b := range owned {
 			if b.IsStale {
 				filtered = append(filtered, b)
 			}
@@ -212,10 +347,7 @@ func (s *Service) ListBranches(ctx context.Context, userID string, staleOnly boo
 		return filtered, nil
 	}
 
-	if branches == nil {
-		branches = []core.Branch{}
-	}
-	return branches, nil
+	return owned, nil
 }
 
 // hydrateBranchListMetrics normalizes cached metrics and batch-loads missing metrics from active versions.
@@ -256,9 +388,15 @@ func (s *Service) hydrateBranchListMetrics(ctx context.Context, branches []core.
 
 // Branch retrieves a branch record by its identifier and hydrates its active metrics.
 func (s *Service) Branch(ctx context.Context, userID, id string) (*core.Branch, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
 	branch, err := s.branches.Branch(ctx, userID, id)
 	if err != nil {
 		return nil, err
+	}
+	if branch.UserID != userID {
+		return nil, core.ErrNotFound
 	}
 	s.populateBranchActiveMetrics(ctx, branch)
 	return branch, nil
@@ -266,6 +404,12 @@ func (s *Service) Branch(ctx context.Context, userID, id string) (*core.Branch, 
 
 // CreateBranch initializes and saves a new resume branch synchronized to the main revision.
 func (s *Service) CreateBranch(ctx context.Context, branch *core.Branch) (*core.Branch, error) {
+	if branch == nil {
+		return nil, fmt.Errorf("%w: branch is required", core.ErrValidation)
+	}
+	if err := requireUserID(branch.UserID); err != nil {
+		return nil, err
+	}
 	if err := s.validateBranchReferences(ctx, branch); err != nil {
 		return nil, err
 	}
@@ -290,6 +434,12 @@ func (s *Service) CreateBranch(ctx context.Context, branch *core.Branch) (*core.
 
 // UpdateBranch modifies branch configuration while preserving default branch immutability invariants.
 func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.Branch, error) {
+	if branch == nil {
+		return nil, fmt.Errorf("%w: branch is required", core.ErrValidation)
+	}
+	if err := requireUserID(branch.UserID); err != nil {
+		return nil, err
+	}
 	if err := s.validateBranchReferences(ctx, branch); err != nil {
 		return nil, err
 	}
@@ -297,6 +447,9 @@ func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.
 	existing, err := s.branches.Branch(ctx, branch.UserID, branch.ID)
 	if err != nil {
 		return nil, err
+	}
+	if existing.UserID != branch.UserID {
+		return nil, core.ErrNotFound
 	}
 
 	if existing.IsDefault {
@@ -311,6 +464,11 @@ func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.
 
 	if err := s.branches.UpdateBranch(ctx, branch); err != nil {
 		return nil, err
+	}
+	if existing.GenerationOrActiveChanged(branch) {
+		_ = s.abortBranchVersions(ctx, branch.ID, "superseded by branch update")
+	} else {
+		s.supersedePendingVersions(ctx, branch.ID, "superseded by branch update")
 	}
 	return s.Branch(ctx, branch.UserID, branch.ID)
 }
@@ -368,11 +526,23 @@ func (s *Service) validateActiveVersion(ctx context.Context, branch *core.Branch
 	return nil
 }
 
-// DeleteBranch removes a branch if it is not the immutable default branch.
+// DeleteBranch aborts active versions, releases reserved quota, and removes a non-default branch.
 func (s *Service) DeleteBranch(ctx context.Context, userID, id string) error {
+	if err := requireUserID(userID); err != nil {
+		return err
+	}
 	branch, err := s.branches.Branch(ctx, userID, id)
-	if err == nil && branch != nil && branch.IsDefault {
+	if err != nil {
+		return err
+	}
+	if branch.UserID != userID {
+		return core.ErrNotFound
+	}
+	if branch.IsDefault {
 		return fmt.Errorf("%w: cannot delete default branch", core.ErrDefaultBranchImmutable)
+	}
+	if err := s.abortBranchVersions(ctx, id, "branch deleted"); err != nil {
+		return err
 	}
 	return s.branches.DeleteBranch(ctx, userID, id)
 }

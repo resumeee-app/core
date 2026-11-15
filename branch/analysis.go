@@ -104,6 +104,21 @@ func (s *Service) releaseATSInFlight(versionID string) {
 
 // AnalyzeGaps performs fast decoupled gap analysis for a branch against the main profile snapshot.
 func (s *Service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*core.GapReport, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
+	branch, err := s.branches.Branch(ctx, userID, branchID)
+	if err != nil {
+		return nil, err
+	}
+	if branch.UserID != userID {
+		return nil, core.ErrNotFound
+	}
+	snapshot, err := s.profiles.Snapshot(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
 	var (
 		retErr    error
 		telemetry core.LLMTelemetry
@@ -115,17 +130,6 @@ func (s *Service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*co
 	defer func() {
 		finishQuota(telemetry, retErr)
 	}()
-
-	branch, err := s.branches.Branch(ctx, userID, branchID)
-	if err != nil {
-		retErr = err
-		return nil, retErr
-	}
-	snapshot, err := s.profiles.Snapshot(ctx, userID)
-	if err != nil {
-		retErr = err
-		return nil, retErr
-	}
 
 	activeVer := s.loadOptionalActiveVersion(ctx, branch, "could not fetch active version for gap analysis")
 	report, callTel, err := s.computeGapReport(ctx, branch, snapshot, activeVer)
@@ -214,6 +218,9 @@ func (s *Service) persistGapReport(ctx context.Context, branch *core.Branch, act
 // It is disabled for the default main branch (core.ErrDefaultBranchImmutable), requires target requirements
 // (core.ErrValidation), and runs at most once per version (core.ErrConflict).
 func (s *Service) SimulateATS(ctx context.Context, userID, branchID string, opts *core.ATSSimulationOptions) (*core.ATSScore, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
 	requestedFormat, err := normalizeATSOptionFormat(opts)
 	if err != nil {
 		return nil, err
@@ -273,6 +280,9 @@ func (s *Service) resolveATSTarget(ctx context.Context, userID, branchID string,
 	branch, err := s.branches.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, nil, err
+	}
+	if branch.UserID != userID {
+		return nil, nil, core.ErrNotFound
 	}
 	if branch.IsDefault {
 		return nil, nil, fmt.Errorf("%w: ATS score simulation is disabled for the default main branch", core.ErrDefaultBranchImmutable)
@@ -365,9 +375,10 @@ func (s *Service) executeATSSimulation(ctx context.Context, branch *core.Branch,
 	}
 	if atsScore == nil {
 		atsScore = core.CalculateDeterministicATSScore(resumeText, formatUsed, branch.TargetRequirements)
+		atsScore.EvaluatedAt = nil
 	}
 	if atsScore.EvaluatedAt == nil {
-		now := time.Now().UTC()
+		now := s.now()
 		atsScore.EvaluatedAt = &now
 	}
 	atsScore.Normalize()

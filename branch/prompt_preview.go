@@ -11,6 +11,9 @@ import (
 // PromptPreview compiles the system and user prompt templates for the requested workflow against
 // the branch's candidate profile, rules hierarchy, and target requirements without invoking an LLM.
 func (s *Service) PromptPreview(ctx context.Context, userID, branchID string, opts *core.PromptPreviewOptions) (*core.PromptPreview, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
 	workflow, err := previewWorkflow(opts)
 	if err != nil {
 		return nil, err
@@ -22,6 +25,9 @@ func (s *Service) PromptPreview(ctx context.Context, userID, branchID string, op
 	branch, err := s.branches.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
+	}
+	if branch.UserID != userID {
+		return nil, core.ErrNotFound
 	}
 	snapshot, err := s.profiles.Snapshot(ctx, userID)
 	if err != nil {

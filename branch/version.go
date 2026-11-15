@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -40,9 +39,15 @@ func (s *Service) Version(ctx context.Context, branchID, versionNumOrID string) 
 
 // GenerateVersion enqueues an asynchronous generation job or synchronously renders default branch versions.
 func (s *Service) GenerateVersion(ctx context.Context, userID, branchID string) (*core.BranchVersion, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
 	branch, err := s.branches.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
+	}
+	if branch.UserID != userID {
+		return nil, core.ErrNotFound
 	}
 	if branch.IsDefault {
 		return s.renderDefaultBranchVersion(ctx, userID, branch)
@@ -61,6 +66,9 @@ func (s *Service) GenerateVersion(ctx context.Context, userID, branchID string) 
 
 // SyncBranches regenerates specified branches or all stale branches when branchIDs is empty.
 func (s *Service) SyncBranches(ctx context.Context, userID string, branchIDs []string) ([]string, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
 	var mainRevision int64 = 1
 	if s.profiles != nil {
 		prof, err := s.profiles.Profile(ctx, userID)
@@ -105,6 +113,9 @@ func (s *Service) resolveSyncTargets(ctx context.Context, userID string, branchI
 			if err != nil {
 				return nil, err
 			}
+			if b.UserID != userID {
+				return nil, core.ErrNotFound
+			}
 			targets = append(targets, *b)
 		}
 		return targets, nil
@@ -116,28 +127,53 @@ func (s *Service) resolveSyncTargets(ctx context.Context, userID string, branchI
 	}
 	var stale []core.Branch
 	for _, b := range allBranches {
-		if b.IsStale {
+		if b.UserID == userID && b.IsStale {
 			stale = append(stale, b)
 		}
 	}
 	return stale, nil
 }
 
-// enqueueBranchGeneration reserves quota, persists a pending version, and submits its worker job.
+// enqueueBranchGeneration reserves quota, atomically persists a pending version under admission caps,
+// releases any superseded or rejected reservations, and notifies background workers.
 func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b *core.Branch, mainRevision int64) (*core.BranchVersion, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return nil, fmt.Errorf("%w: branch is required", core.ErrValidation)
+	}
+	if b.UserID != userID {
+		return nil, core.ErrNotFound
+	}
+
 	var reservationID string
 	if s.quotas != nil {
 		rec, qErr := s.quotas.ReserveQuota(ctx, userID, core.OperationResumeTailoring, defaultTailoringQuotaTokens, s.dailyRequestLimit, s.monthlyTokenLimit)
 		if qErr != nil {
 			return nil, qErr
 		}
-		reservationID = rec.ID
+		if rec != nil {
+			reservationID = rec.ID
+		}
 	}
+
+	now := s.now()
+	ttl := s.jobTTL
+	if ttl <= 0 {
+		ttl = core.DefaultJobTTL
+	}
+	maxPending := s.maxPendingPerTenant
+	if maxPending <= 0 {
+		maxPending = core.DefaultMaxPendingPerTenant
+	}
+	expiresAt := now.Add(ttl)
 
 	ver := &core.BranchVersion{
 		ID:                "ver-" + uuid.New().String(),
 		UserID:            userID,
 		BranchID:          b.ID,
+		ResumeID:          b.ID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  mainRevision,
 		TemplateSetIDUsed: b.TemplateSetID,
@@ -145,50 +181,66 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 		ModelUsed:         b.ModelOverride,
 		SourceType:        core.SourceTypeLLMGeneration,
 		ParentVersionID:   b.ActiveVersionID,
+		ReservationID:     reservationID,
+		ExpiresAt:         &expiresAt,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 
-	if err := s.branches.CreateVersion(ctx, ver); err != nil {
-		if reservationID != "" && s.quotas != nil {
-			quotaCtx, cancel := detachedQuotaContext(ctx)
-			defer cancel()
-			if releaseErr := s.quotas.ReleaseQuota(quotaCtx, reservationID, "failed to create branch version", core.LLMTelemetry{}); releaseErr != nil && s.logger != nil {
-				s.logger.Error("failed to release quota after version creation failure", "reservation_id", reservationID, "err", releaseErr)
-			}
-		}
+	superseded, err := s.branches.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{
+		MaxPendingPerTenant: maxPending,
+		TTL:                 ttl,
+		Now:                 now,
+	})
+	if err != nil {
+		s.releaseReservationWithDetachedContext(reservationID, formatQuotaErrorMessage(err))
 		return nil, err
 	}
+	s.releaseReservationsWithDetachedContext(superseded)
 
-	if s.jobEnqueuer != nil {
-		job := core.GenerationJob{
-			UserID:        userID,
-			BranchID:      b.ID,
-			VersionID:     ver.ID,
-			ReservationID: reservationID,
-		}
-		if err := s.jobEnqueuer.Enqueue(job); err != nil {
-			if reservationID != "" && s.quotas != nil {
-				quotaCtx, cancel := detachedQuotaContext(ctx)
-				defer cancel()
-				if releaseErr := s.quotas.ReleaseQuota(quotaCtx, reservationID, "failed to enqueue generation job", core.LLMTelemetry{}); releaseErr != nil && s.logger != nil {
-					s.logger.Error("failed to release quota after enqueue failure", "reservation_id", reservationID, "err", releaseErr)
-				}
-			}
-			if errors.Is(err, core.ErrQueueFull) {
-				_ = s.branches.UpdateVersionStatus(ctx, ver.ID, core.VersionStatusFailed, "generation queue full")
-				return nil, core.ErrQueueFull
-			}
-			return nil, err
-		}
-	}
+	s.notifyJob(core.GenerationJob{
+		UserID:        userID,
+		BranchID:      b.ID,
+		VersionID:     ver.ID,
+		ReservationID: reservationID,
+	})
 
 	return ver, nil
 }
 
+// CancelVersion cancels a queued pending branch version owned by userID and releases its reserved quota.
+func (s *Service) CancelVersion(ctx context.Context, userID, branchID, versionID string) (*core.BranchVersion, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
+	br, err := s.branches.Branch(ctx, userID, branchID)
+	if err != nil {
+		return nil, err
+	}
+	if br.UserID != userID {
+		return nil, core.ErrNotFound
+	}
+	cancelled, err := s.branches.CancelVersion(ctx, userID, branchID, versionID, "cancelled by user")
+	if err != nil {
+		return nil, err
+	}
+	if cancelled != nil && cancelled.ReservationID != "" {
+		s.releaseReservationWithDetachedContext(cancelled.ReservationID, "cancelled by user")
+	}
+	return cancelled, nil
+}
+
 // EditVersion applies provenance validation to manual edits, renders templates, and appends a new immutable version.
 func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersionNumOrID string, editedContent core.TailoredContent) (*core.BranchVersion, error) {
+	if err := requireUserID(userID); err != nil {
+		return nil, err
+	}
 	branch, err := s.branches.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
+	}
+	if branch.UserID != userID {
+		return nil, core.ErrNotFound
 	}
 	if branch.IsDefault {
 		return nil, fmt.Errorf("%w: default branch cannot be manually edited", core.ErrDefaultBranchImmutable)
@@ -239,7 +291,7 @@ func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 		HTMLOutput:        rendered.HTML,
 		MarkdownOutput:    rendered.Markdown,
 		PlainTextOutput:   rendered.PlainText,
-		CreatedAt:         time.Now().UTC(),
+		CreatedAt:         s.now(),
 	}
 
 	if err := s.branches.CreateVersion(ctx, newVer); err != nil {
@@ -248,6 +300,7 @@ func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	if err := s.branches.CompleteVersion(ctx, newVer); err != nil {
 		return nil, err
 	}
+	s.supersedePendingVersions(ctx, branchID, "superseded by manual edit")
 	return newVer, nil
 }
 
@@ -284,7 +337,7 @@ func (s *Service) renderDefaultBranchVersion(ctx context.Context, userID string,
 		return nil, fmt.Errorf("rendering default branch: %w", err)
 	}
 
-	now := time.Now().UTC()
+	now := s.now()
 	ver := &core.BranchVersion{
 		ID:                "ver-" + uuid.New().String(),
 		UserID:            userID,

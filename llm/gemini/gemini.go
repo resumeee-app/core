@@ -310,15 +310,19 @@ func mapSDKError(err error) (*llm.Response, error) {
 	var clientErr *apierrors.CreateInteractionClientError
 	if errors.As(err, &clientErr) {
 		statusCode := httpStatusFromMeta(clientErr.HTTPMeta.GetResponse(), http.StatusBadRequest)
+		code := derefString(clientErr.Error_.Code)
+		msg := derefString(clientErr.Error_.Message)
 		rawBody := clientErr.Error()
-		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, mapCleanError(statusCode, len(rawBody))
+		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, mapCleanError(statusCode, rawBody, code, msg)
 	}
 
 	var srvErr *apierrors.CreateInteractionServerError
 	if errors.As(err, &srvErr) {
 		statusCode := httpStatusFromMeta(srvErr.HTTPMeta.GetResponse(), http.StatusInternalServerError)
+		code := derefString(srvErr.Error_.Code)
+		msg := derefString(srvErr.Error_.Message)
 		rawBody := srvErr.Error()
-		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, mapCleanError(statusCode, len(rawBody))
+		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, mapCleanError(statusCode, rawBody, code, msg)
 	}
 
 	var valErr *apierrors.ResponseValidationError
@@ -333,7 +337,7 @@ func mapSDKError(err error) (*llm.Response, error) {
 				fmt.Errorf("%w: unexpected gemini response (status 200, %d bytes)", llm.ErrInvalidResponse, len(apiErr.Body))
 		}
 		return &llm.Response{RawBody: apiErr.Body, StatusCode: apiErr.StatusCode},
-			mapCleanError(apiErr.StatusCode, len(apiErr.Body))
+			mapCleanError(apiErr.StatusCode, apiErr.Body)
 	}
 
 	errText := err.Error()
@@ -360,23 +364,29 @@ func mapValidationError(statusCode int, body string) (*llm.Response, error) {
 		return &llm.Response{RawBody: body, StatusCode: http.StatusOK},
 			fmt.Errorf("%w: malformed gemini response (status 200, %d bytes)", llm.ErrInvalidResponse, len(body))
 	}
-	return &llm.Response{RawBody: body, StatusCode: statusCode}, mapCleanError(statusCode, len(body))
+	return &llm.Response{RawBody: body, StatusCode: statusCode}, mapCleanError(statusCode, body)
 }
 
-// mapCleanError maps an HTTP status code to canonical llm sentinel errors without leaking upstream body payloads.
-func mapCleanError(statusCode, bodyBytes int) error {
-	switch {
-	case statusCode == http.StatusBadRequest:
-		return fmt.Errorf("%w: gemini api returned status 400 (%d bytes)", llm.ErrBadRequest, bodyBytes)
-	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
-		return fmt.Errorf("%w: gemini api returned status %d (%d bytes)", llm.ErrUnauthorized, statusCode, bodyBytes)
-	case statusCode == http.StatusTooManyRequests:
-		return fmt.Errorf("%w: gemini api returned status 429 (%d bytes)", llm.ErrRateLimited, bodyBytes)
-	case statusCode >= http.StatusInternalServerError:
-		return fmt.Errorf("%w: gemini api returned status %d (%d bytes)", llm.ErrUpstream, statusCode, bodyBytes)
-	default:
-		return fmt.Errorf("gemini api returned status %d (%d bytes)", statusCode, bodyBytes)
+// derefString returns the string referenced by ptr, or an empty string when nil.
+func derefString(ptr *string) string {
+	if ptr == nil {
+		return ""
 	}
+	return *ptr
+}
+
+// mapCleanError maps an HTTP status code and upstream payloads to canonical llm sentinel errors
+// without embedding upstream response payloads into returned error messages.
+func mapCleanError(statusCode int, rawBody string, signals ...string) error {
+	if mapped := llm.MapHTTPStatusError("gemini", statusCode, rawBody); errors.Is(mapped, llm.ErrUpstreamQuota) {
+		return mapped
+	}
+	for _, sig := range signals {
+		if sig != "" && errors.Is(llm.MapHTTPStatusError("gemini", statusCode, sig), llm.ErrUpstreamQuota) {
+			return fmt.Errorf("%w: gemini api returned status %d (%d bytes)", llm.ErrUpstreamQuota, statusCode, len(rawBody))
+		}
+	}
+	return llm.MapHTTPStatusError("gemini", statusCode, rawBody)
 }
 
 // _ enforces at compile time that Client implements llm.Client.

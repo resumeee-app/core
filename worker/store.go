@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -10,9 +11,14 @@ import (
 type BranchStore interface {
 	Branch(ctx context.Context, userID, id string) (*core.Branch, error)
 	Version(ctx context.Context, branchID, versionID string) (*core.BranchVersion, error)
-	UpdateVersionStatus(ctx context.Context, versionID string, status core.VersionStatus, errMsg string) error
 	CompleteVersion(ctx context.Context, version *core.BranchVersion) error
-	FailInterruptedVersions(ctx context.Context, reason string) error
+	ClaimNextVersion(ctx context.Context, req core.ClaimJobRequest) (*core.BranchVersion, error)
+	RenewVersionLease(ctx context.Context, versionID, claimedBy string, leaseExpiresAt time.Time) error
+	RequeueVersionForRetry(ctx context.Context, versionID, claimedBy string, nextRetryAt time.Time, errMsg string) error
+	FailClaimedVersion(ctx context.Context, versionID, claimedBy, errMsg string) error
+	ExpirePendingVersions(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
+	FailExpiredVersionLeases(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
+	RecoverInterruptedVersions(ctx context.Context, reason string) ([]core.ReleasedReservation, error)
 }
 
 // ProfileReader retrieves candidate profile roots and snapshots for job execution.
@@ -33,8 +39,17 @@ type TemplateReader interface {
 
 // PDFJobStore persists asynchronous PDF parse job status updates and recovery state.
 type PDFJobStore interface {
-	UpdateJobStatus(ctx context.Context, jobID string, status core.PDFParseJobStatus, result *core.JSONResume, errMsg string) error
-	FailInterruptedJobs(ctx context.Context, reason string) error
+	SubmitPendingJob(ctx context.Context, job *core.PDFParseJob, opts core.PendingJobOptions) error
+	Job(ctx context.Context, userID, jobID string) (*core.PDFParseJob, error)
+	CancelJob(ctx context.Context, userID, jobID, reason string) (*core.PDFParseJob, error)
+	ClaimNextJob(ctx context.Context, req core.ClaimJobRequest) (*core.PDFParseJob, error)
+	RenewJobLease(ctx context.Context, jobID, claimedBy string, leaseExpiresAt time.Time) error
+	RequeueJobForRetry(ctx context.Context, jobID, claimedBy string, nextRetryAt time.Time, errMsg string) error
+	CompleteClaimedJob(ctx context.Context, jobID, claimedBy string, result *core.JSONResume) error
+	FailClaimedJob(ctx context.Context, jobID, claimedBy, errMsg string) error
+	ExpirePendingJobs(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
+	FailExpiredJobLeases(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
+	RecoverInterruptedJobs(ctx context.Context, reason string) ([]core.ReleasedReservation, error)
 }
 
 // QuotaCommitter finalizes or releases tenant LLM quota reservations alongside call telemetry.

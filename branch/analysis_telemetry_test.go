@@ -23,13 +23,13 @@ func (s *failingATSScoreStore) UpdateVersionATSScore(_ context.Context, _ string
 	return s.updateErr
 }
 
-type failingCreateVersionStore struct {
+type failingSubmitPendingVersionStore struct {
 	branch.Store
-	createErr error
+	submitErr error
 }
 
-func (s *failingCreateVersionStore) CreateVersion(_ context.Context, _ *core.BranchVersion) error {
-	return s.createErr
+func (s *failingSubmitPendingVersionStore) SubmitPendingVersion(_ context.Context, _ *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
+	return nil, s.submitErr
 }
 
 func assertTelemetryEqual(t *testing.T, got, want core.LLMTelemetry) {
@@ -554,18 +554,17 @@ func TestService_SimulateATS_Telemetry(t *testing.T) {
 func TestService_GenerateVersion_PreLLMReleaseZeroTelemetry(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("CreateVersion failure passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
+	t.Run("SubmitPendingVersion failure passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 		spyQuota := &spyQuotaRepo{}
 		svc := branch.New(branch.Config{
-			Branches:    &failingCreateVersionStore{Store: env.branchRepo, createErr: errors.New("insert version failed")},
-			Profiles:    env.profileRepo,
-			Quotas:      spyQuota,
-			JobEnqueuer: newStubEnqueuer(10),
+			Branches: &failingSubmitPendingVersionStore{Store: env.branchRepo, submitErr: core.ErrPendingLimitExceeded},
+			Profiles: env.profileRepo,
+			Quotas:   spyQuota,
 		})
 
-		if _, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID); err == nil {
-			t.Fatal("expected CreateVersion error")
+		if _, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID); !errors.Is(err, core.ErrPendingLimitExceeded) {
+			t.Fatalf("expected ErrPendingLimitExceeded, got %v", err)
 		}
 
 		spyQuota.mu.Lock()
@@ -578,29 +577,30 @@ func TestService_GenerateVersion_PreLLMReleaseZeroTelemetry(t *testing.T) {
 		}
 	})
 
-	t.Run("Enqueue failure passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
+	t.Run("CancelVersion passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 		spyQuota := &spyQuotaRepo{}
-		closedEnqueuer := &stubEnqueuer{closed: true}
 		svc := branch.New(branch.Config{
-			Branches:    env.branchRepo,
-			Profiles:    env.profileRepo,
-			Quotas:      spyQuota,
-			JobEnqueuer: closedEnqueuer,
+			Branches: env.branchRepo,
+			Profiles: env.profileRepo,
+			Quotas:   spyQuota,
 		})
 
-		_, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID)
-		if !errors.Is(err, core.ErrQueueFull) {
-			t.Fatalf("expected ErrQueueFull, got %v", err)
+		ver, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID)
+		if err != nil {
+			t.Fatalf("GenerateVersion failed: %v", err)
+		}
+		if _, err := svc.CancelVersion(ctx, env.defaultUser, env.branchID, ver.ID); err != nil {
+			t.Fatalf("CancelVersion failed: %v", err)
 		}
 
 		spyQuota.mu.Lock()
 		defer spyQuota.mu.Unlock()
 		if len(spyQuota.releases) != 1 {
-			t.Fatalf("expected 1 release, got %d", len(spyQuota.releases))
+			t.Fatalf("expected 1 release on CancelVersion, got %d", len(spyQuota.releases))
 		}
 		if !spyQuota.releases[0].Telemetry.IsZero() {
-			t.Errorf("expected zero LLMTelemetry on enqueue failure release, got %+v", spyQuota.releases[0].Telemetry)
+			t.Errorf("expected zero LLMTelemetry on CancelVersion release, got %+v", spyQuota.releases[0].Telemetry)
 		}
 	})
 }
@@ -972,25 +972,15 @@ func (s *cancelDuringATSStub) SimulateATS(_ context.Context, _ core.ATSSimulatio
 	return s.atsResp, s.atsErr
 }
 
-type cancelOnCreateVersionStore struct {
+type cancelOnSubmitPendingVersionStore struct {
 	branch.Store
 	cancel context.CancelFunc
 	err    error
 }
 
-func (s *cancelOnCreateVersionStore) CreateVersion(_ context.Context, _ *core.BranchVersion) error {
+func (s *cancelOnSubmitPendingVersionStore) SubmitPendingVersion(_ context.Context, _ *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
 	s.cancel()
-	return s.err
-}
-
-type cancelOnEnqueue struct {
-	cancel context.CancelFunc
-	err    error
-}
-
-func (e *cancelOnEnqueue) Enqueue(_ core.GenerationJob) error {
-	e.cancel()
-	return e.err
+	return nil, s.err
 }
 
 func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
@@ -1111,58 +1101,29 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 		}
 	})
 
-	t.Run("GenerateVersion CreateVersion and Enqueue failures release quota under canceled ctx", func(t *testing.T) {
-		t.Run("CreateVersion failure", func(t *testing.T) {
-			env := setupTestBranchEnv(t, 10)
-			quotaStore := memory.New()
-			strictQuotas := &strictContextQuotaManager{inner: quotaStore}
-			reqCtx, cancel := context.WithCancel(context.Background())
+	t.Run("GenerateVersion SubmitPendingVersion failure releases quota under canceled ctx", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+		quotaStore := memory.New()
+		strictQuotas := &strictContextQuotaManager{inner: quotaStore}
+		reqCtx, cancel := context.WithCancel(context.Background())
 
-			svc := branch.New(branch.Config{
-				Branches: &cancelOnCreateVersionStore{
-					Store:  env.branchRepo,
-					cancel: cancel,
-					err:    errors.New("db connection dropped"),
-				},
-				Profiles:    env.profileRepo,
-				Quotas:      strictQuotas,
-				JobEnqueuer: newStubEnqueuer(10),
-			})
-
-			if _, err := svc.GenerateVersion(reqCtx, env.defaultUser, env.branchID); err == nil {
-				t.Fatal("expected error from CreateVersion")
-			}
-
-			records, err := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)
-			if err != nil || len(records) != 1 || records[0].Status != core.ReservationStatusReleased {
-				t.Fatalf("expected 1 released record, got records=%+v err=%v", records, err)
-			}
+		svc := branch.New(branch.Config{
+			Branches: &cancelOnSubmitPendingVersionStore{
+				Store:  env.branchRepo,
+				cancel: cancel,
+				err:    errors.New("db connection dropped"),
+			},
+			Profiles: env.profileRepo,
+			Quotas:   strictQuotas,
 		})
 
-		t.Run("Enqueue failure", func(t *testing.T) {
-			env := setupTestBranchEnv(t, 10)
-			quotaStore := memory.New()
-			strictQuotas := &strictContextQuotaManager{inner: quotaStore}
-			reqCtx, cancel := context.WithCancel(context.Background())
+		if _, err := svc.GenerateVersion(reqCtx, env.defaultUser, env.branchID); err == nil {
+			t.Fatal("expected error from SubmitPendingVersion")
+		}
 
-			svc := branch.New(branch.Config{
-				Branches: env.branchRepo,
-				Profiles: env.profileRepo,
-				Quotas:   strictQuotas,
-				JobEnqueuer: &cancelOnEnqueue{
-					cancel: cancel,
-					err:    core.ErrQueueFull,
-				},
-			})
-
-			if _, err := svc.GenerateVersion(reqCtx, env.defaultUser, env.branchID); !errors.Is(err, core.ErrQueueFull) {
-				t.Fatalf("expected ErrQueueFull, got %v", err)
-			}
-
-			records, err := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)
-			if err != nil || len(records) != 1 || records[0].Status != core.ReservationStatusReleased {
-				t.Fatalf("expected 1 released record, got records=%+v err=%v", records, err)
-			}
-		})
+		records, err := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)
+		if err != nil || len(records) != 1 || records[0].Status != core.ReservationStatusReleased {
+			t.Fatalf("expected 1 released record, got records=%+v err=%v", records, err)
+		}
 	})
 }

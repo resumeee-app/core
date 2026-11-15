@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"time"
 )
 
@@ -73,13 +72,4 @@ type MainProfileSnapshot struct {
 	Certifications []Certification  `json:"certifications"`
 	Facts          []Fact           `json:"facts"`
 	ExportedAt     time.Time        `json:"exported_at"`
-}
-
-// ProfileStore defines persistence operations for candidate profile roots, revisions, and snapshots.
-type ProfileStore interface {
-	Profile(ctx context.Context, userID string) (*Profile, error)
-	UpsertProfile(ctx context.Context, profile *Profile) error
-	IncrementMainRevision(ctx context.Context, userID string) (int64, error)
-	Snapshot(ctx context.Context, userID string) (*MainProfileSnapshot, error)
-	ReplaceCareerGraph(ctx context.Context, userID string, snapshot *MainProfileSnapshot) error
 }

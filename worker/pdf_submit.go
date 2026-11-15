@@ -23,7 +23,7 @@ type QuotaReleaser interface {
 
 // PDFSubmitConfig defines stores, admission bounds, TTL, and notification dependencies for SubmitPDFJob.
 type PDFSubmitConfig struct {
-	PDFJobs                PDFJobStore
+	Jobs                   JobStore
 	Quotas                 PDFQuotaReserver
 	Notifier               core.JobNotifier
 	DefaultEstimatedTokens int
@@ -48,9 +48,9 @@ type PDFJobSubmission struct {
 
 // SubmitPDFJob validates submission inputs, reserves quota when configured, persists a pending job under
 // atomic admission caps, refunds quota via a detached context on rejection, and wakes background workers.
-func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission) (*core.PDFParseJob, error) {
-	if cfg.PDFJobs == nil {
-		return nil, fmt.Errorf("%w: pdf job store is required", core.ErrValidation)
+func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission) (*core.Job, error) {
+	if cfg.Jobs == nil {
+		return nil, fmt.Errorf("%w: job store is required", core.ErrValidation)
 	}
 	userID := strings.TrimSpace(sub.UserID)
 	if userID == "" {
@@ -100,21 +100,24 @@ func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission
 	}
 
 	expiresAt := now.Add(ttl)
-	job := &core.PDFParseJob{
+	job := &core.Job{
 		ID:            core.GenerateID("pdf"),
+		Kind:          core.JobKindPDFParse,
 		UserID:        userID,
-		Status:        core.PDFParseJobStatusPending,
-		Filename:      sub.Filename,
-		Provider:      sub.Provider,
-		Model:         sub.Model,
-		RawText:       sub.RawText,
+		Status:        core.JobStatusPending,
 		ReservationID: reservationID,
 		ExpiresAt:     &expiresAt,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		PDF: &core.PDFParseSpec{
+			Filename: sub.Filename,
+			Provider: sub.Provider,
+			Model:    sub.Model,
+			RawText:  sub.RawText,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
-	err := cfg.PDFJobs.SubmitPendingJob(ctx, job, core.PendingJobOptions{
+	err := cfg.Jobs.SubmitPDFParse(ctx, job, core.PendingJobOptions{
 		MaxPendingPerTenant: maxPendingPerTenant,
 		MaxGlobalPending:    cfg.MaxGlobalPending,
 		MaxRawTextBytes:     maxRawTextBytes,
@@ -139,14 +142,14 @@ func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission
 // CancelPDFJob cancels an owned pending PDF parse job and releases its reserved quota via detached context.
 func CancelPDFJob(
 	ctx context.Context,
-	pdfJobs PDFJobStore,
+	jobs JobStore,
 	quotas QuotaReleaser,
 	userID string,
 	jobID string,
 	cleanupTimeout time.Duration,
-) (*core.PDFParseJob, error) {
-	if pdfJobs == nil {
-		return nil, fmt.Errorf("%w: pdf job store is required", core.ErrValidation)
+) (*core.Job, error) {
+	if jobs == nil {
+		return nil, fmt.Errorf("%w: job store is required", core.ErrValidation)
 	}
 	trimmedUser := strings.TrimSpace(userID)
 	trimmedJob := strings.TrimSpace(jobID)
@@ -154,7 +157,7 @@ func CancelPDFJob(
 		return nil, fmt.Errorf("%w: user id and job id are required", core.ErrValidation)
 	}
 
-	cancelled, err := pdfJobs.CancelJob(ctx, trimmedUser, trimmedJob, "cancelled by user")
+	cancelled, err := jobs.CancelJob(ctx, trimmedUser, trimmedJob, "cancelled by user")
 	if err != nil {
 		return nil, err
 	}

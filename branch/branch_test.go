@@ -17,38 +17,18 @@ import (
 	"github.com/resumeee-app/resumeee-core/provenance"
 	"github.com/resumeee-app/resumeee-core/renderer"
 	"github.com/resumeee-app/resumeee-core/sanitizer"
+	"github.com/resumeee-app/resumeee-core/store"
 )
 
-type stubEnqueuer struct {
-	mu       sync.Mutex
-	capacity int
-	jobs     []core.GenerationJob
-	closed   bool
-}
-
-func newStubEnqueuer(capacity int) *stubEnqueuer {
-	return &stubEnqueuer{capacity: capacity}
-}
-
-func (e *stubEnqueuer) Enqueue(job core.GenerationJob) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if e.closed || (e.capacity > 0 && len(e.jobs) >= e.capacity) {
-		return core.ErrQueueFull
-	}
-	e.jobs = append(e.jobs, job)
-	return nil
-}
-
 type testBranchEnv struct {
-	db           any
+	db           *testBranchStore
 	svc          *branch.Service
-	branchRepo   core.BranchStore
-	profileRepo  core.ProfileStore
-	careerRepo   core.CareerStore
-	templateRepo core.TemplateStore
-	enqueuer     *stubEnqueuer
+	branchRepo   branch.Store
+	jobRepo      branch.JobStore
+	profileRepo  *store.Profiles
+	careerRepo   *store.Career
+	templateRepo branch.TemplateReader
+	notifier     *stubNotifier
 	defaultUser  string
 	branchID     string
 	v1ID         string
@@ -57,28 +37,30 @@ type testBranchEnv struct {
 	validSkillID string
 }
 
-func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
+func setupTestBranchEnv(t *testing.T, _ int) *testBranchEnv {
 	t.Helper()
 
 	ctx := context.Background()
 	defaultUser := "default"
-	store := newSeededBranchStore(ctx, defaultUser)
+	st := newSeededBranchStore(ctx, defaultUser)
 
-	profileRepo := store
-	presetRepo := store
-	templateRepo := store
-	branchRepo := store
+	profileRepo := st.Profiles
+	presetRepo := st.Presets
+	templateRepo := st.Templates
+	branchRepo := st.Branches
+	jobRepo := st.Jobs
 	val := provenance.New()
 	rend := renderer.New()
-	enqueuer := newStubEnqueuer(enqueuerCap)
+	notifier := &stubNotifier{}
 
 	svc := branch.New(branch.Config{
 		Branches:       branchRepo,
+		Jobs:           jobRepo,
 		Profiles:       profileRepo,
 		Presets:        presetRepo,
 		Templates:      templateRepo,
-		Quotas:         store,
-		JobEnqueuer:    enqueuer,
+		Quotas:         st.Quotas,
+		JobNotifier:    notifier,
 		Validator:      val,
 		Renderer:       rend,
 		PromptCompiler: &fakePromptCompiler{},
@@ -98,17 +80,15 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 	// Create initial v1
 	v1 := &core.BranchVersion{
 		ID:                "ver-init-1",
+		UserID:            defaultUser,
 		BranchID:          created.ID,
 		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 	}
-	if err := branchRepo.CreateVersion(ctx, v1); err != nil {
-		t.Fatalf("failed to create v1: %v", err)
-	}
-	if err := branchRepo.CompleteVersion(ctx, v1); err != nil {
-		t.Fatalf("failed to complete v1: %v", err)
+	if err := st.seedCompletedVersion(ctx, v1); err != nil {
+		t.Fatalf("failed to seed v1: %v", err)
 	}
 
 	// Seed an experience and fact so manual edits have valid provenance
@@ -119,7 +99,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 		RoleTitle: "Lead Systems Architect",
 		StartDate: core.NewDate(2020, 1, 1),
 	}
-	if err := profileRepo.CreateExperience(ctx, exp); err != nil {
+	if err := st.CreateExperience(ctx, exp); err != nil {
 		t.Fatalf("failed to create experience: %v", err)
 	}
 
@@ -130,7 +110,7 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 		OwnerType: core.OwnerTypeWorkExperience,
 		Statement: "Optimized distributed consensus throughput by 40%.",
 	}
-	if err := profileRepo.CreateFact(ctx, fact); err != nil {
+	if err := st.CreateFact(ctx, fact); err != nil {
 		t.Fatalf("failed to create fact: %v", err)
 	}
 
@@ -157,13 +137,14 @@ func setupTestBranchEnv(t *testing.T, enqueuerCap int) *testBranchEnv {
 	}
 
 	return &testBranchEnv{
-		db:           store,
+		db:           st,
 		svc:          svc,
 		branchRepo:   branchRepo,
+		jobRepo:      jobRepo,
 		profileRepo:  profileRepo,
-		careerRepo:   store,
+		careerRepo:   st.Career,
 		templateRepo: templateRepo,
-		enqueuer:     enqueuer,
+		notifier:     notifier,
 		defaultUser:  defaultUser,
 		branchID:     created.ID,
 		v1ID:         v1.ID,
@@ -293,6 +274,7 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 
 	svc := branch.New(branch.Config{
 		Branches:            store,
+		Jobs:                store,
 		Profiles:            store,
 		Presets:             store,
 		Templates:           store,
@@ -356,12 +338,19 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load persisted pending version: %v", err)
 	}
-	if persistedVer.ReservationID == "" {
-		t.Errorf("expected persisted pending version to retain ReservationID")
+	if persistedVer.JobID == "" {
+		t.Fatalf("expected persisted pending version to reference JobID")
+	}
+	persistedJob, err := store.Job(ctx, defaultUser, persistedVer.JobID)
+	if err != nil {
+		t.Fatalf("failed to load persisted job: %v", err)
+	}
+	if persistedJob.ReservationID == "" {
+		t.Errorf("expected persisted job to retain ReservationID")
 	}
 	wantExpiry := fixedNow.Add(15 * time.Minute)
-	if persistedVer.ExpiresAt == nil || !persistedVer.ExpiresAt.Equal(wantExpiry) {
-		t.Errorf("expected ExpiresAt=%v, got %v", wantExpiry, persistedVer.ExpiresAt)
+	if persistedJob.ExpiresAt == nil || !persistedJob.ExpiresAt.Equal(wantExpiry) {
+		t.Errorf("expected ExpiresAt=%v, got %v", wantExpiry, persistedJob.ExpiresAt)
 	}
 
 	// Verify zero leaked quota: 2 reservations attempted, 1st active (pending), 2nd released on cap rejection.
@@ -402,17 +391,24 @@ func TestService_GenerateVersion(t *testing.T) {
 	if ver.VersionNumber != 2 {
 		t.Errorf("expected version number 2 (after initial v1), got %d", ver.VersionNumber)
 	}
-	if ver.ReservationID == "" {
-		t.Errorf("expected ReservationID populated on pending version")
+	if ver.JobID == "" {
+		t.Fatalf("expected JobID populated on pending version")
 	}
-	if ver.ExpiresAt == nil {
-		t.Errorf("expected ExpiresAt populated on pending version")
+	persistedJob, err := env.db.Job(ctx, env.defaultUser, ver.JobID)
+	if err != nil {
+		t.Fatalf("failed to load job %s: %v", ver.JobID, err)
 	}
-	if len(env.enqueuer.jobs) != 1 {
-		t.Errorf("expected 1 enqueued job, got %d", len(env.enqueuer.jobs))
+	if persistedJob.ReservationID == "" {
+		t.Errorf("expected ReservationID populated on pending job")
 	}
-	if env.enqueuer.jobs[0].VersionID != ver.ID {
-		t.Errorf("expected enqueued version ID %s, got %s", ver.ID, env.enqueuer.jobs[0].VersionID)
+	if persistedJob.ExpiresAt == nil {
+		t.Errorf("expected ExpiresAt populated on pending job")
+	}
+	if env.notifier.Count() != 1 {
+		t.Errorf("expected 1 notifier call, got %d", env.notifier.Count())
+	}
+	if persistedJob.Tailor == nil || persistedJob.Tailor.VersionID != ver.ID {
+		t.Errorf("expected job tailor VersionID %s, got %+v", ver.ID, persistedJob.Tailor)
 	}
 }
 
@@ -434,7 +430,7 @@ func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 		t.Fatalf("failed to get v1: %v", err)
 	}
 	v1.MainRevisionUsed = rev1
-	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+	if err := env.db.seedCompletedVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to complete v1: %v", err)
 	}
 
@@ -453,11 +449,8 @@ func TestService_UpdateBranchActiveVersionRollbackStaleness(t *testing.T) {
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 	}
-	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
-		t.Fatalf("create v2: %v", err)
-	}
-	if err := env.branchRepo.CompleteVersion(ctx, v2); err != nil {
-		t.Fatalf("complete v2: %v", err)
+	if err := env.db.seedCompletedVersion(ctx, v2); err != nil {
+		t.Fatalf("seed v2: %v", err)
 	}
 
 	// Fetch branch - should be active on v2 and not stale (rev2 == profile rev2)
@@ -520,7 +513,7 @@ func TestService_UpdateBranchSyncsGapReportOnActiveVersionSwitch(t *testing.T) {
 			{Requirement: "Distributed consensus", Importance: core.GapImportancePreferred},
 		},
 	}
-	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+	if err := env.db.seedCompletedVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to complete v1: %v", err)
 	}
 
@@ -540,10 +533,7 @@ func TestService_UpdateBranchSyncsGapReportOnActiveVersionSwitch(t *testing.T) {
 			},
 		},
 	}
-	if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
-		t.Fatalf("failed to create v2: %v", err)
-	}
-	if err := env.branchRepo.CompleteVersion(ctx, v2); err != nil {
+	if err := env.db.seedCompletedVersion(ctx, v2); err != nil {
 		t.Fatalf("failed to complete v2: %v", err)
 	}
 
@@ -601,7 +591,10 @@ func TestService_GetAndListBranchesFallbackResolution(t *testing.T) {
 
 	v := &core.BranchVersion{
 		ID:                "ver-service-fallback",
+		UserID:            env.defaultUser,
 		BranchID:          b.ID,
+		VersionNumber:     1,
+		BranchEpoch:       1,
 		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
@@ -614,15 +607,12 @@ func TestService_GetAndListBranchesFallbackResolution(t *testing.T) {
 			},
 		},
 	}
-	if err := env.branchRepo.CreateVersion(ctx, v); err != nil {
-		t.Fatalf("create version: %v", err)
-	}
 
 	// Directly set ActiveVersionID without GapReport on parent branch in repo (simulating legacy store state)
 	b.ActiveVersionID = &v.ID
 	b.GapReport = nil
-	if err := env.branchRepo.UpdateBranch(ctx, b); err != nil {
-		t.Fatalf("update branch in repo: %v", err)
+	if err := env.db.setLegacyGaplessBranch(ctx, b, v); err != nil {
+		t.Fatalf("set legacy gapless branch in repo: %v", err)
 	}
 
 	// 1. Service Branch must fallback-resolve GapReport
@@ -689,10 +679,7 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 	}
-	if err := env.branchRepo.CreateVersion(ctx, vOther); err != nil {
-		t.Fatalf("failed to create vOther: %v", err)
-	}
-	if err := env.branchRepo.CompleteVersion(ctx, vOther); err != nil {
+	if err := env.db.seedCompletedVersion(ctx, vOther); err != nil {
 		t.Fatalf("failed to complete vOther: %v", err)
 	}
 
@@ -731,7 +718,7 @@ func TestService_UpdateBranchForeignAndInvalidVersionProtection(t *testing.T) {
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 	}
-	if err := env.branchRepo.CreateVersion(ctx, vPending); err != nil {
+	if err := env.db.seedVersionInState(ctx, vPending, core.VersionStatusPending, "res-pending-active"); err != nil {
 		t.Fatalf("failed to create pending version: %v", err)
 	}
 	b.ActiveVersionID = &vPending.ID
@@ -759,15 +746,18 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 	}
 
 	t.Run("GenerateVersion on default branch bypasses LLM and worker pool", func(t *testing.T) {
-		initialEnqueued := len(env.enqueuer.jobs)
+		initialNotifications := env.notifier.Count()
 
 		ver, err := env.svc.GenerateVersion(ctx, env.defaultUser, defaultBranchID)
 		if err != nil {
 			t.Fatalf("GenerateVersion failed: %v", err)
 		}
 
-		if len(env.enqueuer.jobs) != initialEnqueued {
-			t.Errorf("expected enqueuer jobs to remain %d, got %d", initialEnqueued, len(env.enqueuer.jobs))
+		if env.notifier.Count() != initialNotifications {
+			t.Errorf("expected notifier calls to remain %d, got %d", initialNotifications, env.notifier.Count())
+		}
+		if ver.JobID != "" {
+			t.Errorf("expected empty JobID on default branch sync, got %q", ver.JobID)
 		}
 		if ver.Status != core.VersionStatusCompleted {
 			t.Errorf("expected status completed, got %s", ver.Status)
@@ -793,15 +783,18 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 	})
 
 	t.Run("GenerateVersion on tailored branch enqueues job", func(t *testing.T) {
-		initialEnqueued := len(env.enqueuer.jobs)
+		initialNotifications := env.notifier.Count()
 
 		ver, err := env.svc.GenerateVersion(ctx, env.defaultUser, env.branchID)
 		if err != nil {
 			t.Fatalf("GenerateVersion failed: %v", err)
 		}
 
-		if len(env.enqueuer.jobs) != initialEnqueued+1 {
-			t.Errorf("expected enqueuer jobs to increase by 1, got %d (was %d)", len(env.enqueuer.jobs), initialEnqueued)
+		if env.notifier.Count() != initialNotifications+1 {
+			t.Errorf("expected notifier calls to increase by 1, got %d (was %d)", env.notifier.Count(), initialNotifications)
+		}
+		if ver.JobID == "" {
+			t.Errorf("expected non-empty JobID on tailored branch version")
 		}
 		if ver.Status != core.VersionStatusPending {
 			t.Errorf("expected status pending for tailored branch, got %s", ver.Status)
@@ -897,7 +890,7 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 	})
 
 	t.Run("SyncBranches handles default branch synchronously without queueing", func(t *testing.T) {
-		initialEnqueued := len(env.enqueuer.jobs)
+		initialNotifications := env.notifier.Count()
 
 		vIDs, err := env.svc.SyncBranches(ctx, env.defaultUser, []string{defaultBranchID, env.branchID})
 		if err != nil {
@@ -907,9 +900,9 @@ func TestBranchService_DefaultBranch(t *testing.T) {
 			t.Fatalf("expected 2 version IDs returned, got %d", len(vIDs))
 		}
 
-		// Only 1 job enqueued (for env.branchID), default branch was rendered synchronously
-		if len(env.enqueuer.jobs) != initialEnqueued+1 {
-			t.Errorf("expected exactly 1 job enqueued for tailored branch, got %d", len(env.enqueuer.jobs)-initialEnqueued)
+		// Only 1 notification (for env.branchID), default branch was rendered synchronously
+		if env.notifier.Count() != initialNotifications+1 {
+			t.Errorf("expected exactly 1 notification for tailored branch, got %d", env.notifier.Count()-initialNotifications)
 		}
 
 		// Default branch version should be completed
@@ -948,7 +941,7 @@ func TestService_EditVersionPreservesGapReport(t *testing.T) {
 		t.Fatalf("failed to get v1: %v", err)
 	}
 	v1.GapReport = expectedReport
-	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+	if err := env.db.seedCompletedVersion(ctx, v1); err != nil {
 		t.Fatalf("failed to update v1 with gap report: %v", err)
 	}
 
@@ -1066,12 +1059,12 @@ func TestService_AnalyzeGaps(t *testing.T) {
 
 		// Rebuild svc with stubLLM
 		svcWithLLM := branch.New(branch.Config{
-			Branches:    env.branchRepo,
-			Profiles:    env.profileRepo,
-			JobEnqueuer: env.enqueuer,
-			Validator:   provenance.New(),
-			Renderer:    renderer.New(),
-			Generator:   stubLLM,
+			Branches:  env.branchRepo,
+			Jobs:      env.jobRepo,
+			Profiles:  env.profileRepo,
+			Validator: provenance.New(),
+			Renderer:  renderer.New(),
+			Generator: stubLLM,
 		})
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
@@ -1098,13 +1091,13 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
 
 		svcWithLLM := branch.New(branch.Config{
-			Branches:    env.branchRepo,
-			Profiles:    env.profileRepo,
-			Quotas:      spyQuota,
-			JobEnqueuer: env.enqueuer,
-			Validator:   provenance.New(),
-			Renderer:    renderer.New(),
-			Generator:   &stubGenerator{}, // GenerateGapAnalysis returns (nil, nil)
+			Branches:  env.branchRepo,
+			Jobs:      env.jobRepo,
+			Profiles:  env.profileRepo,
+			Quotas:    spyQuota,
+			Validator: provenance.New(),
+			Renderer:  renderer.New(),
+			Generator: &stubGenerator{}, // GenerateGapAnalysis returns (nil, nil)
 		})
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
@@ -1435,7 +1428,7 @@ func TestService_PromptPreview_WorkflowsBeyondTailoring(t *testing.T) {
 	}
 	v1.MarkdownOutput = renderedMD
 	v1.ATSScore = &core.ATSScore{JobMatchingScore: 0.88}
-	if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+	if err := env.db.seedCompletedVersion(ctx, v1); err != nil {
 		t.Fatalf("CompleteVersion v1 failed: %v", err)
 	}
 
@@ -1444,22 +1437,19 @@ func TestService_PromptPreview_WorkflowsBeyondTailoring(t *testing.T) {
 		BranchID: env.branchID,
 		Status:   core.VersionStatusPending,
 	}
-	if err := env.branchRepo.CreateVersion(ctx, pendingVer); err != nil {
-		t.Fatalf("CreateVersion(pending) failed: %v", err)
+	if err := env.db.seedVersionInState(ctx, pendingVer, core.VersionStatusPending, "res-pending-preview"); err != nil {
+		t.Fatalf("seed pending failed: %v", err)
 	}
 
 	explicitVer := &core.BranchVersion{
-		ID:            "ver-explicit-preview",
-		BranchID:      env.branchID,
-		VersionNumber: 2,
-		Status:        core.VersionStatusCompleted,
+		ID:              "ver-explicit-preview",
+		BranchID:        env.branchID,
+		VersionNumber:   2,
+		Status:          core.VersionStatusCompleted,
+		PlainTextOutput: "Explicit plain text resume",
+		HTMLOutput:      "<h1>HTML resume output</h1>",
 	}
-	if err := env.branchRepo.CreateVersion(ctx, explicitVer); err != nil {
-		t.Fatalf("CreateVersion(explicit) failed: %v", err)
-	}
-	explicitVer.PlainTextOutput = "Explicit plain text resume"
-	explicitVer.HTMLOutput = "<h1>HTML resume output</h1>"
-	if err := env.branchRepo.CompleteVersion(ctx, explicitVer); err != nil {
+	if err := env.db.seedCompletedVersion(ctx, explicitVer); err != nil {
 		t.Fatalf("CompleteVersion(explicit) failed: %v", err)
 	}
 
@@ -1813,11 +1803,8 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 		Status:           core.VersionStatusCompleted,
 		MarkdownOutput:   "# DevOps Resume\nGo, Kubernetes, Terraform",
 	}
-	if err := store.CreateVersion(ctx, vQuota1); err != nil {
-		t.Fatalf("failed to create vQuota1: %v", err)
-	}
-	if err := store.CompleteVersion(ctx, vQuota1); err != nil {
-		t.Fatalf("failed to complete vQuota1: %v", err)
+	if err := store.seedCompletedVersion(ctx, vQuota1); err != nil {
+		t.Fatalf("failed to seed vQuota1: %v", err)
 	}
 
 	vQuota2 := &core.BranchVersion{
@@ -1827,11 +1814,8 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 		Status:           core.VersionStatusCompleted,
 		MarkdownOutput:   "# DevOps Resume v2\nGo, Kubernetes, Terraform",
 	}
-	if err := store.CreateVersion(ctx, vQuota2); err != nil {
-		t.Fatalf("failed to create vQuota2: %v", err)
-	}
-	if err := store.CompleteVersion(ctx, vQuota2); err != nil {
-		t.Fatalf("failed to complete vQuota2: %v", err)
+	if err := store.seedCompletedVersion(ctx, vQuota2); err != nil {
+		t.Fatalf("failed to seed vQuota2: %v", err)
 	}
 
 	stubLLM := &stubATSSimulator{
@@ -1842,15 +1826,14 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 
 	t.Run("Custom limits propagated across GenerateVersion, SyncBranches, AnalyzeGaps, and SimulateATS", func(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
-		enqueuer := newStubEnqueuer(10)
 
 		svc := branch.New(branch.Config{
 			Branches:          store,
+			Jobs:              store,
 			Profiles:          store,
 			Presets:           store,
 			Templates:         store,
 			Quotas:            spyQuota,
-			JobEnqueuer:       enqueuer,
 			Generator:         stubLLM,
 			DailyRequestLimit: 25,
 			MonthlyTokenLimit: 250000,
@@ -1899,15 +1882,14 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 
 	t.Run("Fallback default limits 50 and 1000000 applied when limits are <= 0", func(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
-		enqueuer := newStubEnqueuer(10)
 
 		svcDefault := branch.New(branch.Config{
 			Branches:          store,
+			Jobs:              store,
 			Profiles:          store,
 			Presets:           store,
 			Templates:         store,
 			Quotas:            spyQuota,
-			JobEnqueuer:       enqueuer,
 			Generator:         stubLLM,
 			DailyRequestLimit: 0,
 			MonthlyTokenLimit: -100,
@@ -1993,7 +1975,7 @@ func (s *stubATSSimulator) SimulateATS(_ context.Context, req core.ATSSimulation
 }
 
 type failingSnapshotProfileRepo struct {
-	core.ProfileStore
+	branch.ProfileReader
 	snapErr error
 }
 
@@ -2001,7 +1983,7 @@ func (f *failingSnapshotProfileRepo) Snapshot(ctx context.Context, userID string
 	if f.snapErr != nil {
 		return nil, f.snapErr
 	}
-	return f.ProfileStore.Snapshot(ctx, userID)
+	return f.ProfileReader.Snapshot(ctx, userID)
 }
 
 func TestService_SimulateATS(t *testing.T) {
@@ -2064,8 +2046,8 @@ func TestService_SimulateATS(t *testing.T) {
 			BranchID: env.branchID,
 			Status:   core.VersionStatusPending,
 		}
-		if err := env.branchRepo.CreateVersion(ctx, pendingVer); err != nil {
-			t.Fatalf("CreateVersion failed: %v", err)
+		if err := env.db.seedVersionInState(ctx, pendingVer, core.VersionStatusPending, "res-pending-ats"); err != nil {
+			t.Fatalf("seed pending failed: %v", err)
 		}
 
 		_, err = env.svc.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
@@ -2082,7 +2064,7 @@ func TestService_SimulateATS(t *testing.T) {
 			t.Fatalf("GetVersion v1 failed: %v", err)
 		}
 		v1.MarkdownOutput = "# Jane Doe\n## Summary\nLead Systems Architect skilled in Go and Kubernetes."
-		if err := env.branchRepo.CompleteVersion(ctx, v1); err != nil {
+		if err := env.db.seedCompletedVersion(ctx, v1); err != nil {
 			t.Fatalf("CompleteVersion v1 failed: %v", err)
 		}
 
@@ -2137,10 +2119,7 @@ func TestService_SimulateATS(t *testing.T) {
 			HTMLOutput:       "<h1>Tailored v2</h1>",
 			PlainTextOutput:  "Tailored v2",
 		}
-		if err := env.branchRepo.CreateVersion(ctx, v2); err != nil {
-			t.Fatalf("CreateVersion v2 failed: %v", err)
-		}
-		if err := env.branchRepo.CompleteVersion(ctx, v2); err != nil {
+		if err := env.db.seedCompletedVersion(ctx, v2); err != nil {
 			t.Fatalf("CompleteVersion v2 failed: %v", err)
 		}
 
@@ -2181,10 +2160,7 @@ func TestService_SimulateATS(t *testing.T) {
 			Status:           core.VersionStatusCompleted,
 			MarkdownOutput:   "# Jane Doe\nGo Engineer",
 		}
-		if err := env.branchRepo.CreateVersion(ctx, vSnap); err != nil {
-			t.Fatalf("CreateVersion failed: %v", err)
-		}
-		if err := env.branchRepo.CompleteVersion(ctx, vSnap); err != nil {
+		if err := env.db.seedCompletedVersion(ctx, vSnap); err != nil {
 			t.Fatalf("CompleteVersion failed: %v", err)
 		}
 
@@ -2192,8 +2168,8 @@ func TestService_SimulateATS(t *testing.T) {
 		svcSnapErr := branch.New(branch.Config{
 			Branches: env.branchRepo,
 			Profiles: &failingSnapshotProfileRepo{
-				ProfileStore: env.profileRepo,
-				snapErr:      errors.New("db connection lost"),
+				ProfileReader: env.profileRepo,
+				snapErr:       errors.New("db connection lost"),
 			},
 			Generator: sim,
 		})
@@ -2217,10 +2193,7 @@ func TestService_SimulateATS(t *testing.T) {
 			Status:           core.VersionStatusCompleted,
 			MarkdownOutput:   "# Jane Doe\nGo Engineer",
 		}
-		if err := env.branchRepo.CreateVersion(ctx, vQuotaCommit); err != nil {
-			t.Fatalf("CreateVersion failed: %v", err)
-		}
-		if err := env.branchRepo.CompleteVersion(ctx, vQuotaCommit); err != nil {
+		if err := env.db.seedCompletedVersion(ctx, vQuotaCommit); err != nil {
 			t.Fatalf("CompleteVersion failed: %v", err)
 		}
 
@@ -2258,10 +2231,7 @@ func TestService_SimulateATS(t *testing.T) {
 			Status:           core.VersionStatusCompleted,
 			MarkdownOutput:   "# Jane Doe\nGo Engineer",
 		}
-		if err := env.branchRepo.CreateVersion(ctx, vQuotaFail); err != nil {
-			t.Fatalf("CreateVersion failed: %v", err)
-		}
-		if err := env.branchRepo.CompleteVersion(ctx, vQuotaFail); err != nil {
+		if err := env.db.seedCompletedVersion(ctx, vQuotaFail); err != nil {
 			t.Fatalf("CompleteVersion failed: %v", err)
 		}
 
@@ -2296,10 +2266,7 @@ func TestService_SimulateATS(t *testing.T) {
 				Summary: "Distributed systems architect",
 			},
 		}
-		if err := env.branchRepo.CreateVersion(ctx, vPartial); err != nil {
-			t.Fatalf("CreateVersion failed: %v", err)
-		}
-		if err := env.branchRepo.CompleteVersion(ctx, vPartial); err != nil {
+		if err := env.db.seedCompletedVersion(ctx, vPartial); err != nil {
 			t.Fatalf("CompleteVersion failed: %v", err)
 		}
 
@@ -2351,11 +2318,8 @@ func TestService_SimulateATS(t *testing.T) {
 				},
 			},
 		}
-		if err := env.branchRepo.CreateVersion(ctx, vDet); err != nil {
-			t.Fatalf("CreateVersion failed: %v", err)
-		}
-		if err := env.branchRepo.CompleteVersion(ctx, vDet); err != nil {
-			t.Fatalf("CompleteVersion failed: %v", err)
+		if err := env.db.seedCompletedVersion(ctx, vDet); err != nil {
+			t.Fatalf("seedCompletedVersion failed: %v", err)
 		}
 
 		svcDet := branch.New(branch.Config{
@@ -2386,11 +2350,8 @@ func TestService_SimulateATS(t *testing.T) {
 			Status:           core.VersionStatusCompleted,
 			MarkdownOutput:   "# Concurrent Test\nGo and Kubernetes",
 		}
-		if err := env.branchRepo.CreateVersion(ctx, vConc); err != nil {
-			t.Fatalf("CreateVersion failed: %v", err)
-		}
-		if err := env.branchRepo.CompleteVersion(ctx, vConc); err != nil {
-			t.Fatalf("CompleteVersion failed: %v", err)
+		if err := env.db.seedCompletedVersion(ctx, vConc); err != nil {
+			t.Fatalf("seedCompletedVersion failed: %v", err)
 		}
 
 		simSlow := &stubATSSimulator{
@@ -2496,19 +2457,19 @@ func (q *contextCapturingQuotaRepo) Releases() []releaseCall {
 }
 
 type spyAbortStore struct {
-	*fakeBranchStore
+	*testBranchStore
 	mu              sync.Mutex
 	abortedCalls    []string
 	abortedStatuses map[string][]core.VersionStatus
 	cancelCtxFn     func()
 }
 
-func (s *spyAbortStore) AbortBranchVersions(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error) {
+func (s *spyAbortStore) AbortBranchJobs(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error) {
 	if s.cancelCtxFn != nil {
 		s.cancelCtxFn()
 	}
 
-	released, err := s.fakeBranchStore.AbortBranchVersions(ctx, branchID, reason)
+	released, err := s.testBranchStore.AbortBranchJobs(ctx, branchID, reason)
 	if err == nil {
 		versionsAfter, _ := s.ListVersions(ctx, branchID)
 		statuses := make([]core.VersionStatus, 0, len(versionsAfter))
@@ -2526,11 +2487,12 @@ func (s *spyAbortStore) AbortBranchVersions(ctx context.Context, branchID, reaso
 	return released, err
 }
 
-func (s *spyAbortStore) SubmitPendingVersion(ctx context.Context, version *core.BranchVersion, opts core.PendingJobOptions) ([]core.ReleasedReservation, error) {
+func (s *spyAbortStore) SubmitBranchTailor(ctx context.Context, job *core.Job, version *core.BranchVersion, opts core.PendingJobOptions) ([]core.ReleasedReservation, error) {
+	released, err := s.testBranchStore.SubmitBranchTailor(ctx, job, version, opts)
 	if s.cancelCtxFn != nil {
 		s.cancelCtxFn()
 	}
-	return s.fakeBranchStore.SubmitPendingVersion(ctx, version, opts)
+	return released, err
 }
 
 func TestService_AdmissionControlAndNotifications(t *testing.T) {
@@ -2540,17 +2502,15 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 		jobTTL             time.Duration
 		cleanupTimeout     time.Duration
 		useNotifier        bool
-		enqueuerCap        int
 		preSeedPending     int
 		cancelCtxOnSubmit  bool
 		wantErr            error
 		wantNotifierCalls  int
-		wantEnqueuerJobs   int
 		wantPendingVersion bool
 		wantReleasedCount  int
 	}{
 		{
-			name:               "notifier wakes workers without calling JobEnqueuer and persists ReservationID and ExpiresAt",
+			name:               "notifier wakes workers and persists Job ReservationID and ExpiresAt",
 			maxPending:         2,
 			jobTTL:             20 * time.Minute,
 			useNotifier:        true,
@@ -2576,15 +2536,6 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 			wantReleasedCount: 1,
 		},
 		{
-			name:               "JobEnqueuer failure does not fail persisted pending version or release quota",
-			maxPending:         5,
-			useNotifier:        false,
-			enqueuerCap:        0, // closed below to force ErrQueueFull from Enqueue
-			wantEnqueuerJobs:   0,
-			wantPendingVersion: true,
-			wantReleasedCount:  0,
-		},
-		{
 			name:              "cancelled caller context still releases quota via detached cleanup context on cap error",
 			maxPending:        1,
 			cleanupTimeout:    2 * time.Second,
@@ -2603,26 +2554,23 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 			baseStore := newSeededBranchStore(ctx, userID)
 			quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
 			notifier := &stubNotifier{}
-			enqueuer := newStubEnqueuer(10)
-			if tc.name == "JobEnqueuer failure does not fail persisted pending version or release quota" {
-				enqueuer.closed = true
-			}
 
 			fixedNow := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
 
 			callCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
 
-			var store branch.Store = baseStore
+			var jobs branch.JobStore = baseStore
 			if tc.cancelCtxOnSubmit {
-				store = &spyAbortStore{
-					fakeBranchStore: baseStore,
+				jobs = &spyAbortStore{
+					testBranchStore: baseStore,
 					cancelCtxFn:     cancel,
 				}
 			}
 
 			cfg := branch.Config{
-				Branches:            store,
+				Branches:            baseStore,
+				Jobs:                jobs,
 				Profiles:            baseStore,
 				Presets:             baseStore,
 				Templates:           baseStore,
@@ -2634,9 +2582,6 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 			}
 			if tc.useNotifier {
 				cfg.JobNotifier = notifier
-				cfg.JobEnqueuer = enqueuer
-			} else {
-				cfg.JobEnqueuer = enqueuer
 			}
 			svc := branch.New(cfg)
 
@@ -2651,14 +2596,12 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 					t.Fatalf("CreateBranch seed %d failed: %v", i, err)
 				}
 				seedVer := &core.BranchVersion{
-					ID:            fmt.Sprintf("ver-seed-%d", i),
-					UserID:        userID,
-					BranchID:      extraBranch.ID,
-					Status:        core.VersionStatusPending,
-					ReservationID: fmt.Sprintf("res-seed-%d", i),
+					ID:       fmt.Sprintf("ver-seed-%d", i),
+					UserID:   userID,
+					BranchID: extraBranch.ID,
 				}
-				if err := baseStore.CreateVersion(ctx, seedVer); err != nil {
-					t.Fatalf("CreateVersion seed %d failed: %v", i, err)
+				if err := baseStore.seedVersionInState(ctx, seedVer, core.VersionStatusPending, fmt.Sprintf("res-seed-%d", i)); err != nil {
+					t.Fatalf("seedVersionInState %d failed: %v", i, err)
 				}
 			}
 
@@ -2688,31 +2631,35 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 				if ver == nil || ver.Status != core.VersionStatusPending {
 					t.Fatalf("expected pending version, got %+v", ver)
 				}
-				if ver.ReservationID == "" {
-					t.Errorf("expected non-empty ReservationID")
+				if ver.JobID == "" {
+					t.Fatalf("expected non-empty JobID on pending version")
+				}
+				persistedJob, jErr := baseStore.Job(ctx, userID, ver.JobID)
+				if jErr != nil {
+					t.Fatalf("expected persisted job in store: %v", jErr)
+				}
+				if persistedJob.ReservationID == "" {
+					t.Errorf("expected non-empty ReservationID on persisted job")
 				}
 				expectedTTL := tc.jobTTL
 				if expectedTTL <= 0 {
 					expectedTTL = core.DefaultJobTTL
 				}
 				wantExpiry := fixedNow.Add(expectedTTL)
-				if ver.ExpiresAt == nil || !ver.ExpiresAt.Equal(wantExpiry) {
-					t.Errorf("expected ExpiresAt=%v, got %v", wantExpiry, ver.ExpiresAt)
+				if persistedJob.ExpiresAt == nil || !persistedJob.ExpiresAt.Equal(wantExpiry) {
+					t.Errorf("expected ExpiresAt=%v, got %v", wantExpiry, persistedJob.ExpiresAt)
 				}
 				reloaded, getErr := svc.Version(ctx, targetBranch.ID, ver.ID)
 				if getErr != nil {
 					t.Fatalf("expected persisted version in store: %v", getErr)
 				}
-				if reloaded.Status != core.VersionStatusPending || reloaded.ReservationID != ver.ReservationID {
+				if reloaded.Status != core.VersionStatusPending || reloaded.JobID != ver.JobID {
 					t.Errorf("reloaded version mismatch: %+v", reloaded)
 				}
 			}
 
 			if notifier.Count() != tc.wantNotifierCalls {
 				t.Errorf("expected %d notifier calls, got %d", tc.wantNotifierCalls, notifier.Count())
-			}
-			if len(enqueuer.jobs) != tc.wantEnqueuerJobs {
-				t.Errorf("expected %d enqueuer jobs, got %d", tc.wantEnqueuerJobs, len(enqueuer.jobs))
 			}
 
 			releases := quotaSpy.Releases()
@@ -2770,6 +2717,7 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 
 			svc := branch.New(branch.Config{
 				Branches:            store,
+				Jobs:                store,
 				Profiles:            store,
 				Presets:             store,
 				Templates:           store,
@@ -2794,14 +2742,12 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 				t.Fatalf("ReserveQuota prior failed: %v", err)
 			}
 			priorVer := &core.BranchVersion{
-				ID:            "ver-prior-1",
-				UserID:        userID,
-				BranchID:      b.ID,
-				Status:        tc.existingStatus,
-				ReservationID: priorRec.ID,
+				ID:       "ver-prior-1",
+				UserID:   userID,
+				BranchID: b.ID,
 			}
-			if err := store.CreateVersion(ctx, priorVer); err != nil {
-				t.Fatalf("CreateVersion prior failed: %v", err)
+			if err := store.seedVersionInState(ctx, priorVer, tc.existingStatus, priorRec.ID); err != nil {
+				t.Fatalf("seedVersionInState prior failed: %v", err)
 			}
 
 			newVer, err := svc.GenerateVersion(ctx, userID, b.ID)
@@ -2813,8 +2759,11 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if newVer.Status != core.VersionStatusPending || newVer.ReservationID == "" {
-					t.Errorf("expected new pending version with ReservationID, got %+v", newVer)
+				if newVer.Status != core.VersionStatusPending || newVer.JobID == "" {
+					t.Errorf("expected new pending version with JobID, got %+v", newVer)
+				}
+				if newJob, jErr := store.Job(ctx, userID, newVer.JobID); jErr != nil || newJob.ReservationID == "" {
+					t.Errorf("expected persisted job with ReservationID, got %+v err=%v", newJob, jErr)
 				}
 			}
 
@@ -2861,6 +2810,7 @@ func TestService_SyncBranchesPartialBatchAndDefaultHandling(t *testing.T) {
 
 	svc := branch.New(branch.Config{
 		Branches:            store,
+		Jobs:                store,
 		Profiles:            store,
 		Presets:             store,
 		Templates:           store,
@@ -2966,6 +2916,7 @@ func TestService_CancelVersion(t *testing.T) {
 			quotaSpy := &contextCapturingQuotaRepo{inner: store}
 			svc := branch.New(branch.Config{
 				Branches:       store,
+				Jobs:           store,
 				Profiles:       store,
 				Presets:        store,
 				Templates:      store,
@@ -2988,14 +2939,12 @@ func TestService_CancelVersion(t *testing.T) {
 				t.Fatalf("ReserveQuota failed: %v", err)
 			}
 			ver := &core.BranchVersion{
-				ID:            "ver-cancel-" + uuid.New().String(),
-				UserID:        owner,
-				BranchID:      b.ID,
-				Status:        tc.initialStatus,
-				ReservationID: rec.ID,
+				ID:       "ver-cancel-" + uuid.New().String(),
+				UserID:   owner,
+				BranchID: b.ID,
 			}
-			if err := store.CreateVersion(ctx, ver); err != nil {
-				t.Fatalf("CreateVersion failed: %v", err)
+			if err := store.seedVersionInState(ctx, ver, tc.initialStatus, rec.ID); err != nil {
+				t.Fatalf("seedVersionInState failed: %v", err)
 			}
 
 			branchID := tc.targetBranchID
@@ -3022,8 +2971,8 @@ func TestService_CancelVersion(t *testing.T) {
 				if cancelled.ErrorMessage != "cancelled by user" {
 					t.Errorf("expected reason 'cancelled by user', got %q", cancelled.ErrorMessage)
 				}
-				if cancelled.ReservationID != rec.ID {
-					t.Errorf("expected ReservationID %s preserved on returned version, got %q", rec.ID, cancelled.ReservationID)
+				if cancelledJob, jErr := store.Job(ctx, owner, cancelled.JobID); jErr != nil || cancelledJob.ReservationID != rec.ID {
+					t.Errorf("expected ReservationID %s preserved on job, got job=%+v err=%v", rec.ID, cancelledJob, jErr)
 				}
 			}
 
@@ -3101,12 +3050,13 @@ func TestService_MutationSupersedence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			env := setupTestBranchEnv(t, 10)
-			store := env.db.(*fakeBranchStore)
+			store := env.db
 			quotaSpy := &contextCapturingQuotaRepo{inner: store}
 			notifier := &stubNotifier{}
 
 			svc := branch.New(branch.Config{
 				Branches:       store,
+				Jobs:           store,
 				Profiles:       store,
 				Presets:        store,
 				Templates:      store,
@@ -3131,10 +3081,7 @@ func TestService_MutationSupersedence(t *testing.T) {
 				TemplateSetIDUsed: core.TemplateStandardCleanID,
 				SourceType:        core.SourceTypeLLMGeneration,
 			}
-			if err := store.CreateVersion(ctx, v2); err != nil {
-				t.Fatalf("CreateVersion v2: %v", err)
-			}
-			if err := store.CompleteVersion(ctx, v2); err != nil {
+			if err := store.seedCompletedVersion(ctx, v2); err != nil {
 				t.Fatalf("CompleteVersion v2: %v", err)
 			}
 
@@ -3142,6 +3089,10 @@ func TestService_MutationSupersedence(t *testing.T) {
 			pendingVer, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID)
 			if err != nil {
 				t.Fatalf("GenerateVersion pending failed: %v", err)
+			}
+			pendingJob, err := store.Job(ctx, env.defaultUser, pendingVer.JobID)
+			if err != nil {
+				t.Fatalf("Job pending load failed: %v", err)
 			}
 
 			b, err := svc.Branch(ctx, env.defaultUser, env.branchID)
@@ -3166,8 +3117,8 @@ func TestService_MutationSupersedence(t *testing.T) {
 			if len(releases) != 1 {
 				t.Fatalf("expected 1 quota release, got %d", len(releases))
 			}
-			if releases[0].reservationID != pendingVer.ReservationID {
-				t.Errorf("expected reservation %s released, got %s", pendingVer.ReservationID, releases[0].reservationID)
+			if releases[0].reservationID != pendingJob.ReservationID {
+				t.Errorf("expected reservation %s released, got %s", pendingJob.ReservationID, releases[0].reservationID)
 			}
 			if releases[0].reason != tc.expectedReason {
 				t.Errorf("expected release reason %q, got %q", tc.expectedReason, releases[0].reason)
@@ -3180,25 +3131,35 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 	ctx := context.Background()
 	owner := "delete-owner"
 	baseStore := newSeededBranchStore(ctx, owner)
-	spyStore := &spyAbortStore{fakeBranchStore: baseStore}
+	spyStore := &spyAbortStore{testBranchStore: baseStore}
 	quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
 
 	svc := branch.New(branch.Config{
-		Branches:  spyStore,
+		Branches:  baseStore,
+		Jobs:      spyStore,
 		Profiles:  baseStore,
 		Presets:   baseStore,
 		Templates: baseStore,
 		Quotas:    quotaSpy,
 	})
 
-	b := &core.Branch{
-		ID:            "branch-delete-abort",
+	bPending := &core.Branch{
+		ID:            "branch-delete-abort-pending",
 		UserID:        owner,
-		Name:          "Branch To Delete",
+		Name:          "Branch To Delete (Pending)",
 		TemplateSetID: core.TemplateStandardCleanID,
 	}
-	if _, err := svc.CreateBranch(ctx, b); err != nil {
-		t.Fatalf("CreateBranch failed: %v", err)
+	if _, err := svc.CreateBranch(ctx, bPending); err != nil {
+		t.Fatalf("CreateBranch pending failed: %v", err)
+	}
+	bProcessing := &core.Branch{
+		ID:            "branch-delete-abort-processing",
+		UserID:        owner,
+		Name:          "Branch To Delete (Processing)",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
+	if _, err := svc.CreateBranch(ctx, bProcessing); err != nil {
+		t.Fatalf("CreateBranch processing failed: %v", err)
 	}
 
 	resPending, err := quotaSpy.ReserveQuota(ctx, owner, core.OperationResumeTailoring, 2000, 50, 1000000)
@@ -3211,34 +3172,29 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 	}
 
 	vPending := &core.BranchVersion{
-		ID:            "ver-del-pending",
-		UserID:        owner,
-		BranchID:      b.ID,
-		Status:        core.VersionStatusPending,
-		ReservationID: resPending.ID,
+		ID:       "ver-del-pending",
+		UserID:   owner,
+		BranchID: bPending.ID,
 	}
 	vProcessing := &core.BranchVersion{
-		ID:            "ver-del-processing",
-		UserID:        owner,
-		BranchID:      b.ID,
-		Status:        core.VersionStatusProcessing,
-		ClaimedBy:     "worker-1",
-		ReservationID: resProcessing.ID,
+		ID:       "ver-del-processing",
+		UserID:   owner,
+		BranchID: bProcessing.ID,
 	}
-	if err := baseStore.CreateVersion(ctx, vPending); err != nil {
-		t.Fatalf("CreateVersion pending: %v", err)
+	if err := baseStore.seedVersionInState(ctx, vPending, core.VersionStatusPending, resPending.ID); err != nil {
+		t.Fatalf("seed pending: %v", err)
 	}
-	if err := baseStore.CreateVersion(ctx, vProcessing); err != nil {
-		t.Fatalf("CreateVersion processing: %v", err)
+	if err := baseStore.seedVersionInState(ctx, vProcessing, core.VersionStatusProcessing, resProcessing.ID); err != nil {
+		t.Fatalf("seed processing: %v", err)
 	}
 
 	t.Run("cross-tenant DeleteBranch denied before aborting versions", func(t *testing.T) {
-		err := svc.DeleteBranch(ctx, "other-tenant", b.ID)
+		err := svc.DeleteBranch(ctx, "other-tenant", bPending.ID)
 		if !errors.Is(err, core.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound for cross-tenant delete, got %v", err)
 		}
 		if len(spyStore.abortedCalls) != 0 {
-			t.Errorf("expected AbortBranchVersions NOT to be called on unauthorized delete, got %v", spyStore.abortedCalls)
+			t.Errorf("expected AbortBranchJobs NOT to be called on unauthorized delete, got %v", spyStore.abortedCalls)
 		}
 		if len(quotaSpy.Releases()) != 0 {
 			t.Errorf("expected zero quota releases on unauthorized delete")
@@ -3253,21 +3209,21 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 		{name: "whitespace userID DeleteBranch rejected before aborting versions", userID: "   "},
 	} {
 		t.Run(badUserID.name, func(t *testing.T) {
-			err := svc.DeleteBranch(ctx, badUserID.userID, b.ID)
+			err := svc.DeleteBranch(ctx, badUserID.userID, bPending.ID)
 			if !errors.Is(err, core.ErrValidation) {
 				t.Fatalf("expected ErrValidation for %q DeleteBranch, got %v", badUserID.userID, err)
 			}
 			if len(spyStore.abortedCalls) != 0 {
-				t.Errorf("expected AbortBranchVersions NOT to be called, got %v", spyStore.abortedCalls)
+				t.Errorf("expected AbortBranchJobs NOT to be called, got %v", spyStore.abortedCalls)
 			}
 			if len(quotaSpy.Releases()) != 0 {
 				t.Errorf("expected zero quota releases on rejected delete, got %+v", quotaSpy.Releases())
 			}
-			gotPending, err := svc.Version(ctx, b.ID, vPending.ID)
+			gotPending, err := svc.Version(ctx, bPending.ID, vPending.ID)
 			if err != nil || gotPending.Status != core.VersionStatusPending {
 				t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
 			}
-			gotProcessing, err := svc.Version(ctx, b.ID, vProcessing.ID)
+			gotProcessing, err := svc.Version(ctx, bProcessing.ID, vProcessing.ID)
 			if err != nil || gotProcessing.Status != core.VersionStatusProcessing {
 				t.Errorf("expected victim processing version untouched, got %+v err=%v", gotProcessing, err)
 			}
@@ -3282,17 +3238,20 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 	})
 
 	t.Run("owner DeleteBranch aborts pending and processing versions and releases all quota", func(t *testing.T) {
-		if err := svc.DeleteBranch(ctx, owner, b.ID); err != nil {
-			t.Fatalf("DeleteBranch failed: %v", err)
+		if err := svc.DeleteBranch(ctx, owner, bPending.ID); err != nil {
+			t.Fatalf("DeleteBranch pending failed: %v", err)
+		}
+		if err := svc.DeleteBranch(ctx, owner, bProcessing.ID); err != nil {
+			t.Fatalf("DeleteBranch processing failed: %v", err)
 		}
 
-		statuses := spyStore.abortedStatuses[b.ID]
-		if len(statuses) != 2 {
-			t.Fatalf("expected 2 version statuses aborted before branch deletion, got %v", statuses)
-		}
-		for _, st := range statuses {
-			if st != core.VersionStatusCancelled {
-				t.Errorf("expected aborted version status cancelled, got %s", st)
+		for _, branchID := range []string{bPending.ID, bProcessing.ID} {
+			statuses := spyStore.abortedStatuses[branchID]
+			if len(statuses) != 1 || statuses[0] != core.VersionStatusCancelled {
+				t.Fatalf("expected 1 cancelled status on %s before branch deletion, got %v", branchID, statuses)
+			}
+			if _, err := svc.Branch(ctx, owner, branchID); !errors.Is(err, core.ErrNotFound) {
+				t.Errorf("expected deleted branch %s to return ErrNotFound, got %v", branchID, err)
 			}
 		}
 
@@ -3313,17 +3272,13 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 		if !releasedIDs[resPending.ID] || !releasedIDs[resProcessing.ID] {
 			t.Errorf("missing expected reservation IDs in releases: %+v", releases)
 		}
-
-		if _, err := svc.Branch(ctx, owner, b.ID); !errors.Is(err, core.ErrNotFound) {
-			t.Errorf("expected deleted branch to return ErrNotFound, got %v", err)
-		}
 	})
 }
 
-func TestFakeBranchStore_LeaseGuardsAndLifecycle(t *testing.T) {
+func TestStore_JobLeaseGuardsAndLifecycle(t *testing.T) {
 	ctx := context.Background()
 	userID := "store-guard-user"
-	store := newSeededBranchStore(ctx, userID)
+	st := newSeededBranchStore(ctx, userID)
 
 	b := &core.Branch{
 		ID:            "br-store-guard",
@@ -3331,48 +3286,65 @@ func TestFakeBranchStore_LeaseGuardsAndLifecycle(t *testing.T) {
 		Name:          "Store Guard",
 		TemplateSetID: core.TemplateStandardCleanID,
 	}
-	if err := store.CreateBranch(ctx, b); err != nil {
+	if err := st.CreateBranch(ctx, b); err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
 
 	t0 := time.Date(2026, 11, 15, 8, 0, 0, 0, time.UTC)
+	exp := t0.Add(10 * time.Minute)
 	v := &core.BranchVersion{
-		ID:            "ver-lease-1",
-		UserID:        userID,
-		BranchID:      b.ID,
-		ReservationID: "res-lease-1",
+		ID:                "ver-lease-1",
+		UserID:            userID,
+		BranchID:          b.ID,
+		JobID:             "job-lease-1",
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
+		SourceType:        core.SourceTypeLLMGeneration,
 	}
-	if _, err := store.SubmitPendingVersion(ctx, v, core.PendingJobOptions{
+	job := &core.Job{
+		ID:            "job-lease-1",
+		Kind:          core.JobKindBranchTailor,
+		UserID:        userID,
+		Status:        core.JobStatusPending,
+		ReservationID: "res-lease-1",
+		ExpiresAt:     &exp,
+		Tailor: &core.BranchTailorSpec{
+			BranchID:  b.ID,
+			VersionID: v.ID,
+		},
+		CreatedAt: t0,
+		UpdatedAt: t0,
+	}
+	if _, err := st.SubmitBranchTailor(ctx, job, v, core.PendingJobOptions{
 		MaxPendingPerTenant: 5,
 		TTL:                 10 * time.Minute,
 		Now:                 t0,
 	}); err != nil {
-		t.Fatalf("SubmitPendingVersion: %v", err)
+		t.Fatalf("SubmitBranchTailor: %v", err)
 	}
 
-	claimed, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{
+	claimed, err := st.ClaimNext(ctx, core.ClaimJobRequest{
 		WorkerID:               "worker-a",
 		Now:                    t0.Add(time.Minute),
 		LeaseDuration:          2 * time.Minute,
 		MaxConcurrentPerTenant: 1,
 	})
 	if err != nil || claimed == nil {
-		t.Fatalf("ClaimNextVersion failed: claimed=%v err=%v", claimed, err)
+		t.Fatalf("ClaimNext failed: claimed=%v err=%v", claimed, err)
 	}
-	if claimed.Status != core.VersionStatusProcessing || claimed.ClaimedBy != "worker-a" || claimed.AttemptCount != 1 {
-		t.Fatalf("unexpected claimed version: %+v", claimed)
+	if claimed.Status != core.JobStatusProcessing || claimed.ClaimedBy != "worker-a" || claimed.AttemptCount != 1 {
+		t.Fatalf("unexpected claimed job: %+v", claimed)
 	}
 
 	// Lease renewal by wrong worker fails
-	if err := store.RenewVersionLease(ctx, claimed.ID, "worker-b", t0.Add(5*time.Minute)); !errors.Is(err, core.ErrLeaseExpired) {
+	if err := st.RenewLease(ctx, claimed.ID, "worker-b", t0.Add(5*time.Minute)); !errors.Is(err, core.ErrLeaseExpired) {
 		t.Errorf("expected ErrLeaseExpired for wrong worker renewal, got %v", err)
 	}
 
-	// Requeue and reclaim by worker-b; stale worker-a CompleteVersion must fail with ErrLeaseExpired
-	if err := store.RequeueVersionForRetry(ctx, claimed.ID, "worker-a", t0.Add(2*time.Minute), "transient"); err != nil {
-		t.Fatalf("RequeueVersionForRetry failed: %v", err)
+	// Requeue and reclaim by worker-b; stale worker-a CompleteBranchTailor must fail with ErrLeaseExpired
+	if err := st.RequeueForRetry(ctx, claimed.ID, "worker-a", t0.Add(2*time.Minute), "transient"); err != nil {
+		t.Fatalf("RequeueForRetry failed: %v", err)
 	}
-	reclaimed, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{
+	reclaimed, err := st.ClaimNext(ctx, core.ClaimJobRequest{
 		WorkerID:      "worker-b",
 		Now:           t0.Add(2 * time.Minute),
 		LeaseDuration: 2 * time.Minute,
@@ -3381,38 +3353,36 @@ func TestFakeBranchStore_LeaseGuardsAndLifecycle(t *testing.T) {
 		t.Fatalf("expected reclaim by worker-b, got %+v, err=%v", reclaimed, err)
 	}
 
-	staleComplete := *claimed
+	staleComplete := *v
 	staleComplete.Status = core.VersionStatusCompleted
-	if err := store.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrLeaseExpired) {
-		t.Errorf("expected ErrLeaseExpired for stale worker-a CompleteVersion, got %v", err)
+	if err := st.CompleteBranchTailor(ctx, claimed.ID, "worker-a", &staleComplete); !errors.Is(err, core.ErrLeaseExpired) {
+		t.Errorf("expected ErrLeaseExpired for stale worker-a CompleteBranchTailor, got %v", err)
 	}
 
 	// Expire lease and verify terminal guards
-	released, err := store.FailExpiredVersionLeases(ctx, t0.Add(10*time.Minute), "lease timed out")
+	released, err := st.FailExpiredLeases(ctx, t0.Add(10*time.Minute), "lease timed out")
 	if err != nil {
-		t.Fatalf("FailExpiredVersionLeases: %v", err)
+		t.Fatalf("FailExpiredLeases: %v", err)
 	}
 	if len(released) != 1 || released[0].ReservationID != "res-lease-1" {
 		t.Fatalf("expected 1 released reservation from expired lease, got %+v", released)
 	}
-	if err := store.UpdateVersionStatus(ctx, reclaimed.ID, core.VersionStatusProcessing, ""); !errors.Is(err, core.ErrConflict) {
-		t.Errorf("expected ErrConflict updating terminal failed version, got %v", err)
-	}
-	if err := store.CompleteVersion(ctx, reclaimed); !errors.Is(err, core.ErrConflict) {
-		t.Errorf("expected ErrConflict completing failed version, got %v", err)
+	if err := st.CompleteBranchTailor(ctx, reclaimed.ID, "worker-b", &staleComplete); !errors.Is(err, core.ErrConflict) {
+		t.Errorf("expected ErrConflict completing failed job, got %v", err)
 	}
 }
 
 func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 	setupTailoredWithActiveAndProcessing := func(t *testing.T, withSecondCompleted bool) (
 		context.Context,
-		*fakeBranchStore,
+		*testBranchStore,
 		*contextCapturingQuotaRepo,
 		*branch.Service,
 		*core.Branch,
 		*core.BranchVersion,
 		*core.BranchVersion,
-		*core.BranchVersion,
+		*core.Job,
+		string,
 	) {
 		t.Helper()
 		ctx := context.Background()
@@ -3421,6 +3391,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
 		svc := branch.New(branch.Config{
 			Branches:       baseStore,
+			Jobs:           baseStore,
 			Profiles:       baseStore,
 			Presets:        baseStore,
 			Templates:      baseStore,
@@ -3448,11 +3419,8 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 			TemplateSetIDUsed: core.TemplateStandardCleanID,
 			SourceType:        core.SourceTypeLLMGeneration,
 		}
-		if err := baseStore.CreateVersion(ctx, v1); err != nil {
-			t.Fatalf("CreateVersion v1 failed: %v", err)
-		}
-		if err := baseStore.CompleteVersion(ctx, v1); err != nil {
-			t.Fatalf("CompleteVersion v1 failed: %v", err)
+		if err := baseStore.seedCompletedVersion(ctx, v1); err != nil {
+			t.Fatalf("seed v1 failed: %v", err)
 		}
 
 		if withSecondCompleted {
@@ -3465,11 +3433,8 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 				TemplateSetIDUsed: core.TemplateStandardCleanID,
 				SourceType:        core.SourceTypeLLMGeneration,
 			}
-			if err := baseStore.CreateVersion(ctx, v2); err != nil {
-				t.Fatalf("CreateVersion v2 failed: %v", err)
-			}
-			if err := baseStore.CompleteVersion(ctx, v2); err != nil {
-				t.Fatalf("CompleteVersion v2 failed: %v", err)
+			if err := baseStore.seedCompletedVersion(ctx, v2); err != nil {
+				t.Fatalf("seed v2 failed: %v", err)
 			}
 		}
 
@@ -3477,31 +3442,36 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GenerateVersion failed: %v", err)
 		}
-		claimedVer, err := baseStore.ClaimNextVersion(ctx, core.ClaimJobRequest{
+		pendingJob, err := baseStore.Job(ctx, userID, pendingVer.JobID)
+		if err != nil {
+			t.Fatalf("Job reload failed: %v", err)
+		}
+		claimedJob, err := baseStore.ClaimNext(ctx, core.ClaimJobRequest{
 			WorkerID:      "worker-1",
 			LeaseDuration: 2 * time.Minute,
 		})
-		if err != nil || claimedVer == nil || claimedVer.ID != pendingVer.ID {
-			t.Fatalf("ClaimNextVersion failed: claimed=%+v err=%v", claimedVer, err)
+		if err != nil || claimedJob == nil || claimedJob.Tailor == nil || claimedJob.Tailor.VersionID != pendingVer.ID {
+			t.Fatalf("ClaimNext failed: claimed=%+v err=%v", claimedJob, err)
 		}
 
 		loadedBranch, err := svc.Branch(ctx, userID, b.ID)
 		if err != nil {
 			t.Fatalf("Branch reload failed: %v", err)
 		}
-		return ctx, baseStore, quotaSpy, svc, loadedBranch, v1, pendingVer, claimedVer
+		return ctx, baseStore, quotaSpy, svc, loadedBranch, v1, pendingVer, claimedJob, pendingJob.ReservationID
 	}
 
-	t.Run("rollback of ActiveVersionID cancels higher-numbered processing version, releases quota, and blocks stale CompleteVersion", func(t *testing.T) {
-		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedV3 := setupTailoredWithActiveAndProcessing(t, true)
+	t.Run("rollback of ActiveVersionID cancels higher-numbered processing version, releases quota, and blocks stale CompleteBranchTailor", func(t *testing.T) {
+		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedJob, reservationID := setupTailoredWithActiveAndProcessing(t, true)
 		callCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		spyStore := &spyAbortStore{
-			fakeBranchStore: baseStore,
+			testBranchStore: baseStore,
 			cancelCtxFn:     cancel,
 		}
 		svcWithCancel := branch.New(branch.Config{
-			Branches:       spyStore,
+			Branches:       baseStore,
+			Jobs:           spyStore,
 			Profiles:       baseStore,
 			Presets:        baseStore,
 			Templates:      baseStore,
@@ -3533,14 +3503,14 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		if len(releases) != 1 {
 			t.Fatalf("expected 1 quota release, got %d (%+v)", len(releases), releases)
 		}
-		if releases[0].reservationID != pendingVer.ReservationID || !releases[0].hasDeadline || releases[0].ctxErr != nil {
+		if releases[0].reservationID != reservationID || !releases[0].hasDeadline || releases[0].ctxErr != nil {
 			t.Errorf("unexpected quota release details: %+v", releases[0])
 		}
 
-		staleComplete := *claimedV3
+		staleComplete := *pendingVer
 		staleComplete.Status = core.VersionStatusCompleted
-		if err := baseStore.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrConflict) {
-			t.Fatalf("expected stale CompleteVersion to return ErrConflict, got %v", err)
+		if err := baseStore.CompleteBranchTailor(ctx, claimedJob.ID, claimedJob.ClaimedBy, &staleComplete); !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected stale CompleteBranchTailor to return ErrConflict, got %v", err)
 		}
 
 		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
@@ -3552,8 +3522,8 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		}
 	})
 
-	t.Run("TargetRequirements change cancels processing version, releases quota, and blocks stale CompleteVersion", func(t *testing.T) {
-		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedV2 := setupTailoredWithActiveAndProcessing(t, false)
+	t.Run("TargetRequirements change cancels processing version, releases quota, and blocks stale CompleteBranchTailor", func(t *testing.T) {
+		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedJob, reservationID := setupTailoredWithActiveAndProcessing(t, false)
 
 		b.TargetRequirements = "Rust, Raft consensus, zero-copy networking"
 		updated, err := svc.UpdateBranch(ctx, b)
@@ -3573,14 +3543,14 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		}
 
 		releases := quotaSpy.Releases()
-		if len(releases) != 1 || releases[0].reservationID != pendingVer.ReservationID {
-			t.Fatalf("expected reservation %s released, got %+v", pendingVer.ReservationID, releases)
+		if len(releases) != 1 || releases[0].reservationID != reservationID {
+			t.Fatalf("expected reservation %s released, got %+v", reservationID, releases)
 		}
 
-		staleComplete := *claimedV2
+		staleComplete := *pendingVer
 		staleComplete.Status = core.VersionStatusCompleted
-		if err := baseStore.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrConflict) {
-			t.Fatalf("expected stale CompleteVersion to return ErrConflict, got %v", err)
+		if err := baseStore.CompleteBranchTailor(ctx, claimedJob.ID, claimedJob.ClaimedBy, &staleComplete); !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected stale CompleteBranchTailor to return ErrConflict, got %v", err)
 		}
 
 		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
@@ -3592,17 +3562,17 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		}
 	})
 
-	t.Run("store rejects stale processing CompleteVersion via epoch bump even before abort runs", func(t *testing.T) {
-		ctx, baseStore, _, svc, b, v1, _, claimedV3 := setupTailoredWithActiveAndProcessing(t, true)
+	t.Run("store rejects stale processing CompleteBranchTailor via epoch bump even before abort runs", func(t *testing.T) {
+		ctx, baseStore, _, svc, b, v1, pendingVer, claimedJob, _ := setupTailoredWithActiveAndProcessing(t, true)
 
 		b.ActiveVersionID = &v1.ID
 		if err := baseStore.UpdateBranch(ctx, b); err != nil {
 			t.Fatalf("direct store UpdateBranch failed: %v", err)
 		}
 
-		staleComplete := *claimedV3
+		staleComplete := *pendingVer
 		staleComplete.Status = core.VersionStatusCompleted
-		if err := baseStore.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrConflict) {
+		if err := baseStore.CompleteBranchTailor(ctx, claimedJob.ID, claimedJob.ClaimedBy, &staleComplete); !errors.Is(err, core.ErrConflict) {
 			t.Fatalf("expected ErrConflict from epoch guard while still processing, got %v", err)
 		}
 
@@ -3616,7 +3586,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 	})
 
 	t.Run("non-config metadata update does not abort in-flight processing version", func(t *testing.T) {
-		ctx, baseStore, quotaSpy, svc, b, _, pendingVer, claimedV2 := setupTailoredWithActiveAndProcessing(t, false)
+		ctx, baseStore, quotaSpy, svc, b, _, pendingVer, claimedJob, _ := setupTailoredWithActiveAndProcessing(t, false)
 
 		b.Name = "Renamed Metadata Only"
 		b.PinnedEntityIDs = []string{}
@@ -3640,10 +3610,10 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 			t.Errorf("expected zero quota releases on metadata update, got %+v", quotaSpy.Releases())
 		}
 
-		validComplete := *claimedV2
+		validComplete := *pendingVer
 		validComplete.Status = core.VersionStatusCompleted
-		if err := baseStore.CompleteVersion(ctx, &validComplete); err != nil {
-			t.Fatalf("expected CompleteVersion to succeed after metadata update, got %v", err)
+		if err := baseStore.CompleteBranchTailor(ctx, claimedJob.ID, claimedJob.ClaimedBy, &validComplete); err != nil {
+			t.Fatalf("expected CompleteBranchTailor to succeed after metadata update, got %v", err)
 		}
 
 		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
@@ -3654,7 +3624,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 			t.Errorf("expected ActiveVersionID=%s, got %v", pendingVer.ID, afterBranch.ActiveVersionID)
 		}
 		if afterBranch.Name != "Renamed Metadata Only" {
-			t.Errorf("expected Name preserved after CompleteVersion, got %q", afterBranch.Name)
+			t.Errorf("expected Name preserved after CompleteBranchTailor, got %q", afterBranch.Name)
 		}
 	})
 }
@@ -3688,6 +3658,7 @@ func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
 
 	svc := branch.New(branch.Config{
 		Branches:  store,
+		Jobs:      store,
 		Profiles:  store,
 		Presets:   store,
 		Templates: store,
@@ -3718,10 +3689,7 @@ func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
 		SourceType:        core.SourceTypeLLMGeneration,
 		MarkdownOutput:    "# Staff Engineer\nBuilt deterministic Go services.",
 	}
-	if err := store.CreateVersion(ctx, v1); err != nil {
-		t.Fatalf("CreateVersion failed: %v", err)
-	}
-	if err := store.CompleteVersion(ctx, v1); err != nil {
+	if err := store.seedCompletedVersion(ctx, v1); err != nil {
 		t.Fatalf("CompleteVersion failed: %v", err)
 	}
 
@@ -3800,35 +3768,22 @@ func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
 }
 
 type permissiveTenantStore struct {
-	*fakeBranchStore
+	*testBranchStore
+	ownerID string
 }
 
 func (s *permissiveTenantStore) Branch(ctx context.Context, _ string, id string) (*core.Branch, error) {
-	return s.fakeBranchStore.Branch(ctx, "", id)
+	return s.Branches.Branch(ctx, "", id)
 }
 
 func (s *permissiveTenantStore) ListBranches(ctx context.Context, _ string) ([]core.Branch, error) {
-	s.mu.Lock()
-	var ids []string
-	for _, b := range s.branches {
-		ids = append(ids, b.ID)
-	}
-	s.mu.Unlock()
-
-	var all []core.Branch
-	for _, id := range ids {
-		b, err := s.fakeBranchStore.Branch(ctx, "", id)
-		if err == nil {
-			all = append(all, *b)
-		}
-	}
-	return all, nil
+	return s.Branches.ListBranches(ctx, s.ownerID)
 }
 
 func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t *testing.T) {
 	setupVictim := func(t *testing.T, withProfiles bool, permissive bool) (
 		context.Context,
-		*fakeBranchStore,
+		*testBranchStore,
 		*spyQuotaRepo,
 		*stubNotifier,
 		*branch.Service,
@@ -3853,21 +3808,19 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 			t.Fatalf("CreateBranch victim: %v", err)
 		}
 		victimPending := &core.BranchVersion{
-			ID:            "ver-victim-pending",
-			UserID:        victim,
-			BranchID:      victimBranch.ID,
-			Status:        core.VersionStatusPending,
-			ReservationID: "res-victim-existing",
+			ID:       "ver-victim-pending",
+			UserID:   victim,
+			BranchID: victimBranch.ID,
 		}
-		if err := store.CreateVersion(ctx, victimPending); err != nil {
-			t.Fatalf("CreateVersion victim pending: %v", err)
+		if err := store.seedVersionInState(ctx, victimPending, core.VersionStatusPending, "res-victim-existing"); err != nil {
+			t.Fatalf("seed victim pending: %v", err)
 		}
 
 		quotaSpy := &spyQuotaRepo{}
 		notifier := &stubNotifier{}
 		var branchStore branch.Store = store
 		if permissive {
-			branchStore = &permissiveTenantStore{fakeBranchStore: store}
+			branchStore = &permissiveTenantStore{testBranchStore: store, ownerID: victim}
 		}
 		var profiles branch.ProfileReader
 		if withProfiles {
@@ -3875,6 +3828,7 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 		}
 		svc := branch.New(branch.Config{
 			Branches:    branchStore,
+			Jobs:        store,
 			Profiles:    profiles,
 			Presets:     store,
 			Templates:   store,
@@ -4010,7 +3964,7 @@ func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testi
 	ctx := context.Background()
 	owner := "tenant-owner"
 	baseStore := newSeededBranchStore(ctx, owner)
-	permStore := &permissiveTenantStore{fakeBranchStore: baseStore}
+	permStore := &permissiveTenantStore{testBranchStore: baseStore, ownerID: owner}
 	quotaSpy := &spyQuotaRepo{}
 
 	exp := &core.WorkExperience{
@@ -4052,25 +4006,21 @@ func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testi
 		MainRevisionUsed: 1,
 		MarkdownOutput:   "# Resume\nShipped core services.",
 	}
-	if err := baseStore.CreateVersion(ctx, completedVer); err != nil {
-		t.Fatalf("CreateVersion completed: %v", err)
-	}
-	if err := baseStore.CompleteVersion(ctx, completedVer); err != nil {
-		t.Fatalf("CompleteVersion: %v", err)
+	if err := baseStore.seedCompletedVersion(ctx, completedVer); err != nil {
+		t.Fatalf("seedCompletedVersion: %v", err)
 	}
 	pendingVer := &core.BranchVersion{
-		ID:            "ver-tenant-pending",
-		UserID:        owner,
-		BranchID:      victimBranch.ID,
-		Status:        core.VersionStatusPending,
-		ReservationID: "res-tenant-pending",
+		ID:       "ver-tenant-pending",
+		UserID:   owner,
+		BranchID: victimBranch.ID,
 	}
-	if err := baseStore.CreateVersion(ctx, pendingVer); err != nil {
-		t.Fatalf("CreateVersion pending: %v", err)
+	if err := baseStore.seedVersionInState(ctx, pendingVer, core.VersionStatusPending, "res-tenant-pending"); err != nil {
+		t.Fatalf("seed pending: %v", err)
 	}
 
 	svc := branch.New(branch.Config{
 		Branches:       permStore,
+		Jobs:           baseStore,
 		Profiles:       baseStore,
 		Presets:        baseStore,
 		Templates:      baseStore,

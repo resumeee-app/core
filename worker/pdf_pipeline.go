@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -14,7 +13,7 @@ const defaultPDFExtractionTokens = 1000
 
 // safeProcessPDFJob executes a claimed PDF parse job with panic recovery to prevent worker goroutines
 // from terminating and to guarantee slot and quota cleanup.
-func (p *Pool) safeProcessPDFJob(job *core.PDFParseJob) {
+func (p *Pool) safeProcessPDFJob(job *core.Job) {
 	defer func() {
 		if r := recover(); r != nil {
 			jobID := ""
@@ -28,7 +27,7 @@ func (p *Pool) safeProcessPDFJob(job *core.PDFParseJob) {
 					"panic", r,
 				)
 			}
-			p.failClaimedJob(p.pdfJobDescriptor(job, ""), "An unexpected internal error occurred while parsing the resume.", true, core.LLMTelemetry{})
+			p.failClaimedJob(p.jobDescriptor(job, ""), "An unexpected internal error occurred while parsing the resume.", true, core.LLMTelemetry{})
 		}
 	}()
 
@@ -36,8 +35,8 @@ func (p *Pool) safeProcessPDFJob(job *core.PDFParseJob) {
 }
 
 // processClaimedPDFJob coordinates asynchronous LLM parsing of persisted raw resume text into JSONResume.
-func (p *Pool) processClaimedPDFJob(job *core.PDFParseJob) {
-	if p.pdfJobs == nil || job == nil {
+func (p *Pool) processClaimedPDFJob(job *core.Job) {
+	if p.jobs == nil || job == nil {
 		return
 	}
 
@@ -48,11 +47,9 @@ func (p *Pool) processClaimedPDFJob(job *core.PDFParseJob) {
 	if claimedBy == "" {
 		claimedBy = p.workerID
 	}
-	desc := p.pdfJobDescriptor(job, claimedBy)
+	desc := p.jobDescriptor(job, claimedBy)
 
-	stopHeartbeat := p.startLeaseHeartbeat(attemptCtx, attemptCancel, job.ID, func(ctx context.Context, leaseExp time.Time) error {
-		return p.pdfJobs.RenewJobLease(ctx, job.ID, claimedBy, leaseExp)
-	}, "pdf_parse_job")
+	stopHeartbeat := p.startLeaseHeartbeat(attemptCtx, attemptCancel, job.ID, claimedBy, core.JobKindPDFParse)
 	defer stopHeartbeat()
 
 	if job.ExpiresAt != nil && !job.ExpiresAt.After(p.now()) {
@@ -61,7 +58,7 @@ func (p *Pool) processClaimedPDFJob(job *core.PDFParseJob) {
 		return
 	}
 
-	if strings.TrimSpace(job.RawText) == "" {
+	if job.PDF == nil || strings.TrimSpace(job.PDF.RawText) == "" {
 		stopHeartbeat()
 		p.failClaimedJob(desc, "Document validation failed: resume raw text cannot be empty.", true, core.LLMTelemetry{})
 		return
@@ -74,7 +71,7 @@ func (p *Pool) processClaimedPDFJob(job *core.PDFParseJob) {
 	}
 
 	extractCtx, extractCancel := p.withLLMTimeout(attemptCtx)
-	extracted, telemetry, err := p.resumeExtractor.ExtractResume(extractCtx, job.RawText, job.Provider, job.Model)
+	extracted, telemetry, err := p.resumeExtractor.ExtractResume(extractCtx, job.PDF.RawText, job.PDF.Provider, job.PDF.Model)
 	extractCancel()
 	telemetry = core.ResolveTelemetry(telemetry, err)
 
@@ -106,7 +103,7 @@ func (p *Pool) processClaimedPDFJob(job *core.PDFParseJob) {
 	p.commitUsageDetached(job.ReservationID, telemetry)
 
 	stopHeartbeat()
-	if err := p.pdfJobs.CompleteClaimedJob(attemptCtx, job.ID, claimedBy, extracted); err != nil {
+	if err := p.jobs.CompletePDFParse(attemptCtx, job.ID, claimedBy, extracted); err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to complete claimed pdf job",
 				"job_id", job.ID,
@@ -130,38 +127,5 @@ func classifyPDFExtractionError(err error, class core.ErrorClass) string {
 		return "Resume extraction could not run because upstream provider billing or quota is exhausted."
 	default:
 		return "Failed to extract resume from document. Please ensure the PDF contains valid text."
-	}
-}
-
-// pdfJobDescriptor adapts a claimed PDFParseJob into a claimedJobDescriptor for shared lifecycle management.
-func (p *Pool) pdfJobDescriptor(job *core.PDFParseJob, claimedBy string) claimedJobDescriptor {
-	if job == nil {
-		return claimedJobDescriptor{}
-	}
-	if claimedBy == "" {
-		claimedBy = job.ClaimedBy
-	}
-	if claimedBy == "" {
-		claimedBy = p.workerID
-	}
-	var requeueFn func(context.Context, time.Time, string) error
-	var failFn func(context.Context, string) error
-	if p.pdfJobs != nil {
-		requeueFn = func(ctx context.Context, nextRetryAt time.Time, errMsg string) error {
-			return p.pdfJobs.RequeueJobForRetry(ctx, job.ID, claimedBy, nextRetryAt, errMsg)
-		}
-		failFn = func(ctx context.Context, errMsg string) error {
-			return p.pdfJobs.FailClaimedJob(ctx, job.ID, claimedBy, errMsg)
-		}
-	}
-	return claimedJobDescriptor{
-		kind:          "pdf_parse_job",
-		id:            job.ID,
-		claimedBy:     claimedBy,
-		reservationID: job.ReservationID,
-		attemptCount:  job.AttemptCount,
-		expiresAt:     job.ExpiresAt,
-		requeueFn:     requeueFn,
-		failFn:        failFn,
 	}
 }

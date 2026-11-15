@@ -12,6 +12,7 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/branch"
 	"github.com/resumeee-app/resumeee-core/memory"
+	"github.com/resumeee-app/resumeee-core/store"
 )
 
 type failingATSScoreStore struct {
@@ -19,16 +20,16 @@ type failingATSScoreStore struct {
 	updateErr error
 }
 
-func (s *failingATSScoreStore) UpdateVersionATSScore(_ context.Context, _ string, _ *core.ATSScore) error {
+func (s *failingATSScoreStore) SetVersionATSScore(_ context.Context, _ string, _ *core.ATSScore) error {
 	return s.updateErr
 }
 
-type failingSubmitPendingVersionStore struct {
-	branch.Store
+type failingSubmitBranchTailorStore struct {
+	branch.JobStore
 	submitErr error
 }
 
-func (s *failingSubmitPendingVersionStore) SubmitPendingVersion(_ context.Context, _ *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
+func (s *failingSubmitBranchTailorStore) SubmitBranchTailor(_ context.Context, _ *core.Job, _ *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
 	return nil, s.submitErr
 }
 
@@ -311,16 +312,14 @@ func seedCompletedATSVersion(ctx context.Context, t *testing.T, env *testBranchE
 	}
 	ver := &core.BranchVersion{
 		ID:               versionID,
+		UserID:           env.defaultUser,
 		BranchID:         env.branchID,
 		MainRevisionUsed: 1,
 		Status:           core.VersionStatusCompleted,
 		MarkdownOutput:   "# Jane Doe\nGo and Kubernetes Lead",
 	}
-	if err := env.branchRepo.CreateVersion(ctx, ver); err != nil {
-		t.Fatalf("CreateVersion failed: %v", err)
-	}
-	if err := env.branchRepo.CompleteVersion(ctx, ver); err != nil {
-		t.Fatalf("CompleteVersion failed: %v", err)
+	if err := env.db.seedCompletedVersion(ctx, ver); err != nil {
+		t.Fatalf("seedCompletedVersion failed: %v", err)
 	}
 }
 
@@ -495,7 +494,7 @@ func TestService_SimulateATS_Telemetry(t *testing.T) {
 			seedCompletedATSVersion(ctx, t, env, verID)
 
 			spyQuota := &spyQuotaRepo{}
-			var branchStore branch.Store = env.branchRepo
+			branchStore := env.branchRepo
 			if tc.updateScoreErr != nil {
 				branchStore = &failingATSScoreStore{
 					Store:     env.branchRepo,
@@ -554,11 +553,12 @@ func TestService_SimulateATS_Telemetry(t *testing.T) {
 func TestService_GenerateVersion_PreLLMReleaseZeroTelemetry(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("SubmitPendingVersion failure passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
+	t.Run("SubmitBranchTailor failure passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 		spyQuota := &spyQuotaRepo{}
 		svc := branch.New(branch.Config{
-			Branches: &failingSubmitPendingVersionStore{Store: env.branchRepo, submitErr: core.ErrPendingLimitExceeded},
+			Branches: env.branchRepo,
+			Jobs:     &failingSubmitBranchTailorStore{JobStore: env.jobRepo, submitErr: core.ErrPendingLimitExceeded},
 			Profiles: env.profileRepo,
 			Quotas:   spyQuota,
 		})
@@ -582,6 +582,7 @@ func TestService_GenerateVersion_PreLLMReleaseZeroTelemetry(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
 		svc := branch.New(branch.Config{
 			Branches: env.branchRepo,
+			Jobs:     env.jobRepo,
 			Profiles: env.profileRepo,
 			Quotas:   spyQuota,
 		})
@@ -678,28 +679,25 @@ func (g *concurrentTelemetryGenerator) SimulateATS(_ context.Context, req core.A
 }
 
 func TestService_ConcurrentAnalysisAndATSTelemetryRace(t *testing.T) {
-	t.Run("fakeBranchStore", func(t *testing.T) {
-		store := newSeededBranchStore(context.Background(), "race-seed")
-		runConcurrentTelemetryRace(t, store, store, store, false)
-	})
-
-	t.Run("memory.Store", func(t *testing.T) {
-		store := memory.New()
-		runConcurrentTelemetryRace(t, store, store, store, true)
+	t.Run("memory.Backend", func(t *testing.T) {
+		st := memory.New()
+		runConcurrentTelemetryRace(t, st, true)
 	})
 }
 
 func runConcurrentTelemetryRace(
 	t *testing.T,
-	branchStore branch.Store,
-	profileStore core.ProfileStore,
-	quotaStore core.QuotaStore,
+	st *store.Store,
 	verifyQuotaTotals bool,
 ) {
 	t.Helper()
 	ctx := context.Background()
+	branchStore := st.Branches()
+	profileStore := st.Profiles()
+	quotaStore := st.Quotas()
 	svc := branch.New(branch.Config{
 		Branches:          branchStore,
+		Jobs:              st.Jobs(),
 		Profiles:          profileStore,
 		Quotas:            quotaStore,
 		Generator:         &concurrentTelemetryGenerator{},
@@ -827,18 +825,17 @@ func runConcurrentTelemetryRace(
 			}
 			if m.isATS {
 				ver := &core.BranchVersion{
-					ID:               verID,
-					UserID:           userID,
-					BranchID:         branchID,
-					MainRevisionUsed: 1,
-					Status:           core.VersionStatusCompleted,
-					MarkdownOutput:   "# Concurrent Resume\nGo, Kubernetes",
+					ID:                verID,
+					UserID:            userID,
+					BranchID:          branchID,
+					MainRevisionUsed:  1,
+					TemplateSetIDUsed: core.TemplateStandardCleanID,
+					SourceType:        core.SourceTypeLLMGeneration,
+					Status:            core.VersionStatusCompleted,
+					MarkdownOutput:    "# Concurrent Resume\nGo, Kubernetes",
 				}
-				if err := branchStore.CreateVersion(ctx, ver); err != nil {
-					t.Fatalf("CreateVersion failed: %v", err)
-				}
-				if err := branchStore.CompleteVersion(ctx, ver); err != nil {
-					t.Fatalf("CompleteVersion failed: %v", err)
+				if err := branchStore.SaveCompletedVersion(ctx, ver); err != nil {
+					t.Fatalf("SaveCompletedVersion failed: %v", err)
 				}
 			}
 
@@ -972,13 +969,13 @@ func (s *cancelDuringATSStub) SimulateATS(_ context.Context, _ core.ATSSimulatio
 	return s.atsResp, s.atsErr
 }
 
-type cancelOnSubmitPendingVersionStore struct {
-	branch.Store
+type cancelOnSubmitBranchTailorStore struct {
+	branch.JobStore
 	cancel context.CancelFunc
 	err    error
 }
 
-func (s *cancelOnSubmitPendingVersionStore) SubmitPendingVersion(_ context.Context, _ *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
+func (s *cancelOnSubmitBranchTailorStore) SubmitBranchTailor(_ context.Context, _ *core.Job, _ *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
 	s.cancel()
 	return nil, s.err
 }
@@ -986,7 +983,7 @@ func (s *cancelOnSubmitPendingVersionStore) SubmitPendingVersion(_ context.Conte
 func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 	t.Run("AnalyzeGaps releases quota when LLM fails due to caller cancellation", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
-		quotaStore := memory.New()
+		quotaStore := memory.New().Quotas()
 		strictQuotas := &strictContextQuotaManager{inner: quotaStore}
 
 		reqCtx, cancel := context.WithCancel(context.Background())
@@ -1013,7 +1010,7 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 
 	t.Run("AnalyzeGaps commits quota when caller ctx cancels right after LLM response", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
-		quotaStore := memory.New()
+		quotaStore := memory.New().Quotas()
 		strictQuotas := &strictContextQuotaManager{inner: quotaStore}
 
 		reqCtx, cancel := context.WithCancel(context.Background())
@@ -1053,7 +1050,7 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 		for _, shouldFail := range []bool{true, false} {
 			env := setupTestBranchEnv(t, 10)
 			seedCompletedATSVersion(context.Background(), t, env, "ver-ats-cancel")
-			quotaStore := memory.New()
+			quotaStore := memory.New().Quotas()
 			strictQuotas := &strictContextQuotaManager{inner: quotaStore}
 
 			reqCtx, cancel := context.WithCancel(context.Background())
@@ -1101,24 +1098,25 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 		}
 	})
 
-	t.Run("GenerateVersion SubmitPendingVersion failure releases quota under canceled ctx", func(t *testing.T) {
+	t.Run("GenerateVersion SubmitBranchTailor failure releases quota under canceled ctx", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
-		quotaStore := memory.New()
+		quotaStore := memory.New().Quotas()
 		strictQuotas := &strictContextQuotaManager{inner: quotaStore}
 		reqCtx, cancel := context.WithCancel(context.Background())
 
 		svc := branch.New(branch.Config{
-			Branches: &cancelOnSubmitPendingVersionStore{
-				Store:  env.branchRepo,
-				cancel: cancel,
-				err:    errors.New("db connection dropped"),
+			Branches: env.branchRepo,
+			Jobs: &cancelOnSubmitBranchTailorStore{
+				JobStore: env.jobRepo,
+				cancel:   cancel,
+				err:      errors.New("db connection dropped"),
 			},
 			Profiles: env.profileRepo,
 			Quotas:   strictQuotas,
 		})
 
 		if _, err := svc.GenerateVersion(reqCtx, env.defaultUser, env.branchID); err == nil {
-			t.Fatal("expected error from SubmitPendingVersion")
+			t.Fatal("expected error from SubmitBranchTailor")
 		}
 
 		records, err := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)

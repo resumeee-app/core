@@ -200,17 +200,20 @@ func (s *Service) computeGapReport(ctx context.Context, branch *core.Branch, sna
 	}, core.LLMTelemetry{}, nil
 }
 
-// persistGapReport saves report onto both branch and its active version when present.
+// persistGapReport saves report onto activeVer (mirroring onto the branch) or directly onto branch when no active version exists.
 func (s *Service) persistGapReport(ctx context.Context, branch *core.Branch, activeVer *core.BranchVersion, report *core.GapReport) {
+	persistCtx, cancel := detachedQuotaContext(ctx)
+	defer cancel()
 	branch.GapReport = report
-	if err := s.branches.UpdateBranch(ctx, branch); err != nil && s.logger != nil {
-		s.logger.Error("failed to persist gap report on branch", "branch_id", branch.ID, "err", err)
-	}
 	if activeVer != nil {
 		activeVer.GapReport = report
-		if err := s.branches.CompleteVersion(ctx, activeVer); err != nil && s.logger != nil {
+		if err := s.branches.SetVersionGapReport(persistCtx, activeVer.ID, report); err != nil && s.logger != nil {
 			s.logger.Error("failed to persist gap report on active version", "branch_id", branch.ID, "version_id", activeVer.ID, "err", err)
 		}
+		return
+	}
+	if err := s.branches.UpdateBranch(persistCtx, branch); err != nil && s.logger != nil {
+		s.logger.Error("failed to persist gap report on branch", "branch_id", branch.ID, "err", err)
 	}
 }
 
@@ -260,7 +263,9 @@ func (s *Service) SimulateATS(ctx context.Context, userID, branchID string, opts
 		return nil, retErr
 	}
 
-	if err := s.branches.UpdateVersionATSScore(ctx, ver.ID, atsScore); err != nil {
+	persistCtx, cancelPersist := detachedQuotaContext(ctx)
+	defer cancelPersist()
+	if err := s.branches.SetVersionATSScore(persistCtx, ver.ID, atsScore); err != nil {
 		retErr = err
 		return nil, retErr
 	}

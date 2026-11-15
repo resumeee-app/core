@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/store"
 )
 
 // ProfileSeeder defines the narrow profile persistence contract required by seed routines.
@@ -30,8 +31,8 @@ type SkillSeeder interface {
 type BranchSeeder interface {
 	Branch(ctx context.Context, userID, id string) (*core.Branch, error)
 	CreateBranch(ctx context.Context, branch *core.Branch) error
-	UpdateBranch(ctx context.Context, branch *core.Branch) error
-	CreateVersion(ctx context.Context, version *core.BranchVersion) error
+	Version(ctx context.Context, branchID, versionID string) (*core.BranchVersion, error)
+	SaveCompletedVersion(ctx context.Context, version *core.BranchVersion) error
 }
 
 // TemplateSeeder defines the narrow template persistence contract required by seed routines.
@@ -145,7 +146,6 @@ func DefaultPresets(userID string) []core.Preset {
 			Description:        "Concise tech resume format emphasizing recent high-impact metrics and key skills.",
 			SystemInstructions: "Focus strictly on high-impact engineering accomplishments, quantitative outcomes, and relevant technical skill groups. Ensure concise bullet formatting suitable for a 1-page tech resume.",
 			SuggestedThemeID:   &themeStd,
-			TemplateSetID:      core.TemplateStandardCleanID,
 			Language:           core.DefaultLanguage,
 			CreatedAt:          now,
 			UpdatedAt:          now,
@@ -157,7 +157,6 @@ func DefaultPresets(userID string) []core.Preset {
 			Description:        "Unabridged career history format for audit, visa, and immigration compliance.",
 			SystemInstructions: "Include full, unabridged employment and academic history. Maintain detailed hours per week, company location and verification contacts, supervisor contact information, and full explanatory duty summaries.",
 			SuggestedThemeID:   &themeCV,
-			TemplateSetID:      core.TemplateDetailedImmigrationCVID,
 			Language:           core.DefaultLanguage,
 			CreatedAt:          now,
 			UpdatedAt:          now,
@@ -169,19 +168,19 @@ func DefaultPresets(userID string) []core.Preset {
 // default profile, and default resume branch with an initial active rendered version.
 func EnsureTenantProvisioned(
 	ctx context.Context,
-	store core.Store,
+	st *store.Store,
 	userID string,
 	userInfo ...*core.User,
 ) error {
-	if store == nil {
+	if st == nil {
 		return fmt.Errorf("%w: store cannot be nil", core.ErrValidation)
 	}
 	return EnsureTenantProvisionedStores(
 		ctx,
-		store.Profiles(),
-		store.Branches(),
-		store.Templates(),
-		store.Users(),
+		st.Profiles(),
+		st.Branches(),
+		st.Templates(),
+		st.Users(),
 		userID,
 		userInfo...,
 	)
@@ -305,6 +304,7 @@ func ensureDefaultBranch(
 		IsDefault:              true,
 		TemplateSetID:          core.TemplateStandardCleanID,
 		LastSyncedMainRevision: prof.MainRevision,
+		Epoch:                  1,
 		CreatedAt:              now,
 		UpdatedAt:              now,
 	}
@@ -323,8 +323,8 @@ func ensureDefaultBranch(
 	ver := core.BranchVersion{
 		ID:                "ver-default-" + userID,
 		UserID:            userID,
-		ResumeID:          defaultBranch.ID,
 		BranchID:          defaultBranch.ID,
+		BranchEpoch:       1,
 		VersionNumber:     1,
 		Status:            core.VersionStatusCompleted,
 		MainRevisionUsed:  prof.MainRevision,
@@ -339,12 +339,13 @@ func ensureDefaultBranch(
 		CreatedAt:         now,
 		CompletedAt:       &now,
 	}
-	if err := branches.CreateVersion(ctx, &ver); err != nil && !errors.Is(err, core.ErrConflict) {
-		return fmt.Errorf("seeding default branch version: %w", err)
+	if _, vErr := branches.Version(ctx, defaultBranch.ID, ver.ID); errors.Is(vErr, core.ErrNotFound) {
+		if err := branches.SaveCompletedVersion(ctx, &ver); err != nil && !errors.Is(err, core.ErrConflict) {
+			return fmt.Errorf("seeding default branch version: %w", err)
+		}
+	} else if vErr != nil {
+		return fmt.Errorf("checking default branch version: %w", vErr)
 	}
-
-	defaultBranch.ActiveVersionID = &ver.ID
-	_ = branches.UpdateBranch(ctx, &defaultBranch)
 	return nil
 }
 
@@ -380,23 +381,23 @@ func renderDefaultFallback(_ *core.TemplateSet, profile *core.Profile, _ *core.T
 }
 
 // DefaultData idempotently populates built-in templates, presets, global skills,
-// default user profile, and default resume branch across any storage backend implementing core.Store.
+// default user profile, and default resume branch using st.
 func DefaultData(
 	ctx context.Context,
-	store core.Store,
+	st *store.Store,
 	defaultUserID ...string,
 ) error {
-	if store == nil {
+	if st == nil {
 		return fmt.Errorf("%w: store cannot be nil", core.ErrValidation)
 	}
 	return DefaultDataStores(
 		ctx,
-		store.Profiles(),
-		store.Career(),
-		store.Branches(),
-		store.Templates(),
-		store.Presets(),
-		store.Users(),
+		st.Profiles(),
+		st.Career(),
+		st.Branches(),
+		st.Templates(),
+		st.Presets(),
+		st.Users(),
 		defaultUserID...,
 	)
 }

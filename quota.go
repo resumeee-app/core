@@ -1,8 +1,19 @@
 package core
 
 import (
-	"context"
 	"time"
+)
+
+// Default tenant quota ceilings and usage history query bounds.
+const (
+	// DefaultDailyRequestLimit caps daily LLM requests for newly provisioned tenants.
+	DefaultDailyRequestLimit = 50
+
+	// DefaultMonthlyTokenLimit caps monthly LLM tokens for newly provisioned tenants.
+	DefaultMonthlyTokenLimit = 1000000
+
+	// DefaultUsageListLimit bounds usage history queries when callers omit a positive limit.
+	DefaultUsageListLimit = 50
 )
 
 // LLMOperationType identifies the category of LLM generation task for quota enforcement.
@@ -109,11 +120,13 @@ type LLMUsageRecord struct {
 	CommittedAt        *time.Time        `json:"committed_at,omitempty"`
 }
 
-// QuotaStore provides atomic accounting and persistence for tenant LLM quotas and usage records.
-type QuotaStore interface {
-	Quota(ctx context.Context, userID string) (*TenantQuota, error)
-	ReserveQuota(ctx context.Context, userID string, op LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*LLMUsageRecord, error)
-	CommitUsage(ctx context.Context, reservationID string, telemetry LLMTelemetry) error
-	ReleaseQuota(ctx context.Context, reservationID string, errMsg string, telemetry LLMTelemetry) error
-	ListUsageRecords(ctx context.Context, userID string, limit int) ([]LLMUsageRecord, error)
+// ApplyTelemetry copies normalized provider telemetry and token counters onto r.
+func (r *LLMUsageRecord) ApplyTelemetry(normalized LLMTelemetry) {
+	r.Provider = normalized.Provider
+	r.Model = normalized.Model
+	r.StatusCode = normalized.StatusCode
+	r.Latency = normalized.Latency
+	r.PromptTokens = normalized.Usage.PromptTokens
+	r.CompletionTokens = normalized.Usage.CompletionTokens
+	r.TotalTokens = normalized.Usage.TotalTokens
 }

@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -40,10 +39,8 @@ type Branch struct {
 	TargetRole             string     `json:"target_role,omitempty"`
 	TargetCompany          string     `json:"target_company,omitempty"`
 	TargetRequirements     string     `json:"target_requirements,omitempty"` // Job description text
-	CustomDirectives       string     `json:"custom_directives,omitempty"`   // Tier 3 custom prompt directives
-	BranchInstructions     string     `json:"branch_instructions,omitempty"` // Compatibility alias
-	TailoringStrategyID    *string    `json:"tailoring_strategy_id,omitempty"`
-	PresetID               *string    `json:"preset_id,omitempty"` // Compatibility alias
+	BranchInstructions     string     `json:"branch_instructions,omitempty"` // Tier 3 custom prompt directives
+	PresetID               *string    `json:"preset_id,omitempty"`
 	TemplateSetID          string     `json:"template_set_id"`
 	ProviderOverride       string     `json:"provider_override,omitempty"`
 	ModelOverride          string     `json:"model_override,omitempty"`
@@ -53,35 +50,11 @@ type Branch struct {
 	ActiveVersionID        *string    `json:"active_version_id,omitempty"`
 	GapReport              *GapReport `json:"gap_report,omitempty"`
 	ATSScore               *ATSScore  `json:"ats_score,omitempty"`
+	Epoch                  int64      `json:"epoch"`
 	LastSyncedMainRevision int64      `json:"last_synced_main_revision"`
 	IsStale                bool       `json:"is_stale"` // Computed: LastSyncedMainRevision < Profile.MainRevision
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`
-}
-
-// syncAliases harmonizes TailoringStrategyID <-> PresetID and CustomDirectives <-> BranchInstructions.
-func (b *Branch) syncAliases() {
-	if b.TailoringStrategyID == nil && b.PresetID != nil {
-		b.TailoringStrategyID = b.PresetID
-	}
-	if b.PresetID == nil && b.TailoringStrategyID != nil {
-		b.PresetID = b.TailoringStrategyID
-	}
-	if b.CustomDirectives == "" && b.BranchInstructions != "" {
-		b.CustomDirectives = b.BranchInstructions
-	}
-	if b.BranchInstructions == "" && b.CustomDirectives != "" {
-		b.BranchInstructions = b.CustomDirectives
-	}
-}
-
-// Normalize synchronizes aliases prior to persistence.
-func (b *Branch) Normalize() error {
-	if b == nil {
-		return nil
-	}
-	b.syncAliases()
-	return nil
 }
 
 // CanTailor returns true if the branch/resume can be tailored via LLM or manual bullet edits.
@@ -117,9 +90,7 @@ func (b *Branch) GenerationOrActiveChanged(other *Branch) bool {
 		b.TargetRole != other.TargetRole ||
 		b.TargetCompany != other.TargetCompany ||
 		b.TargetRequirements != other.TargetRequirements ||
-		b.CustomDirectives != other.CustomDirectives ||
 		b.BranchInstructions != other.BranchInstructions ||
-		!equalOptionalString(b.TailoringStrategyID, other.TailoringStrategyID) ||
 		!equalOptionalString(b.PresetID, other.PresetID) ||
 		b.TemplateSetID != other.TemplateSetID ||
 		b.ProviderOverride != other.ProviderOverride ||
@@ -172,18 +143,18 @@ func (s VersionStatus) IsCompleted() bool {
 type BranchVersion struct {
 	ID                 string           `json:"id"`
 	UserID             string           `json:"user_id"`
-	ResumeID           string           `json:"resume_id"`
-	BranchID           string           `json:"branch_id,omitempty"` // Compatibility alias
+	BranchID           string           `json:"branch_id"`
+	JobID              string           `json:"job_id,omitempty"`
 	VersionNumber      int              `json:"version_number"`
+	BranchEpoch        int64            `json:"branch_epoch,omitempty"`
 	Status             VersionStatus    `json:"status"`
 	MainRevisionUsed   int64            `json:"main_revision_used"`
 	TemplateSetIDUsed  string           `json:"template_set_id_used"`
 	StrategyIDUsed     *string          `json:"strategy_id_used,omitempty"`
 	ProviderUsed       string           `json:"provider_used"`
 	ModelUsed          string           `json:"model_used"`
-	SourceType         SourceType       `json:"source_type"` // "llm_generation" or "manual_edit"
+	SourceType         SourceType       `json:"source_type"` // "llm_generation", "manual_edit", or "main_profile"
 	ParentVersionID    *string          `json:"parent_version_id,omitempty"`
-	ReservationID      string           `json:"reservation_id,omitempty"`
 	TailoredContent    *TailoredContent `json:"tailored_content,omitempty"`
 	GapReport          *GapReport       `json:"gap_report,omitempty"`
 	ATSScore           *ATSScore        `json:"ats_score,omitempty"`
@@ -192,34 +163,9 @@ type BranchVersion struct {
 	HTMLOutput         string           `json:"html_output,omitempty"`
 	MarkdownOutput     string           `json:"markdown_output,omitempty"`
 	PlainTextOutput    string           `json:"plain_text_output,omitempty"`
-	AttemptCount       int              `json:"attempt_count,omitempty"`
-	ClaimedBy          string           `json:"claimed_by,omitempty"`
-	ClaimedAt          *time.Time       `json:"claimed_at,omitempty"`
-	LeaseExpiresAt     *time.Time       `json:"lease_expires_at,omitempty"`
-	NextRetryAt        *time.Time       `json:"next_retry_at,omitempty"`
-	ExpiresAt          *time.Time       `json:"expires_at,omitempty"`
 	CreatedAt          time.Time        `json:"created_at"`
 	UpdatedAt          time.Time        `json:"updated_at"`
 	CompletedAt        *time.Time       `json:"completed_at,omitempty"`
-}
-
-// syncAliases harmonizes resume_id and branch_id.
-func (v *BranchVersion) syncAliases() {
-	if v.ResumeID == "" && v.BranchID != "" {
-		v.ResumeID = v.BranchID
-	}
-	if v.BranchID == "" && v.ResumeID != "" {
-		v.BranchID = v.ResumeID
-	}
-}
-
-// Normalize synchronizes resume and branch aliases prior to persistence.
-func (v *BranchVersion) Normalize() error {
-	if v == nil {
-		return nil
-	}
-	v.syncAliases()
-	return nil
 }
 
 // PromptPreview wraps compiled system and user prompt strings ready for LLM consumption.
@@ -275,43 +221,3 @@ type PromptPreviewOptions struct {
 	ResumeText         string                 `json:"resume_text,omitempty"`
 	ExtractedCandidate *ATSExtractedCandidate `json:"extracted_candidate,omitempty"`
 }
-
-// BranchStore defines persistence operations for Tier-3 targeted resumes and immutable versions.
-type BranchStore interface {
-	ListBranches(ctx context.Context, userID string) ([]Branch, error)
-	Branch(ctx context.Context, userID, id string) (*Branch, error)
-	CreateBranch(ctx context.Context, branch *Branch) error
-	UpdateBranch(ctx context.Context, branch *Branch) error
-	DeleteBranch(ctx context.Context, userID, id string) error
-
-	// Versioning
-	// Lease-mutating operations (RenewVersionLease, RequeueVersionForRetry, FailClaimedVersion,
-	// and claimed CompleteVersion) must return ErrNotFound when the version is missing and
-	// ErrLeaseExpired (wrapping ErrConflict) or ErrConflict when the version is no longer actively
-	// processing under the expected ClaimedBy worker.
-	CreateVersion(ctx context.Context, version *BranchVersion) error
-	SubmitPendingVersion(ctx context.Context, version *BranchVersion, opts PendingJobOptions) ([]ReleasedReservation, error)
-	SupersedePendingVersions(ctx context.Context, branchID, reason string) ([]ReleasedReservation, error)
-	AbortBranchVersions(ctx context.Context, branchID, reason string) ([]ReleasedReservation, error)
-	CancelVersion(ctx context.Context, userID, branchID, versionID, reason string) (*BranchVersion, error)
-	ClaimNextVersion(ctx context.Context, req ClaimJobRequest) (*BranchVersion, error)
-	RenewVersionLease(ctx context.Context, versionID, claimedBy string, leaseExpiresAt time.Time) error
-	RequeueVersionForRetry(ctx context.Context, versionID, claimedBy string, nextRetryAt time.Time, errMsg string) error
-	FailClaimedVersion(ctx context.Context, versionID, claimedBy, errMsg string) error
-	ExpirePendingVersions(ctx context.Context, now time.Time, reason string) ([]ReleasedReservation, error)
-	FailExpiredVersionLeases(ctx context.Context, now time.Time, reason string) ([]ReleasedReservation, error)
-	RecoverInterruptedVersions(ctx context.Context, reason string) ([]ReleasedReservation, error)
-	Version(ctx context.Context, branchID, versionID string) (*BranchVersion, error)
-	VersionByNumber(ctx context.Context, branchID string, versionNumber int) (*BranchVersion, error)
-	VersionsByIDs(ctx context.Context, versionIDs []string) ([]BranchVersion, error)
-	ListVersions(ctx context.Context, branchID string) ([]BranchVersion, error)
-	UpdateVersionStatus(ctx context.Context, versionID string, status VersionStatus, errMsg string) error
-	CompleteVersion(ctx context.Context, version *BranchVersion) error
-	UpdateVersionATSScore(ctx context.Context, versionID string, atsScore *ATSScore) error
-	FailInterruptedVersions(ctx context.Context, reason string) error
-}
-
-var (
-	_ Normalizable = (*Branch)(nil)
-	_ Normalizable = (*BranchVersion)(nil)
-)

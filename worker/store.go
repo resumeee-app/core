@@ -7,18 +7,10 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// BranchStore defines branch and version persistence operations needed by the worker pool.
-type BranchStore interface {
+// BranchReader retrieves branch and version context required to execute tailoring jobs.
+type BranchReader interface {
 	Branch(ctx context.Context, userID, id string) (*core.Branch, error)
 	Version(ctx context.Context, branchID, versionID string) (*core.BranchVersion, error)
-	CompleteVersion(ctx context.Context, version *core.BranchVersion) error
-	ClaimNextVersion(ctx context.Context, req core.ClaimJobRequest) (*core.BranchVersion, error)
-	RenewVersionLease(ctx context.Context, versionID, claimedBy string, leaseExpiresAt time.Time) error
-	RequeueVersionForRetry(ctx context.Context, versionID, claimedBy string, nextRetryAt time.Time, errMsg string) error
-	FailClaimedVersion(ctx context.Context, versionID, claimedBy, errMsg string) error
-	ExpirePendingVersions(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
-	FailExpiredVersionLeases(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
-	RecoverInterruptedVersions(ctx context.Context, reason string) ([]core.ReleasedReservation, error)
 }
 
 // ProfileReader retrieves candidate profile roots and snapshots for job execution.
@@ -37,19 +29,20 @@ type TemplateReader interface {
 	Template(ctx context.Context, userID, id string) (*core.TemplateSet, error)
 }
 
-// PDFJobStore persists asynchronous PDF parse job status updates and recovery state.
-type PDFJobStore interface {
-	SubmitPendingJob(ctx context.Context, job *core.PDFParseJob, opts core.PendingJobOptions) error
-	Job(ctx context.Context, userID, jobID string) (*core.PDFParseJob, error)
-	CancelJob(ctx context.Context, userID, jobID, reason string) (*core.PDFParseJob, error)
-	ClaimNextJob(ctx context.Context, req core.ClaimJobRequest) (*core.PDFParseJob, error)
-	RenewJobLease(ctx context.Context, jobID, claimedBy string, leaseExpiresAt time.Time) error
-	RequeueJobForRetry(ctx context.Context, jobID, claimedBy string, nextRetryAt time.Time, errMsg string) error
-	CompleteClaimedJob(ctx context.Context, jobID, claimedBy string, result *core.JSONResume) error
-	FailClaimedJob(ctx context.Context, jobID, claimedBy, errMsg string) error
-	ExpirePendingJobs(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
-	FailExpiredJobLeases(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
-	RecoverInterruptedJobs(ctx context.Context, reason string) ([]core.ReleasedReservation, error)
+// JobStore persists unified asynchronous queue state, claims, heartbeats, completions, and recovery.
+type JobStore interface {
+	SubmitPDFParse(ctx context.Context, job *core.Job, opts core.PendingJobOptions) error
+	Job(ctx context.Context, userID, jobID string) (*core.Job, error)
+	CancelJob(ctx context.Context, userID, jobID, reason string) (*core.Job, error)
+	ClaimNext(ctx context.Context, req core.ClaimJobRequest) (*core.Job, error)
+	RenewLease(ctx context.Context, jobID, claimedBy string, leaseExpiresAt time.Time) error
+	RequeueForRetry(ctx context.Context, jobID, claimedBy string, nextRetryAt time.Time, errMsg string) error
+	CompleteBranchTailor(ctx context.Context, jobID, claimedBy string, completed *core.BranchVersion) error
+	CompletePDFParse(ctx context.Context, jobID, claimedBy string, result *core.JSONResume) error
+	FailClaimed(ctx context.Context, jobID, claimedBy, errMsg string) error
+	ExpirePending(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
+	FailExpiredLeases(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
+	RecoverInterrupted(ctx context.Context, reason string) ([]core.ReleasedReservation, error)
 }
 
 // QuotaCommitter finalizes or releases tenant LLM quota reservations alongside call telemetry.

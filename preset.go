@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"strings"
 	"time"
 )
@@ -31,9 +30,6 @@ type Preset struct {
 	// Nullable; when nil, the application defaults to the system standard theme.
 	SuggestedThemeID *string `json:"suggested_theme_id"`
 
-	// TemplateSetID is an alias retained for backwards compatibility with legacy UI/forms.
-	TemplateSetID string `json:"template_set_id,omitempty"`
-
 	Language  string    `json:"language"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -47,24 +43,6 @@ func (p *Preset) EffectiveLanguage() string {
 	return strings.TrimSpace(p.Language)
 }
 
-// Normalize synchronizes language defaults and template/theme aliases.
-func (p *Preset) Normalize() error {
-	if p == nil {
-		return nil
-	}
-	if p.Language == "" {
-		p.Language = DefaultLanguage
-	}
-	if p.SuggestedThemeID == nil && p.TemplateSetID != "" {
-		themeID := p.TemplateSetID
-		p.SuggestedThemeID = &themeID
-	}
-	if p.TemplateSetID == "" && p.SuggestedThemeID != nil {
-		p.TemplateSetID = *p.SuggestedThemeID
-	}
-	return nil
-}
-
 // IsBuiltIn returns true if the preset is a system-provided built-in preset.
 // Built-in presets are immutable and protected against update or deletion.
 func (p Preset) IsBuiltIn() bool {
@@ -75,14 +53,3 @@ func (p Preset) IsBuiltIn() bool {
 func (p Preset) TemplateSetName() string {
 	return ""
 }
-
-// PresetStore defines persistence operations for Tier-2 reusable instructions.
-type PresetStore interface {
-	ListPresets(ctx context.Context, userID string) ([]Preset, error)
-	Preset(ctx context.Context, userID, id string) (*Preset, error)
-	CreatePreset(ctx context.Context, preset *Preset) error
-	UpdatePreset(ctx context.Context, preset *Preset) error
-	DeletePreset(ctx context.Context, userID, id string) error
-}
-
-var _ Normalizable = (*Preset)(nil)

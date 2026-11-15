@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/resumeee-core/profile"
 )
 
 type fakeProfileStore struct {
@@ -316,7 +317,7 @@ func (s *fakeProfileStore) FailInterruptedVersions(_ context.Context, _ string) 
 
 // Compile-time interface assertions ensuring fakeProfileStore satisfies the store contracts required by profile.Service tests.
 var (
-	_ core.ProfileStore = (*fakeProfileStore)(nil)
-	_ core.CareerStore  = (*fakeProfileStore)(nil)
-	_ core.BranchStore  = (*fakeProfileStore)(nil)
+	_ profile.Store        = (*fakeProfileStore)(nil)
+	_ profile.SkillCatalog = (*fakeProfileStore)(nil)
+	_ profile.BranchReader = (*fakeProfileStore)(nil)
 )

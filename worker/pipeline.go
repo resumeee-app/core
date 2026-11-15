@@ -30,58 +30,86 @@ type generationInputs struct {
 	template            *core.TemplateSet
 }
 
-// processClaimedVersion coordinates end-to-end execution of a claimed resume generation version.
-func (p *Pool) processClaimedVersion(ver *core.BranchVersion) {
-	if p.branches == nil || ver == nil {
+// safeProcessBranchJob runs a claimed branch tailoring job with panic recovery so worker slots and quotas never leak.
+func (p *Pool) safeProcessBranchJob(job *core.Job) {
+	defer func() {
+		if r := recover(); r != nil {
+			jobID := ""
+			if job != nil {
+				jobID = job.ID
+			}
+			if p.logger != nil {
+				p.logger.Error("panic recovered during branch tailoring execution",
+					"job_id", jobID,
+					"worker_id", p.workerID,
+					"panic", r,
+				)
+			}
+			p.failClaimedJob(p.jobDescriptor(job, ""), "An unexpected internal error occurred during resume generation.", true, core.LLMTelemetry{})
+		}
+	}()
+
+	p.processClaimedBranchJob(job)
+}
+
+// processClaimedBranchJob coordinates end-to-end execution of a claimed branch tailoring job.
+func (p *Pool) processClaimedBranchJob(job *core.Job) {
+	if p.jobs == nil || job == nil {
 		return
 	}
 
 	attemptCtx, attemptCancel := context.WithCancel(p.jobCtx)
 	defer attemptCancel()
 
-	claimedBy := ver.ClaimedBy
+	claimedBy := job.ClaimedBy
 	if claimedBy == "" {
 		claimedBy = p.workerID
 	}
+	desc := p.jobDescriptor(job, claimedBy)
 
-	stopHeartbeat := p.startLeaseHeartbeat(attemptCtx, attemptCancel, ver.ID, func(ctx context.Context, leaseExp time.Time) error {
-		return p.branches.RenewVersionLease(ctx, ver.ID, claimedBy, leaseExp)
-	}, "branch_version")
+	stopHeartbeat := p.startLeaseHeartbeat(attemptCtx, attemptCancel, job.ID, claimedBy, core.JobKindBranchTailor)
 	defer stopHeartbeat()
 
-	if ver.ExpiresAt != nil && !ver.ExpiresAt.After(p.now()) {
+	if job.ExpiresAt != nil && !job.ExpiresAt.After(p.now()) {
 		stopHeartbeat()
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), core.ErrJobExpired.Error(), true, core.LLMTelemetry{})
+		p.failClaimedJob(desc, core.ErrJobExpired.Error(), true, core.LLMTelemetry{})
 		return
 	}
 
-	inputs, err := p.loadGenerationInputs(attemptCtx, ver)
+	if job.Tailor == nil || strings.TrimSpace(job.Tailor.BranchID) == "" || strings.TrimSpace(job.Tailor.VersionID) == "" {
+		stopHeartbeat()
+		p.failClaimedJob(desc, "Invalid branch tailor job specification.", true, core.LLMTelemetry{})
+		return
+	}
+
+	inputs, ver, err := p.loadGenerationInputs(attemptCtx, job)
 	if err != nil {
 		stopHeartbeat()
 		if p.logger != nil {
 			p.logger.Error("failed to load generation inputs",
-				"version_id", ver.ID,
+				"job_id", job.ID,
+				"version_id", job.Tailor.VersionID,
 				"worker_id", claimedBy,
 				"error", err,
 			)
 		}
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Failed to load generation inputs.", true, core.LLMTelemetry{})
+		p.failClaimedJob(desc, "Failed to load generation inputs.", true, core.LLMTelemetry{})
 		return
 	}
 
-	if !p.verifyVersionRunnableBeforeLLM(attemptCtx, ver, claimedBy, inputs) {
+	if !p.verifyVersionRunnableBeforeLLM(attemptCtx, job, ver, claimedBy, inputs) {
 		stopHeartbeat()
 		return
 	}
 
-	resp, telemetry, ok := p.runTailoringGeneration(attemptCtx, ver, claimedBy, inputs, stopHeartbeat)
+	resp, telemetry, ok := p.runTailoringGeneration(attemptCtx, job, claimedBy, inputs, stopHeartbeat)
 	if !ok {
 		return
 	}
 
 	if p.validator == nil {
 		stopHeartbeat()
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Resume provenance validation is unavailable.", false, core.LLMTelemetry{})
+		p.failClaimedJob(desc, "Resume provenance validation is unavailable.", false, core.LLMTelemetry{})
 		return
 	}
 	valRes, err := p.validator.Validate(&resp.TailoredContent, inputs.snapshot, inputs.branch)
@@ -89,18 +117,19 @@ func (p *Pool) processClaimedVersion(ver *core.BranchVersion) {
 		stopHeartbeat()
 		if p.logger != nil {
 			p.logger.Error("provenance validation failed",
+				"job_id", job.ID,
 				"version_id", ver.ID,
 				"worker_id", claimedBy,
 				"error", err,
 			)
 		}
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Resume validation failed after generation.", false, core.LLMTelemetry{})
+		p.failClaimedJob(desc, "Resume validation failed after generation.", false, core.LLMTelemetry{})
 		return
 	}
 
 	if p.renderer == nil {
 		stopHeartbeat()
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Resume template rendering is unavailable.", false, core.LLMTelemetry{})
+		p.failClaimedJob(desc, "Resume template rendering is unavailable.", false, core.LLMTelemetry{})
 		return
 	}
 	rendered, err := p.renderer.Render(attemptCtx, inputs.template, inputs.profile, valRes.SanitizedContent)
@@ -108,109 +137,110 @@ func (p *Pool) processClaimedVersion(ver *core.BranchVersion) {
 		stopHeartbeat()
 		if p.logger != nil {
 			p.logger.Error("template render failed",
+				"job_id", job.ID,
 				"version_id", ver.ID,
 				"worker_id", claimedBy,
 				"error", err,
 			)
 		}
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Failed to render generated resume template.", false, core.LLMTelemetry{})
+		p.failClaimedJob(desc, "Failed to render generated resume template.", false, core.LLMTelemetry{})
 		return
 	}
 
 	stopHeartbeat()
-	p.persistCompletedVersion(attemptCtx, ver, claimedBy, inputs, resp, valRes, rendered, telemetry)
+	p.persistCompletedVersion(attemptCtx, job, ver, claimedBy, inputs, resp, valRes, rendered, telemetry)
 }
 
-// verifyVersionRunnableBeforeLLM confirms the claimed version is still owned, unexpired, and not superseded.
+// verifyVersionRunnableBeforeLLM confirms the claimed job and target version are still owned, unexpired, and not superseded.
 func (p *Pool) verifyVersionRunnableBeforeLLM(
 	ctx context.Context,
+	job *core.Job,
 	ver *core.BranchVersion,
 	claimedBy string,
 	inputs *generationInputs,
 ) bool {
-	latest, err := p.branches.Version(ctx, inputs.branch.ID, ver.ID)
+	desc := p.jobDescriptor(job, claimedBy)
+	if job.Tailor.BranchEpoch != 0 && inputs.branch.Epoch != job.Tailor.BranchEpoch {
+		p.failClaimedJob(desc, "Branch superseded before generation.", true, core.LLMTelemetry{})
+		return false
+	}
+
+	latestVer, err := p.branches.Version(ctx, inputs.branch.ID, ver.ID)
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to verify version state before llm",
+				"job_id", job.ID,
 				"version_id", ver.ID,
 				"worker_id", claimedBy,
 				"error", err,
 			)
 		}
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Failed to verify generation job state.", true, core.LLMTelemetry{})
+		p.failClaimedJob(desc, "Failed to verify generation job state.", true, core.LLMTelemetry{})
 		return false
 	}
-	if latest.Status != core.VersionStatusProcessing || latest.ClaimedBy != claimedBy {
+	if latestVer.Status != core.VersionStatusProcessing || (latestVer.JobID != "" && latestVer.JobID != job.ID) {
 		return false
 	}
-	if latest.ExpiresAt != nil && !latest.ExpiresAt.After(p.now()) {
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), core.ErrJobExpired.Error(), true, core.LLMTelemetry{})
-		return false
+
+	latestJob, jErr := p.jobs.Job(ctx, inputs.userID, job.ID)
+	if jErr == nil && latestJob != nil {
+		if latestJob.Status != core.JobStatusProcessing || latestJob.ClaimedBy != claimedBy {
+			return false
+		}
+		if latestJob.ExpiresAt != nil && !latestJob.ExpiresAt.After(p.now()) {
+			p.failClaimedJob(desc, core.ErrJobExpired.Error(), true, core.LLMTelemetry{})
+			return false
+		}
+		if job.ExpiresAt == nil && latestJob.ExpiresAt != nil {
+			job.ExpiresAt = latestJob.ExpiresAt
+		}
+		if job.ReservationID == "" {
+			job.ReservationID = latestJob.ReservationID
+		}
 	}
-	if ver.ExpiresAt == nil && latest.ExpiresAt != nil {
-		ver.ExpiresAt = latest.ExpiresAt
-	}
-	if ver.ReservationID == "" {
-		ver.ReservationID = latest.ReservationID
-	}
-	if ver.VersionNumber == 0 {
-		ver.VersionNumber = latest.VersionNumber
-	}
-	if inputs.activeVersionNumber > latest.VersionNumber {
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Version superseded by newer active version.", true, core.LLMTelemetry{})
+
+	if inputs.activeVersionNumber > latestVer.VersionNumber {
+		p.failClaimedJob(desc, "Version superseded by newer active version.", true, core.LLMTelemetry{})
 		return false
 	}
 	return true
 }
 
-// loadGenerationInputs resolves branch, profile, snapshot, optional preset/prior version, and template entities.
-func (p *Pool) loadGenerationInputs(ctx context.Context, ver *core.BranchVersion) (*generationInputs, error) {
-	branchID := ver.BranchID
-	if branchID == "" {
-		branchID = ver.ResumeID
-	}
-	if branchID == "" {
-		loaded, err := p.branches.Version(ctx, "", ver.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load version: %w", err)
-		}
-		if loaded == nil {
-			return nil, errors.New("failed to load version: empty version record")
-		}
-		branchID = loaded.BranchID
-		if branchID == "" {
-			branchID = loaded.ResumeID
-		}
+// loadGenerationInputs resolves branch, version, profile, snapshot, optional preset/prior version, and template entities.
+func (p *Pool) loadGenerationInputs(ctx context.Context, job *core.Job) (*generationInputs, *core.BranchVersion, error) {
+	if p.branches == nil {
+		return nil, nil, errors.New("no branch reader configured")
 	}
 
-	br, err := p.branches.Branch(ctx, ver.UserID, branchID)
+	br, err := p.branches.Branch(ctx, job.UserID, job.Tailor.BranchID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load branch: %w", err)
+		return nil, nil, fmt.Errorf("failed to load branch: %w", err)
 	}
-	userID := ver.UserID
+	userID := job.UserID
 	if userID == "" {
 		userID = br.UserID
 	}
 
+	ver, err := p.branches.Version(ctx, br.ID, job.Tailor.VersionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load version: %w", err)
+	}
+
 	if p.profiles == nil {
-		return nil, errors.New("no profile reader configured")
+		return nil, nil, errors.New("no profile reader configured")
 	}
 	prof, err := p.profiles.Profile(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load profile: %w", err)
+		return nil, nil, fmt.Errorf("failed to load profile: %w", err)
 	}
 	snapshot, err := p.profiles.Snapshot(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load profile snapshot: %w", err)
+		return nil, nil, fmt.Errorf("failed to load profile snapshot: %w", err)
 	}
 
 	var preset *core.Preset
-	presetID := br.PresetID
-	if presetID == nil && br.TailoringStrategyID != nil {
-		presetID = br.TailoringStrategyID
-	}
-	if presetID != nil && *presetID != "" && p.presets != nil {
-		if pr, prErr := p.presets.Preset(ctx, userID, *presetID); prErr == nil {
+	if br.PresetID != nil && *br.PresetID != "" && p.presets != nil {
+		if pr, prErr := p.presets.Preset(ctx, userID, *br.PresetID); prErr == nil {
 			preset = pr
 		}
 	}
@@ -225,11 +255,11 @@ func (p *Pool) loadGenerationInputs(ctx context.Context, ver *core.BranchVersion
 	}
 
 	if p.templates == nil {
-		return nil, errors.New("no template reader configured")
+		return nil, nil, errors.New("no template reader configured")
 	}
 	tmpl, err := p.templates.Template(ctx, userID, br.TemplateSetID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load template set: %w", err)
+		return nil, nil, fmt.Errorf("failed to load template set: %w", err)
 	}
 
 	return &generationInputs{
@@ -241,7 +271,7 @@ func (p *Pool) loadGenerationInputs(ctx context.Context, ver *core.BranchVersion
 		priorContent:        priorContent,
 		activeVersionNumber: activeVersionNumber,
 		template:            tmpl,
-	}, nil
+	}, ver, nil
 }
 
 // withLLMTimeout derives a context bounded by Config.LLMTimeout or defaultLLMJobTimeout.
@@ -256,14 +286,15 @@ func (p *Pool) withLLMTimeout(ctx context.Context) (context.Context, context.Can
 // runTailoringGeneration builds the sanitized request, executes Generator with timeout, handles errors/retries, and commits quota.
 func (p *Pool) runTailoringGeneration(
 	attemptCtx context.Context,
-	ver *core.BranchVersion,
+	job *core.Job,
 	claimedBy string,
 	inputs *generationInputs,
 	stopHeartbeat func(),
 ) (*core.GenerationResponse, core.LLMTelemetry, bool) {
+	desc := p.jobDescriptor(job, claimedBy)
 	if p.generator == nil {
 		stopHeartbeat()
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Resume generation service is unavailable.", true, core.LLMTelemetry{})
+		p.failClaimedJob(desc, "Resume generation service is unavailable.", true, core.LLMTelemetry{})
 		return nil, core.LLMTelemetry{}, false
 	}
 
@@ -293,7 +324,7 @@ func (p *Pool) runTailoringGeneration(
 		stopHeartbeat()
 		p.routeAttemptError(
 			attemptCtx,
-			p.versionJobDescriptor(ver, claimedBy),
+			desc,
 			err,
 			telemetry,
 			"Generation interrupted by worker shutdown.",
@@ -304,24 +335,24 @@ func (p *Pool) runTailoringGeneration(
 	if attemptCtx.Err() != nil {
 		stopHeartbeat()
 		if p.isShuttingDown() {
-			p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Generation interrupted by worker shutdown.", true, core.LLMTelemetry{})
+			p.failClaimedJob(desc, "Generation interrupted by worker shutdown.", true, core.LLMTelemetry{})
 		} else {
-			p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), core.ErrLeaseExpired.Error(), true, core.LLMTelemetry{})
+			p.failClaimedJob(desc, core.ErrLeaseExpired.Error(), true, core.LLMTelemetry{})
 		}
 		return nil, core.LLMTelemetry{}, false
 	}
 	if genResp == nil {
 		stopHeartbeat()
 		if p.logger != nil {
-			p.logger.Error("llm returned empty generation response", "version_id", ver.ID, "worker_id", claimedBy)
+			p.logger.Error("llm returned empty generation response", "job_id", job.ID, "worker_id", claimedBy)
 		}
-		p.failClaimedJob(p.versionJobDescriptor(ver, claimedBy), "Resume generation returned an empty response.", true, telemetry)
+		p.failClaimedJob(desc, "Resume generation returned an empty response.", true, telemetry)
 		return nil, core.LLMTelemetry{}, false
 	}
 
 	// Commit consumed LLM usage immediately after generation succeeds so downstream failures cannot refund it.
 	telemetry.Usage = telemetry.Usage.WithFallback(defaultTailoringFallbackTokens)
-	p.commitUsageDetached(ver.ReservationID, telemetry)
+	p.commitUsageDetached(job.ReservationID, telemetry)
 	return genResp, telemetry, true
 }
 
@@ -360,6 +391,7 @@ func resolveVersionProviderModel(ver *core.BranchVersion, b *core.Branch, teleme
 // persistCompletedVersion updates version fields with sanitized content, rendered outputs, and resolved model metadata.
 func (p *Pool) persistCompletedVersion(
 	ctx context.Context,
+	job *core.Job,
 	claimedVer *core.BranchVersion,
 	claimedBy string,
 	inputs *generationInputs,
@@ -368,16 +400,18 @@ func (p *Pool) persistCompletedVersion(
 	rendered *core.RenderOutput,
 	telemetry core.LLMTelemetry,
 ) {
+	desc := p.jobDescriptor(job, claimedBy)
 	ver, err := p.branches.Version(ctx, inputs.branch.ID, claimedVer.ID)
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to reload claimed version before completion",
+				"job_id", job.ID,
 				"version_id", claimedVer.ID,
 				"worker_id", claimedBy,
 				"error", err,
 			)
 		}
-		p.failClaimedJob(p.versionJobDescriptor(claimedVer, claimedBy), "Failed to save generated resume version.", false, core.LLMTelemetry{})
+		p.failClaimedJob(desc, "Failed to save generated resume version.", false, core.LLMTelemetry{})
 		return
 	}
 
@@ -390,10 +424,6 @@ func (p *Pool) persistCompletedVersion(
 	ver.MainRevisionUsed = inputs.snapshot.MainRevision
 	ver.TemplateSetIDUsed = inputs.branch.TemplateSetID
 	ver.ProviderUsed, ver.ModelUsed = resolveVersionProviderModel(ver, inputs.branch, telemetry)
-	if ver.ReservationID == "" {
-		ver.ReservationID = claimedVer.ReservationID
-	}
-	ver.ClaimedBy = claimedBy
 	ver.TailoredContent = valRes.SanitizedContent
 	if resp.GapReport.MatchScore == nil {
 		score := core.CalculateDeterministicMatchScore(resp.GapReport.MissingRequirements)
@@ -405,57 +435,26 @@ func (p *Pool) persistCompletedVersion(
 	ver.MarkdownOutput = rendered.Markdown
 	ver.PlainTextOutput = rendered.PlainText
 
-	if err := p.branches.CompleteVersion(ctx, ver); err != nil {
+	if err := p.jobs.CompleteBranchTailor(ctx, job.ID, claimedBy, ver); err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to persist completed version",
+				"job_id", job.ID,
 				"version_id", claimedVer.ID,
 				"worker_id", claimedBy,
 				"error", err,
 			)
 		}
-		p.failClaimedJob(p.versionJobDescriptor(claimedVer, claimedBy), "Failed to save generated resume version.", false, core.LLMTelemetry{})
+		p.failClaimedJob(desc, "Failed to save generated resume version.", false, core.LLMTelemetry{})
 		return
 	}
 
 	if p.logger != nil {
 		p.logger.Info("generation job completed successfully",
+			"job_id", job.ID,
 			"version_id", ver.ID,
 			"branch_id", inputs.branch.ID,
 			"status", ver.Status,
 			"warnings_count", len(valRes.Warnings),
 		)
-	}
-}
-
-// versionJobDescriptor adapts a claimed BranchVersion into a claimedJobDescriptor for shared lifecycle management.
-func (p *Pool) versionJobDescriptor(ver *core.BranchVersion, claimedBy string) claimedJobDescriptor {
-	if ver == nil {
-		return claimedJobDescriptor{}
-	}
-	if claimedBy == "" {
-		claimedBy = ver.ClaimedBy
-	}
-	if claimedBy == "" {
-		claimedBy = p.workerID
-	}
-	var requeueFn func(context.Context, time.Time, string) error
-	var failFn func(context.Context, string) error
-	if p.branches != nil {
-		requeueFn = func(ctx context.Context, nextRetryAt time.Time, errMsg string) error {
-			return p.branches.RequeueVersionForRetry(ctx, ver.ID, claimedBy, nextRetryAt, errMsg)
-		}
-		failFn = func(ctx context.Context, errMsg string) error {
-			return p.branches.FailClaimedVersion(ctx, ver.ID, claimedBy, errMsg)
-		}
-	}
-	return claimedJobDescriptor{
-		kind:          "branch_version",
-		id:            ver.ID,
-		claimedBy:     claimedBy,
-		reservationID: ver.ReservationID,
-		attemptCount:  ver.AttemptCount,
-		expiresAt:     ver.ExpiresAt,
-		requeueFn:     requeueFn,
-		failFn:        failFn,
 	}
 }

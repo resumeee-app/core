@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"fmt"
 	htmltemplate "html/template"
 	texttemplate "text/template"
@@ -117,13 +116,4 @@ func (v DefaultTemplateValidator) Validate(tmpl *TemplateSet) error {
 	}
 
 	return nil
-}
-
-// TemplateStore defines persistence operations for multi-format resume templates.
-type TemplateStore interface {
-	ListTemplates(ctx context.Context, userID string) ([]TemplateSet, error)
-	Template(ctx context.Context, userID, id string) (*TemplateSet, error)
-	CreateTemplate(ctx context.Context, tmpl *TemplateSet) error
-	UpdateTemplate(ctx context.Context, tmpl *TemplateSet) error
-	DeleteTemplate(ctx context.Context, userID, id string) error
 }

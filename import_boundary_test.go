@@ -13,6 +13,8 @@ import (
 // infrastructure, HTTP, database, and vendor LLM SDK isolation guarantees.
 var coreDomainPackageDirs = []string{
 	".",
+	"store",
+	"storetest",
 	"seed",
 	"provenance",
 	"sanitizer",

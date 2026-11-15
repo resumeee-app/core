@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -324,9 +323,10 @@ func (s *Service) executeATSSimulation(ctx context.Context, branch *core.Branch,
 	}
 	if atsScore == nil {
 		atsScore = core.CalculateDeterministicATSScore(resumeText, formatUsed, branch.TargetRequirements)
+		atsScore.EvaluatedAt = nil
 	}
 	if atsScore.EvaluatedAt == nil {
-		now := time.Now().UTC()
+		now := s.now()
 		atsScore.EvaluatedAt = &now
 	}
 	atsScore.Normalize()

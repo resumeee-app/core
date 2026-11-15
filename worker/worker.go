@@ -4,15 +4,13 @@
 // Key components include:
 //   - Pool: Concurrent worker pool managing direct-store claiming, lease heartbeats,
 //     bounded retries, TTL/lease expiration sweeps, and graceful shutdown
-//   - Pipeline: Multi-stage resume generation pipeline coordinating prompt construction,
-//     LLM invocation, anti-hallucination validation, template rendering, and version persistence
-//   - PDFParsePipeline: Asynchronous background worker for extracting structured resumes from PDF text
+//   - SubmitPDFJob and CancelPDFJob: Admission-bounded helpers for persisting and cancelling
+//     asynchronous PDF parse jobs with atomic quota lifecycle management
 package worker
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -52,29 +50,35 @@ var ErrPoolClosed = errors.New("worker pool closed")
 type Config struct {
 	Concurrency            int
 	MaxConcurrentPerTenant int
-	PollInterval           time.Duration
-	SweepInterval          time.Duration
-	LeaseDuration          time.Duration
-	LeaseRenewInterval     time.Duration
-	MaxAttempts            int
-	RetryBaseDelay         time.Duration
-	MaxRetryDelay          time.Duration
-	ShutdownTimeout        time.Duration
-	CleanupTimeout         time.Duration
-	WorkerID               string
-	Clock                  func() time.Time
-	Branches               BranchStore
-	Profiles               ProfileReader
-	Presets                PresetReader
-	Templates              TemplateReader
-	PDFJobs                PDFJobStore
-	Quotas                 QuotaCommitter
-	ResumeExtractor        ResumeExtractor
-	LLMTimeout             time.Duration
-	Generator              Generator
-	Validator              ProvenanceValidator
-	Renderer               TemplateRenderer
-	Logger                 *slog.Logger
+	// SeparateQueues indicates that Branches and PDFJobs use distinct non-shared stores.
+	// When false (default), ClaimJobRequest.OtherActiveByTenant is left nil so shared stores
+	// compute cross-queue active leases directly from persisted state across all pools.
+	// When true and both Branches and PDFJobs are configured, local sibling active counts
+	// are passed via OtherActiveByTenant to enforce MaxConcurrentPerTenant across separate stores.
+	SeparateQueues     bool
+	PollInterval       time.Duration
+	SweepInterval      time.Duration
+	LeaseDuration      time.Duration
+	LeaseRenewInterval time.Duration
+	MaxAttempts        int
+	RetryBaseDelay     time.Duration
+	MaxRetryDelay      time.Duration
+	ShutdownTimeout    time.Duration
+	CleanupTimeout     time.Duration
+	WorkerID           string
+	Clock              func() time.Time
+	Branches           BranchStore
+	Profiles           ProfileReader
+	Presets            PresetReader
+	Templates          TemplateReader
+	PDFJobs            PDFJobStore
+	Quotas             QuotaCommitter
+	ResumeExtractor    ResumeExtractor
+	LLMTimeout         time.Duration
+	Generator          Generator
+	Validator          ProvenanceValidator
+	Renderer           TemplateRenderer
+	Logger             *slog.Logger
 }
 
 // Pool claims persisted pending BranchVersion and PDFParseJob records directly from stores,
@@ -82,6 +86,7 @@ type Config struct {
 type Pool struct {
 	concurrency            int
 	maxConcurrentPerTenant int
+	separateQueues         bool
 	pollInterval           time.Duration
 	sweepInterval          time.Duration
 	leaseDuration          time.Duration
@@ -195,6 +200,7 @@ func New(cfg Config) *Pool {
 	return &Pool{
 		concurrency:            concurrency,
 		maxConcurrentPerTenant: maxConcurrent,
+		separateQueues:         cfg.SeparateQueues,
 		pollInterval:           pollInterval,
 		sweepInterval:          sweepInterval,
 		leaseDuration:          leaseDuration,
@@ -487,8 +493,11 @@ func (p *Pool) tryClaimAndLaunch() bool {
 		p.slotMu.Unlock()
 		return false
 	}
-	activeVersionsSnap := copyIntMap(p.activeVersions)
-	activePDFSnap := copyIntMap(p.activePDFJobs)
+	var activeVersionsSnap, activePDFSnap map[string]int
+	if p.separateQueues && p.branches != nil && p.pdfJobs != nil {
+		activeVersionsSnap = copyIntMap(p.activeVersions)
+		activePDFSnap = copyIntMap(p.activePDFJobs)
+	}
 	seqSnap := copySeqMap(p.lastServedSeq)
 	p.slotMu.Unlock()
 
@@ -626,15 +635,18 @@ func (p *Pool) runClaimedPDFJob(job *core.PDFParseJob, tenantID string) {
 func (p *Pool) safeProcessVersion(ver *core.BranchVersion) {
 	defer func() {
 		if r := recover(); r != nil {
-			errStr := fmt.Sprintf("panic recovered in worker: %v", r)
+			versionID := ""
+			if ver != nil {
+				versionID = ver.ID
+			}
 			if p.logger != nil {
 				p.logger.Error("panic recovered during job execution",
-					"version_id", ver.ID,
+					"version_id", versionID,
 					"worker_id", p.workerID,
 					"panic", r,
 				)
 			}
-			p.failAndRefundVersion(ver, errStr)
+			p.failClaimedJob(p.versionJobDescriptor(ver, ""), "An unexpected internal error occurred during resume generation.", true)
 		}
 	}()
 

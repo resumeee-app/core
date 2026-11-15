@@ -1102,6 +1102,9 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 	if failed.ErrorMessage == "" {
 		t.Errorf("expected non-empty error message on panic failure")
 	}
+	if strings.Contains(failed.ErrorMessage, "unexpected runtime nil pointer") {
+		t.Errorf("expected raw panic details redacted from persisted ErrorMessage, got %q", failed.ErrorMessage)
+	}
 	if st := reservationStatus(ctx, t, env.store, env.defaultUser, verPanic.ReservationID); st != core.ReservationStatusReleased {
 		t.Errorf("expected quota released on worker panic, got %s", st)
 	}
@@ -3268,7 +3271,7 @@ func TestPool_PDFSubmitAndCancelHelpers(t *testing.T) {
 		callCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		// Reserve succeeds? Wait: store.ReserveQuota ignores ctx cancellation, while failingPDFSubmitStore returns ErrPendingLimitExceeded.
+		// ReserveQuota completes without checking callCtx on the mock store, whereas failingPDFSubmitStore returns ErrPendingLimitExceeded.
 		failStore := &failingPDFSubmitStore{
 			PDFJobStore: store,
 			submitErr:   core.ErrPendingLimitExceeded,
@@ -3591,4 +3594,891 @@ func TestPool_ConcurrentRace_AtMostOnceAndBranchExclusivity(t *testing.T) {
 	if duplicateExec {
 		t.Errorf("detected duplicate execution of a job: versions=%v pdfs=%v", versionExecs, pdfExecs)
 	}
+}
+
+type failingValidator struct {
+	err error
+}
+
+func (v *failingValidator) Validate(_ *core.TailoredContent, _ *core.MainProfileSnapshot, _ *core.Branch) (*core.ValidationResult, error) {
+	return nil, v.err
+}
+
+type failingRenderer struct {
+	err error
+}
+
+func (r *failingRenderer) Render(_ context.Context, _ *core.TemplateSet, _ *core.Profile, _ *core.TailoredContent) (*core.RenderOutput, error) {
+	return nil, r.err
+}
+
+type completeVersionFailStore struct {
+	worker.BranchStore
+	completeErr error
+}
+
+func (s *completeVersionFailStore) CompleteVersion(_ context.Context, _ *core.BranchVersion) error {
+	return s.completeErr
+}
+
+type completePDFFailStore struct {
+	worker.PDFJobStore
+	completeErr error
+}
+
+func (s *completePDFFailStore) CompleteClaimedJob(_ context.Context, _, _ string, _ *core.JSONResume) error {
+	return s.completeErr
+}
+
+type tokenReportingExtractor struct {
+	res   *core.JSONResume
+	usage core.TokenUsage
+	err   error
+}
+
+func (e *tokenReportingExtractor) ExtractResume(_ context.Context, _, _, _ string) (*core.JSONResume, core.TokenUsage, error) {
+	return e.res, e.usage, e.err
+}
+
+type spyQuotaReserver struct {
+	inner         worker.PDFQuotaReserver
+	reserveCalls  atomic.Int32
+	releaseMu     sync.Mutex
+	releaseReason string
+}
+
+func (s *spyQuotaReserver) ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error) {
+	s.reserveCalls.Add(1)
+	return s.inner.ReserveQuota(ctx, userID, op, estimatedTokens, dailyLimit, monthlyLimit)
+}
+
+func (s *spyQuotaReserver) ReleaseQuota(ctx context.Context, reservationID, reason string) error {
+	s.releaseMu.Lock()
+	s.releaseReason = reason
+	s.releaseMu.Unlock()
+	return s.inner.ReleaseQuota(ctx, reservationID, reason)
+}
+
+func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("redacts validator, renderer, and CompleteVersion internal errors", func(t *testing.T) {
+		secretErr := "sql: connection reset on internal-db.prod:5432"
+
+		// 1. Validator error redacted
+		env1 := setupTestWorkerEnv(t)
+		pool1 := worker.New(worker.Config{
+			Concurrency:  1,
+			PollInterval: 20 * time.Millisecond,
+			Branches:     env1.branchRepo,
+			Profiles:     env1.profileRepo,
+			Presets:      env1.presetRepo,
+			Templates:    env1.templateRepo,
+			Quotas:       env1.quotaRepo,
+			Generator:    env1.llm,
+			Validator:    &failingValidator{err: errors.New(secretErr)},
+			Renderer:     env1.renderer,
+		})
+		pool1.Start(ctx)
+		ver1 := submitPendingVersionWithQuota(ctx, t, env1.store, env1.defaultUser, env1.branchID, "ver-val-redact", core.PendingJobOptions{})
+		pool1.Notify()
+		done1 := waitForVersionStatus(ctx, t, env1.branchRepo, env1.branchID, ver1.ID, 2*time.Second, func(v *core.BranchVersion) bool {
+			return v.Status == core.VersionStatusFailed
+		})
+		pool1.Stop()
+		if strings.Contains(done1.ErrorMessage, "internal-db.prod") || strings.Contains(done1.ErrorMessage, "5432") {
+			t.Errorf("expected validator internal error redacted, got %q", done1.ErrorMessage)
+		}
+
+		// 2. Renderer error redacted
+		env2 := setupTestWorkerEnv(t)
+		pool2 := worker.New(worker.Config{
+			Concurrency:  1,
+			PollInterval: 20 * time.Millisecond,
+			Branches:     env2.branchRepo,
+			Profiles:     env2.profileRepo,
+			Presets:      env2.presetRepo,
+			Templates:    env2.templateRepo,
+			Quotas:       env2.quotaRepo,
+			Generator:    env2.llm,
+			Validator:    env2.validator,
+			Renderer:     &failingRenderer{err: errors.New(secretErr)},
+		})
+		pool2.Start(ctx)
+		ver2 := submitPendingVersionWithQuota(ctx, t, env2.store, env2.defaultUser, env2.branchID, "ver-rnd-redact", core.PendingJobOptions{})
+		pool2.Notify()
+		done2 := waitForVersionStatus(ctx, t, env2.branchRepo, env2.branchID, ver2.ID, 2*time.Second, func(v *core.BranchVersion) bool {
+			return v.Status == core.VersionStatusFailed
+		})
+		pool2.Stop()
+		if strings.Contains(done2.ErrorMessage, "internal-db.prod") || strings.Contains(done2.ErrorMessage, "5432") {
+			t.Errorf("expected renderer internal error redacted, got %q", done2.ErrorMessage)
+		}
+
+		// 3. CompleteVersion store error redacted
+		env3 := setupTestWorkerEnv(t)
+		pool3 := worker.New(worker.Config{
+			Concurrency:  1,
+			PollInterval: 20 * time.Millisecond,
+			Branches:     &completeVersionFailStore{BranchStore: env3.store, completeErr: errors.New(secretErr)},
+			Profiles:     env3.profileRepo,
+			Presets:      env3.presetRepo,
+			Templates:    env3.templateRepo,
+			Quotas:       env3.quotaRepo,
+			Generator:    env3.llm,
+			Validator:    env3.validator,
+			Renderer:     env3.renderer,
+		})
+		pool3.Start(ctx)
+		ver3 := submitPendingVersionWithQuota(ctx, t, env3.store, env3.defaultUser, env3.branchID, "ver-cmp-redact", core.PendingJobOptions{})
+		pool3.Notify()
+		done3 := waitForVersionStatus(ctx, t, env3.branchRepo, env3.branchID, ver3.ID, 2*time.Second, func(v *core.BranchVersion) bool {
+			return v.Status == core.VersionStatusFailed
+		})
+		pool3.Stop()
+		if strings.Contains(done3.ErrorMessage, "internal-db.prod") || strings.Contains(done3.ErrorMessage, "5432") {
+			t.Errorf("expected CompleteVersion internal error redacted, got %q", done3.ErrorMessage)
+		}
+	})
+
+	t.Run("redacts ErrValidation details in PDF extraction and commits quota even if CompleteClaimedJob fails", func(t *testing.T) {
+		store := memory.New()
+		pool1 := worker.New(worker.Config{
+			Concurrency:  1,
+			PollInterval: 20 * time.Millisecond,
+			PDFJobs:      store,
+			Quotas:       store,
+			ResumeExtractor: &tokenReportingExtractor{
+				err: fmt.Errorf("%w: parse table overflow at internal offset 0xdeadbeef", core.ErrValidation),
+			},
+		})
+		pool1.Start(ctx)
+		pj1 := submitPendingPDFWithQuota(ctx, t, store, pool1, "user-pdf-val", "Resume content", "mock", "m", core.DefaultJobTTL, nil)
+		done1 := waitForPDFStatus(ctx, t, store, "user-pdf-val", pj1.ID, 2*time.Second, func(j *core.PDFParseJob) bool {
+			return j.Status == core.PDFParseJobStatusFailed
+		})
+		pool1.Stop()
+		if strings.Contains(done1.ErrorMessage, "0xdeadbeef") {
+			t.Errorf("expected validation internal details redacted, got %q", done1.ErrorMessage)
+		}
+
+		// Now test extraction succeeding + CompleteClaimedJob failing -> commits quota (never refunds) & redacts store error.
+		store2 := memory.New()
+		wrappedPDF := &completePDFFailStore{
+			PDFJobStore: store2,
+			completeErr: errors.New("pq: deadlock detected on relation pdf_jobs_prod"),
+		}
+		pool2 := worker.New(worker.Config{
+			Concurrency:  1,
+			PollInterval: 20 * time.Millisecond,
+			PDFJobs:      wrappedPDF,
+			Quotas:       store2,
+			ResumeExtractor: &tokenReportingExtractor{
+				res:   &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Ada"}},
+				usage: core.TokenUsage{TotalTokens: 777},
+			},
+		})
+		pool2.Start(ctx)
+		pj2 := submitPendingPDFWithQuota(ctx, t, store2, pool2, "user-pdf-cmp", "Resume content", "mock", "m", core.DefaultJobTTL, nil)
+		done2 := waitForPDFStatus(ctx, t, store2, "user-pdf-cmp", pj2.ID, 2*time.Second, func(j *core.PDFParseJob) bool {
+			return j.Status == core.PDFParseJobStatusFailed
+		})
+		pool2.Stop()
+
+		if strings.Contains(done2.ErrorMessage, "deadlock") || strings.Contains(done2.ErrorMessage, "pdf_jobs_prod") {
+			t.Errorf("expected CompleteClaimedJob internal error redacted, got %q", done2.ErrorMessage)
+		}
+		if st := reservationStatus(ctx, t, store2, "user-pdf-cmp", pj2.ReservationID); st != core.ReservationStatusCommitted {
+			t.Errorf("expected quota committed right after extraction despite CompleteClaimedJob failure, got %s", st)
+		}
+		q, err := store2.Quota(ctx, "user-pdf-cmp")
+		if err != nil {
+			t.Fatalf("Quota failed: %v", err)
+		}
+		if q.MonthlyTokensUsed != 777 {
+			t.Errorf("expected MonthlyTokensUsed=777 committed after extraction, got %d", q.MonthlyTokensUsed)
+		}
+	})
+
+	t.Run("sanitizes SubmitPDFJob ReleaseQuota reason on store failure", func(t *testing.T) {
+		store := memory.New()
+		spyQuota := &spyQuotaReserver{inner: store}
+		failStore := &failingPDFSubmitStore{
+			PDFJobStore: store,
+			submitErr:   errors.New("postgres://admin:pass@db.internal:5432/resumeee connection refused"),
+		}
+		_, err := worker.SubmitPDFJob(ctx, worker.PDFSubmitConfig{
+			PDFJobs: failStore,
+			Quotas:  spyQuota,
+		}, worker.PDFJobSubmission{
+			UserID:       "user-sanitize-reason",
+			RawText:      "Resume raw text",
+			DailyLimit:   10,
+			MonthlyLimit: 50000,
+		})
+		if err == nil {
+			t.Fatal("expected SubmitPDFJob error")
+		}
+		spyQuota.releaseMu.Lock()
+		reason := spyQuota.releaseReason
+		spyQuota.releaseMu.Unlock()
+		if reason == "" || strings.Contains(reason, "postgres://") || strings.Contains(reason, "db.internal") {
+			t.Errorf("expected sanitized ReleaseQuota reason, got %q", reason)
+		}
+	})
+}
+
+type leaseErrBranchStore struct {
+	worker.BranchStore
+	renewErr      error
+	requeueErr    error
+	failErr       error
+	renewNotified chan struct{}
+	onceRenew     sync.Once
+	requeueCalled chan struct{}
+	onceRequeue   sync.Once
+	failCalls     atomic.Int32
+}
+
+func (s *leaseErrBranchStore) RenewVersionLease(ctx context.Context, versionID, claimedBy string, leaseExpiresAt time.Time) error {
+	s.onceRenew.Do(func() {
+		if s.renewNotified != nil {
+			close(s.renewNotified)
+		}
+	})
+	if s.renewErr != nil {
+		return s.renewErr
+	}
+	return s.BranchStore.RenewVersionLease(ctx, versionID, claimedBy, leaseExpiresAt)
+}
+
+func (s *leaseErrBranchStore) RequeueVersionForRetry(ctx context.Context, versionID, claimedBy string, nextRetryAt time.Time, errMsg string) error {
+	defer s.onceRequeue.Do(func() {
+		if s.requeueCalled != nil {
+			close(s.requeueCalled)
+		}
+	})
+	if s.requeueErr != nil {
+		return s.requeueErr
+	}
+	return s.BranchStore.RequeueVersionForRetry(ctx, versionID, claimedBy, nextRetryAt, errMsg)
+}
+
+func (s *leaseErrBranchStore) FailClaimedVersion(ctx context.Context, versionID, claimedBy, errMsg string) error {
+	s.failCalls.Add(1)
+	if s.failErr != nil {
+		return s.failErr
+	}
+	return s.BranchStore.FailClaimedVersion(ctx, versionID, claimedBy, errMsg)
+}
+
+type leaseErrPDFStore struct {
+	worker.PDFJobStore
+	renewErr      error
+	requeueErr    error
+	failErr       error
+	renewNotified chan struct{}
+	onceRenew     sync.Once
+	requeueCalled chan struct{}
+	onceRequeue   sync.Once
+	failCalls     atomic.Int32
+}
+
+func (s *leaseErrPDFStore) RenewJobLease(ctx context.Context, jobID, claimedBy string, leaseExpiresAt time.Time) error {
+	s.onceRenew.Do(func() {
+		if s.renewNotified != nil {
+			close(s.renewNotified)
+		}
+	})
+	if s.renewErr != nil {
+		return s.renewErr
+	}
+	return s.PDFJobStore.RenewJobLease(ctx, jobID, claimedBy, leaseExpiresAt)
+}
+
+func (s *leaseErrPDFStore) RequeueJobForRetry(ctx context.Context, jobID, claimedBy string, nextRetryAt time.Time, errMsg string) error {
+	defer s.onceRequeue.Do(func() {
+		if s.requeueCalled != nil {
+			close(s.requeueCalled)
+		}
+	})
+	if s.requeueErr != nil {
+		return s.requeueErr
+	}
+	return s.PDFJobStore.RequeueJobForRetry(ctx, jobID, claimedBy, nextRetryAt, errMsg)
+}
+
+func (s *leaseErrPDFStore) FailClaimedJob(ctx context.Context, jobID, claimedBy, errMsg string) error {
+	s.failCalls.Add(1)
+	if s.failErr != nil {
+		return s.failErr
+	}
+	return s.PDFJobStore.FailClaimedJob(ctx, jobID, claimedBy, errMsg)
+}
+
+func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("heartbeat ErrLeaseExpired cancels version attempt context and suppresses stale fail refund", func(t *testing.T) {
+		env := setupTestWorkerEnv(t)
+		leaseStore := &leaseErrBranchStore{
+			BranchStore:   env.store,
+			renewErr:      core.ErrLeaseExpired,
+			failErr:       core.ErrLeaseExpired,
+			renewNotified: make(chan struct{}),
+		}
+		attemptCancelled := make(chan struct{})
+		pool := worker.New(worker.Config{
+			Concurrency:        1,
+			PollInterval:       30 * time.Millisecond,
+			LeaseDuration:      60 * time.Millisecond,
+			LeaseRenewInterval: 15 * time.Millisecond,
+			Branches:           leaseStore,
+			Profiles:           env.profileRepo,
+			Presets:            env.presetRepo,
+			Templates:          env.templateRepo,
+			Quotas:             env.quotaRepo,
+			Validator:          env.validator,
+			Renderer:           env.renderer,
+			Generator: &callbackLLM{
+				fn: func(c context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
+					<-c.Done()
+					close(attemptCancelled)
+					return nil, c.Err()
+				},
+			},
+		})
+		pool.Start(ctx)
+		defer pool.Stop()
+
+		ver := submitPendingVersionWithQuota(ctx, t, env.store, env.defaultUser, env.branchID, "ver-lease-exp-hb", core.PendingJobOptions{})
+		pool.Notify()
+
+		select {
+		case <-attemptCancelled:
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected heartbeat ErrLeaseExpired to cancel version attempt context")
+		}
+		pool.Stop()
+
+		if st := reservationStatus(ctx, t, env.store, env.defaultUser, ver.ReservationID); st != core.ReservationStatusPending {
+			t.Errorf("expected reservation untouched (pending) when FailClaimedVersion returns ErrLeaseExpired, got %s", st)
+		}
+	})
+
+	t.Run("heartbeat ErrLeaseExpired cancels pdf attempt context", func(t *testing.T) {
+		store := memory.New()
+		leaseStore := &leaseErrPDFStore{
+			PDFJobStore:   store,
+			renewErr:      core.ErrLeaseExpired,
+			failErr:       core.ErrLeaseExpired,
+			renewNotified: make(chan struct{}),
+		}
+		attemptCancelled := make(chan struct{})
+		pool := worker.New(worker.Config{
+			Concurrency:        1,
+			PollInterval:       30 * time.Millisecond,
+			LeaseDuration:      60 * time.Millisecond,
+			LeaseRenewInterval: 15 * time.Millisecond,
+			PDFJobs:            leaseStore,
+			Quotas:             store,
+			ResumeExtractor: &callbackResumeExtractor{
+				fn: func(c context.Context, _, _, _ string) (*core.JSONResume, error) {
+					<-c.Done()
+					close(attemptCancelled)
+					return nil, c.Err()
+				},
+			},
+		})
+		pool.Start(ctx)
+		defer pool.Stop()
+
+		pj := submitPendingPDFWithQuota(ctx, t, store, pool, "user-pdf-hb-exp", "Resume text", "mock", "m", core.DefaultJobTTL, nil)
+
+		select {
+		case <-attemptCancelled:
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected heartbeat ErrLeaseExpired to cancel pdf attempt context")
+		}
+		pool.Stop()
+
+		if st := reservationStatus(ctx, t, store, "user-pdf-hb-exp", pj.ReservationID); st != core.ReservationStatusPending {
+			t.Errorf("expected reservation untouched when FailClaimedJob returns ErrLeaseExpired, got %s", st)
+		}
+	})
+
+	t.Run("RequeueVersionForRetry and RequeueJobForRetry returning ErrLeaseExpired skip failure and quota refund", func(t *testing.T) {
+		env := setupTestWorkerEnv(t)
+		verStore := &leaseErrBranchStore{
+			BranchStore:   env.store,
+			requeueErr:    core.ErrLeaseExpired,
+			requeueCalled: make(chan struct{}),
+		}
+		var verCalls atomic.Int32
+		poolVer := worker.New(worker.Config{
+			Concurrency:    1,
+			PollInterval:   30 * time.Millisecond,
+			MaxAttempts:    3,
+			RetryBaseDelay: 20 * time.Millisecond,
+			Branches:       verStore,
+			Profiles:       env.profileRepo,
+			Presets:        env.presetRepo,
+			Templates:      env.templateRepo,
+			Quotas:         env.quotaRepo,
+			Validator:      env.validator,
+			Renderer:       env.renderer,
+			Generator: &callbackLLM{
+				fn: func(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
+					verCalls.Add(1)
+					return nil, core.ErrTransientFailure
+				},
+			},
+		})
+		poolVer.Start(ctx)
+		ver := submitPendingVersionWithQuota(ctx, t, env.store, env.defaultUser, env.branchID, "ver-req-exp", core.PendingJobOptions{})
+		poolVer.Notify()
+		select {
+		case <-verStore.requeueCalled:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for RequeueVersionForRetry")
+		}
+		poolVer.Stop()
+
+		if verCalls.Load() != 1 {
+			t.Errorf("expected 1 version attempt before lease loss on requeue, got %d", verCalls.Load())
+		}
+		if verStore.failCalls.Load() != 0 {
+			t.Errorf("expected FailClaimedVersion not called when RequeueVersionForRetry returns ErrLeaseExpired, got %d", verStore.failCalls.Load())
+		}
+		if st := reservationStatus(ctx, t, env.store, env.defaultUser, ver.ReservationID); st != core.ReservationStatusPending {
+			t.Errorf("expected version reservation untouched on requeue lease loss, got %s", st)
+		}
+
+		pdfStore := memory.New()
+		wrappedPDF := &leaseErrPDFStore{
+			PDFJobStore:   pdfStore,
+			requeueErr:    core.ErrLeaseExpired,
+			requeueCalled: make(chan struct{}),
+		}
+		var pdfCalls atomic.Int32
+		poolPDF := worker.New(worker.Config{
+			Concurrency:    1,
+			PollInterval:   30 * time.Millisecond,
+			MaxAttempts:    3,
+			RetryBaseDelay: 20 * time.Millisecond,
+			PDFJobs:        wrappedPDF,
+			Quotas:         pdfStore,
+			ResumeExtractor: &callbackResumeExtractor{
+				fn: func(_ context.Context, _, _, _ string) (*core.JSONResume, error) {
+					pdfCalls.Add(1)
+					return nil, core.ErrTransientFailure
+				},
+			},
+		})
+		poolPDF.Start(ctx)
+		pj := submitPendingPDFWithQuota(ctx, t, pdfStore, poolPDF, "user-pdf-req-exp", "Resume text", "mock", "m", core.DefaultJobTTL, nil)
+		select {
+		case <-wrappedPDF.requeueCalled:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for RequeueJobForRetry")
+		}
+		poolPDF.Stop()
+
+		if pdfCalls.Load() != 1 {
+			t.Errorf("expected 1 pdf attempt before lease loss on requeue, got %d", pdfCalls.Load())
+		}
+		if wrappedPDF.failCalls.Load() != 0 {
+			t.Errorf("expected FailClaimedJob not called when RequeueJobForRetry returns ErrLeaseExpired, got %d", wrappedPDF.failCalls.Load())
+		}
+		if st := reservationStatus(ctx, t, pdfStore, "user-pdf-req-exp", pj.ReservationID); st != core.ReservationStatusPending {
+			t.Errorf("expected pdf reservation untouched on requeue lease loss, got %s", st)
+		}
+	})
+}
+
+type spyClaimBranchStore struct {
+	worker.BranchStore
+	mu             sync.Mutex
+	sawNonNilOther bool
+	sawNilOther    bool
+}
+
+func (s *spyClaimBranchStore) ClaimNextVersion(ctx context.Context, req core.ClaimJobRequest) (*core.BranchVersion, error) {
+	s.mu.Lock()
+	if req.OtherActiveByTenant == nil {
+		s.sawNilOther = true
+	} else {
+		s.sawNonNilOther = true
+	}
+	s.mu.Unlock()
+	return s.BranchStore.ClaimNextVersion(ctx, req)
+}
+
+type spyClaimPDFStore struct {
+	worker.PDFJobStore
+	mu             sync.Mutex
+	sawNonNilOther bool
+	sawNilOther    bool
+}
+
+func (s *spyClaimPDFStore) ClaimNextJob(ctx context.Context, req core.ClaimJobRequest) (*core.PDFParseJob, error) {
+	s.mu.Lock()
+	if req.OtherActiveByTenant == nil {
+		s.sawNilOther = true
+	} else {
+		s.sawNonNilOther = true
+	}
+	s.mu.Unlock()
+	return s.PDFJobStore.ClaimNextJob(ctx, req)
+}
+
+func TestPool_SharedStoreAndSeparateQueuesConcurrency(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("two single-workload pools sharing one store pass nil OtherActiveByTenant and enforce tenant cap", func(t *testing.T) {
+		env := setupTestWorkerEnv(t)
+		branchSpy := &spyClaimBranchStore{BranchStore: env.store}
+		pdfSpy := &spyClaimPDFStore{PDFJobStore: env.store}
+
+		var (
+			mu      sync.Mutex
+			active  int
+			peak    int
+			started = make(chan struct{}, 2)
+		)
+		release := make(chan struct{})
+
+		poolVer := worker.New(worker.Config{
+			Concurrency:            2,
+			MaxConcurrentPerTenant: 1,
+			PollInterval:           15 * time.Millisecond,
+			WorkerID:               "pool-ver-only",
+			Branches:               branchSpy,
+			Profiles:               env.profileRepo,
+			Presets:                env.presetRepo,
+			Templates:              env.templateRepo,
+			Quotas:                 env.quotaRepo,
+			Validator:              env.validator,
+			Renderer:               env.renderer,
+			Generator: &callbackLLM{
+				fn: func(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
+					mu.Lock()
+					active++
+					if active > peak {
+						peak = active
+					}
+					mu.Unlock()
+					started <- struct{}{}
+					<-release
+					mu.Lock()
+					active--
+					mu.Unlock()
+					return &core.GenerationResponse{TailoredContent: core.TailoredContent{Summary: "OK"}}, nil
+				},
+			},
+		})
+		poolPDF := worker.New(worker.Config{
+			Concurrency:            2,
+			MaxConcurrentPerTenant: 1,
+			PollInterval:           15 * time.Millisecond,
+			WorkerID:               "pool-pdf-only",
+			PDFJobs:                pdfSpy,
+			Quotas:                 env.quotaRepo,
+			ResumeExtractor: &callbackResumeExtractor{
+				fn: func(_ context.Context, _, _, _ string) (*core.JSONResume, error) {
+					mu.Lock()
+					active++
+					if active > peak {
+						peak = active
+					}
+					mu.Unlock()
+					started <- struct{}{}
+					<-release
+					mu.Lock()
+					active--
+					mu.Unlock()
+					return &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Shared"}}, nil
+				},
+			},
+		})
+
+		ver := submitPendingVersionWithQuota(ctx, t, env.store, env.defaultUser, env.branchID, "ver-shared-pool", core.PendingJobOptions{})
+		pj := submitPendingPDFWithQuota(ctx, t, env.store, nil, env.defaultUser, "Shared PDF text", "mock", "m", core.DefaultJobTTL, nil)
+
+		poolVer.Start(ctx)
+		poolPDF.Start(ctx)
+		poolVer.Notify()
+		poolPDF.Notify()
+
+		<-started
+		// Wait long enough for several poll ticks on the sibling pool while the first job is held open.
+		time.Sleep(80 * time.Millisecond)
+
+		mu.Lock()
+		duringFirstPeak := peak
+		mu.Unlock()
+		if duringFirstPeak != 1 {
+			close(release)
+			poolVer.Stop()
+			poolPDF.Stop()
+			t.Fatalf("expected mutual exclusion across single-workload shared-store pools (peak=1), got %d", duringFirstPeak)
+		}
+
+		close(release)
+		waitForVersionStatus(ctx, t, env.store, env.branchID, ver.ID, 2*time.Second, func(v *core.BranchVersion) bool {
+			return v.Status == core.VersionStatusCompleted
+		})
+		waitForPDFStatus(ctx, t, env.store, env.defaultUser, pj.ID, 2*time.Second, func(j *core.PDFParseJob) bool {
+			return j.Status == core.PDFParseJobStatusCompleted
+		})
+		poolVer.Stop()
+		poolPDF.Stop()
+
+		branchSpy.mu.Lock()
+		verNil := branchSpy.sawNilOther && !branchSpy.sawNonNilOther
+		branchSpy.mu.Unlock()
+		pdfSpy.mu.Lock()
+		pdfNil := pdfSpy.sawNilOther && !pdfSpy.sawNonNilOther
+		pdfSpy.mu.Unlock()
+		if !verNil || !pdfNil {
+			t.Errorf("expected OtherActiveByTenant=nil in shared-store default mode, got verNil=%v pdfNil=%v", verNil, pdfNil)
+		}
+	})
+
+	t.Run("pre-existing unexpired processing sibling lease in shared store blocks pool claim", func(t *testing.T) {
+		env := setupTestWorkerEnv(t)
+		now := time.Now().UTC()
+		future := now.Add(5 * time.Minute)
+
+		if err := env.store.CreateJob(ctx, &core.PDFParseJob{
+			ID:             "preexisting-pdf-lease",
+			UserID:         env.defaultUser,
+			Status:         core.PDFParseJobStatusProcessing,
+			RawText:        "Held by external worker",
+			ClaimedBy:      "external-worker",
+			LeaseExpiresAt: &future,
+			ExpiresAt:      &future,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}); err != nil {
+			t.Fatalf("CreateJob failed: %v", err)
+		}
+
+		ver := submitPendingVersionWithQuota(ctx, t, env.store, env.defaultUser, env.branchID, "ver-blocked-by-sibling", core.PendingJobOptions{})
+
+		pool := worker.New(worker.Config{
+			Concurrency:            2,
+			MaxConcurrentPerTenant: 1,
+			PollInterval:           15 * time.Millisecond,
+			Branches:               env.branchRepo,
+			Profiles:               env.profileRepo,
+			Presets:                env.presetRepo,
+			Templates:              env.templateRepo,
+			PDFJobs:                env.pdfRepo,
+			Quotas:                 env.quotaRepo,
+			Validator:              env.validator,
+			Renderer:               env.renderer,
+			Generator:              env.llm,
+		})
+		pool.Start(ctx)
+		defer pool.Stop()
+		pool.Notify()
+
+		time.Sleep(80 * time.Millisecond)
+		loaded, err := env.store.Version(ctx, env.branchID, ver.ID)
+		if err != nil {
+			t.Fatalf("Version failed: %v", err)
+		}
+		if loaded.Status != core.VersionStatusPending {
+			t.Fatalf("expected version to stay pending while sibling lease is active, got %s", loaded.Status)
+		}
+
+		// Complete external sibling lease and verify pending version now runs.
+		if err := env.store.CompleteClaimedJob(ctx, "preexisting-pdf-lease", "external-worker", &core.JSONResume{}); err != nil {
+			t.Fatalf("CompleteClaimedJob failed: %v", err)
+		}
+		pool.Notify()
+
+		done := waitForVersionStatus(ctx, t, env.store, env.branchID, ver.ID, 2*time.Second, func(v *core.BranchVersion) bool {
+			return v.Status == core.VersionStatusCompleted
+		})
+		if done.Status != core.VersionStatusCompleted {
+			t.Fatalf("expected version completed after sibling lease released, got %s", done.Status)
+		}
+	})
+
+	t.Run("SeparateQueues=true passes local OtherActiveByTenant across two separate stores", func(t *testing.T) {
+		env := setupTestWorkerEnv(t)
+		separatePDFStore := memory.New()
+		branchSpy := &spyClaimBranchStore{BranchStore: env.store}
+		pdfSpy := &spyClaimPDFStore{PDFJobStore: separatePDFStore}
+
+		var (
+			mu      sync.Mutex
+			active  int
+			peak    int
+			started = make(chan struct{}, 2)
+		)
+		release := make(chan struct{})
+
+		pool := worker.New(worker.Config{
+			Concurrency:            2,
+			MaxConcurrentPerTenant: 1,
+			SeparateQueues:         true,
+			PollInterval:           15 * time.Millisecond,
+			Branches:               branchSpy,
+			Profiles:               env.profileRepo,
+			Presets:                env.presetRepo,
+			Templates:              env.templateRepo,
+			PDFJobs:                pdfSpy,
+			Quotas:                 env.quotaRepo,
+			Validator:              env.validator,
+			Renderer:               env.renderer,
+			Generator: &callbackLLM{
+				fn: func(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
+					mu.Lock()
+					active++
+					if active > peak {
+						peak = active
+					}
+					mu.Unlock()
+					started <- struct{}{}
+					<-release
+					mu.Lock()
+					active--
+					mu.Unlock()
+					return &core.GenerationResponse{TailoredContent: core.TailoredContent{Summary: "OK"}}, nil
+				},
+			},
+			ResumeExtractor: &callbackResumeExtractor{
+				fn: func(_ context.Context, _, _, _ string) (*core.JSONResume, error) {
+					mu.Lock()
+					active++
+					if active > peak {
+						peak = active
+					}
+					mu.Unlock()
+					started <- struct{}{}
+					<-release
+					mu.Lock()
+					active--
+					mu.Unlock()
+					return &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Sep"}}, nil
+				},
+			},
+		})
+
+		ver := submitPendingVersionWithQuota(ctx, t, env.store, env.defaultUser, env.branchID, "ver-sep-q", core.PendingJobOptions{})
+		pj, err := worker.SubmitPDFJob(ctx, worker.PDFSubmitConfig{
+			PDFJobs: separatePDFStore,
+			Quotas:  separatePDFStore,
+		}, worker.PDFJobSubmission{
+			UserID:       env.defaultUser,
+			RawText:      "Separate store PDF",
+			DailyLimit:   50,
+			MonthlyLimit: 50000,
+		})
+		if err != nil {
+			t.Fatalf("SubmitPDFJob failed: %v", err)
+		}
+
+		pool.Start(ctx)
+		pool.Notify()
+
+		<-started
+		time.Sleep(80 * time.Millisecond)
+
+		mu.Lock()
+		duringPeak := peak
+		mu.Unlock()
+		if duringPeak != 1 {
+			close(release)
+			pool.Stop()
+			t.Fatalf("expected SeparateQueues=true to cap combined active jobs per tenant at 1 across distinct stores, got %d", duringPeak)
+		}
+
+		close(release)
+		waitForVersionStatus(ctx, t, env.store, env.branchID, ver.ID, 2*time.Second, func(v *core.BranchVersion) bool {
+			return v.Status == core.VersionStatusCompleted
+		})
+		waitForPDFStatus(ctx, t, separatePDFStore, env.defaultUser, pj.ID, 2*time.Second, func(j *core.PDFParseJob) bool {
+			return j.Status == core.PDFParseJobStatusCompleted
+		})
+		pool.Stop()
+
+		branchSpy.mu.Lock()
+		verNonNil := branchSpy.sawNonNilOther && !branchSpy.sawNilOther
+		branchSpy.mu.Unlock()
+		pdfSpy.mu.Lock()
+		pdfNonNil := pdfSpy.sawNonNilOther && !pdfSpy.sawNilOther
+		pdfSpy.mu.Unlock()
+		if !verNonNil || !pdfNonNil {
+			t.Errorf("expected OtherActiveByTenant non-nil when SeparateQueues=true, got verNonNil=%v pdfNonNil=%v", verNonNil, pdfNonNil)
+		}
+	})
+}
+
+func TestPool_PDFSubmitMaxRawTextBytes(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("rejects payload above default DefaultMaxPDFRawTextBytes before reserving quota", func(t *testing.T) {
+		store := memory.New()
+		spyQuota := &spyQuotaReserver{inner: store}
+		oversized := strings.Repeat("a", core.DefaultMaxPDFRawTextBytes+1)
+
+		_, err := worker.SubmitPDFJob(ctx, worker.PDFSubmitConfig{
+			PDFJobs: store,
+			Quotas:  spyQuota,
+		}, worker.PDFJobSubmission{
+			UserID:       "user-raw-default-max",
+			RawText:      oversized,
+			DailyLimit:   10,
+			MonthlyLimit: 100000,
+		})
+		if !errors.Is(err, core.ErrValidation) {
+			t.Fatalf("expected ErrValidation for oversized RawText, got %v", err)
+		}
+		if spyQuota.reserveCalls.Load() != 0 {
+			t.Errorf("expected ReserveQuota not called on RawText validation failure, got %d", spyQuota.reserveCalls.Load())
+		}
+	})
+
+	t.Run("enforces custom MaxRawTextBytes limit and allows exact cap", func(t *testing.T) {
+		store := memory.New()
+		spyQuota := &spyQuotaReserver{inner: store}
+
+		_, err := worker.SubmitPDFJob(ctx, worker.PDFSubmitConfig{
+			PDFJobs:         store,
+			Quotas:          spyQuota,
+			MaxRawTextBytes: 32,
+		}, worker.PDFJobSubmission{
+			UserID:       "user-raw-custom-max",
+			RawText:      strings.Repeat("x", 33),
+			DailyLimit:   10,
+			MonthlyLimit: 100000,
+		})
+		if !errors.Is(err, core.ErrValidation) {
+			t.Fatalf("expected ErrValidation for RawText > custom MaxRawTextBytes, got %v", err)
+		}
+		if spyQuota.reserveCalls.Load() != 0 {
+			t.Errorf("expected ReserveQuota skipped on oversized payload, got %d calls", spyQuota.reserveCalls.Load())
+		}
+
+		job, err := worker.SubmitPDFJob(ctx, worker.PDFSubmitConfig{
+			PDFJobs:         store,
+			Quotas:          spyQuota,
+			MaxRawTextBytes: 32,
+		}, worker.PDFJobSubmission{
+			UserID:       "user-raw-custom-max",
+			RawText:      strings.Repeat("x", 32),
+			DailyLimit:   10,
+			MonthlyLimit: 100000,
+		})
+		if err != nil {
+			t.Fatalf("expected exact MaxRawTextBytes payload accepted, got %v", err)
+		}
+		if len(job.RawText) != 32 {
+			t.Errorf("expected persisted RawText length 32, got %d", len(job.RawText))
+		}
+	})
 }

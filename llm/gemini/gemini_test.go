@@ -244,6 +244,8 @@ func TestGeminiClient_Complete_InteractionsSDK(t *testing.T) {
 			{"401 unauthorized", http.StatusUnauthorized, "application/json", `{"error":{"code":"unauthenticated","message":"invalid api key"}}`, llm.ErrUnauthorized},
 			{"429 rate limited", http.StatusTooManyRequests, "text/plain", `rate limit exceeded`, llm.ErrRateLimited},
 			{"429 billing quota exhausted", http.StatusTooManyRequests, "application/json", `{"error":{"code":"resource_exhausted","message":"Billing account is not active; check billing quota."}}`, llm.ErrUpstreamQuota},
+			{"429 quota indicator only in error.code", http.StatusTooManyRequests, "application/json", `{"error":{"code":"insufficient_quota","message":"Quota exhausted"}}`, llm.ErrUpstreamQuota},
+			{"400 quota indicator only in error.code", http.StatusBadRequest, "application/json", `{"error":{"code":"billing_not_active","message":"Request failed"}}`, llm.ErrUpstreamQuota},
 			{"402 payment required", http.StatusPaymentRequired, "text/plain", `payment required`, llm.ErrUpstreamQuota},
 			{"503 upstream", http.StatusServiceUnavailable, "application/json", `{"error":{"code":"unavailable","message":"overloaded"}}`, llm.ErrUpstream},
 			{"200 malformed json", http.StatusOK, "application/json", `{not-json`, llm.ErrInvalidResponse},

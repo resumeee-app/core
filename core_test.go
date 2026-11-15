@@ -820,6 +820,15 @@ func TestSentinelsAndStatusHelpers(t *testing.T) {
 	if !errors.Is(core.ErrJobCancelled, core.ErrPermanentFailure) {
 		t.Errorf("expected ErrJobCancelled to match ErrPermanentFailure")
 	}
+	if !errors.Is(core.ErrLeaseExpired, core.ErrConflict) {
+		t.Errorf("expected ErrLeaseExpired to match ErrConflict")
+	}
+	if got := core.ClassifyError(core.ErrLeaseExpired); got != core.ErrorClassPermanent {
+		t.Errorf("expected ClassifyError(ErrLeaseExpired) = permanent, got %q", got)
+	}
+	if core.DefaultMaxPDFRawTextBytes != 1<<20 {
+		t.Errorf("expected DefaultMaxPDFRawTextBytes = 1 MiB, got %d", core.DefaultMaxPDFRawTextBytes)
+	}
 
 	versionCases := []struct {
 		status        core.VersionStatus

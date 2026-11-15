@@ -2846,3 +2846,625 @@ func TestMemoryStore_QuotaWindowRolloverSafety(t *testing.T) {
 		}
 	})
 }
+
+// TestMemoryStore_SubmitPendingVersion_BranchAndTenantIsolation verifies SubmitPendingVersion
+// rejects nonexistent and foreign-owned branches with ErrNotFound without superseding victim versions.
+func TestMemoryStore_SubmitPendingVersion_BranchAndTenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("nonexistent branch returns ErrNotFound", func(t *testing.T) {
+		store := setupTestStore(t)
+
+		for _, uid := range []string{"attacker", ""} {
+			v := &core.BranchVersion{
+				ID:       "v-missing-br-" + uid,
+				UserID:   uid,
+				BranchID: "br-does-not-exist",
+			}
+			_, err := store.SubmitPendingVersion(ctx, v, core.PendingJobOptions{Now: base})
+			if !errors.Is(err, core.ErrNotFound) {
+				t.Fatalf("uid=%q: expected ErrNotFound for nonexistent branch, got %v", uid, err)
+			}
+			if _, lookupErr := store.Version(ctx, "br-does-not-exist", v.ID); !errors.Is(lookupErr, core.ErrNotFound) {
+				t.Fatalf("uid=%q: expected version not to be persisted, got %v", uid, lookupErr)
+			}
+		}
+	})
+
+	t.Run("foreign-owned branch returns ErrNotFound and preserves victim pending version", func(t *testing.T) {
+		store := setupTestStore(t)
+		victimBr := &core.Branch{
+			ID:            "br-victim",
+			UserID:        "victim-user",
+			Name:          "Victim Branch",
+			TemplateSetID: core.TemplateStandardCleanID,
+		}
+		if err := store.CreateBranch(ctx, victimBr); err != nil {
+			t.Fatalf("create victim branch: %v", err)
+		}
+
+		victimPending := &core.BranchVersion{
+			ID:            "ver-victim-pending",
+			UserID:        "victim-user",
+			BranchID:      victimBr.ID,
+			ReservationID: "res-victim-1",
+		}
+		if _, err := store.SubmitPendingVersion(ctx, victimPending, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit victim pending version: %v", err)
+		}
+
+		attackerVer := &core.BranchVersion{
+			ID:       "ver-attacker",
+			UserID:   "attacker-user",
+			BranchID: victimBr.ID,
+		}
+		released, err := store.SubmitPendingVersion(ctx, attackerVer, core.PendingJobOptions{Now: base.Add(time.Minute)})
+		if !errors.Is(err, core.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound when foreign user submits to victim branch, got %v", err)
+		}
+		if len(released) != 0 {
+			t.Fatalf("expected no released reservations on rejected foreign submit, got %+v", released)
+		}
+
+		if _, lookupErr := store.Version(ctx, victimBr.ID, attackerVer.ID); !errors.Is(lookupErr, core.ErrNotFound) {
+			t.Fatalf("expected attacker version not to be persisted, got %v", lookupErr)
+		}
+		stillPending, err := store.Version(ctx, victimBr.ID, victimPending.ID)
+		if err != nil {
+			t.Fatalf("fetch victim pending version: %v", err)
+		}
+		if stillPending.Status != core.VersionStatusPending || stillPending.ReservationID != "res-victim-1" {
+			t.Fatalf("expected victim pending version untouched, got %+v", stillPending)
+		}
+	})
+
+	t.Run("empty UserID inherits branch UserID", func(t *testing.T) {
+		store := setupTestStore(t)
+		br := &core.Branch{
+			ID:            "br-inherit-user",
+			UserID:        "owner-user",
+			Name:          "Owner Branch",
+			TemplateSetID: core.TemplateStandardCleanID,
+		}
+		if err := store.CreateBranch(ctx, br); err != nil {
+			t.Fatalf("create branch: %v", err)
+		}
+
+		v := &core.BranchVersion{ID: "ver-inherit", BranchID: br.ID}
+		if _, err := store.SubmitPendingVersion(ctx, v, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit version with empty UserID: %v", err)
+		}
+		got, err := store.Version(ctx, br.ID, v.ID)
+		if err != nil {
+			t.Fatalf("get version: %v", err)
+		}
+		if got.UserID != "owner-user" {
+			t.Errorf("expected UserID inherited as %q, got %q", "owner-user", got.UserID)
+		}
+	})
+}
+
+// TestMemoryStore_LeaseLossAndStaleCompleteGuards verifies ErrLeaseExpired (unwrapping to ErrConflict)
+// across lease-mutating version and PDF job operations, stale CompleteVersion guards, and ClaimedBy clearing.
+func TestMemoryStore_LeaseLossAndStaleCompleteGuards(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	assertLeaseExpired := func(t *testing.T, op string, err error) {
+		t.Helper()
+		if !errors.Is(err, core.ErrLeaseExpired) {
+			t.Errorf("%s: expected ErrLeaseExpired, got %v", op, err)
+		}
+		if !errors.Is(err, core.ErrConflict) {
+			t.Errorf("%s: expected ErrConflict (via ErrLeaseExpired), got %v", op, err)
+		}
+	}
+
+	t.Run("version lease-loss methods return ErrLeaseExpired and ErrConflict", func(t *testing.T) {
+		store := setupTestStore(t)
+		br := &core.Branch{ID: "br-ll-v", UserID: "u1", Name: "LeaseLoss", TemplateSetID: core.TemplateStandardCleanID}
+		if err := store.CreateBranch(ctx, br); err != nil {
+			t.Fatalf("create branch: %v", err)
+		}
+		if _, err := store.SubmitPendingVersion(ctx, &core.BranchVersion{ID: "v-ll-1", UserID: "u1", BranchID: br.ID}, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit version: %v", err)
+		}
+		claimed, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{WorkerID: "worker-a", Now: base, LeaseDuration: 2 * time.Minute})
+		if err != nil || claimed == nil {
+			t.Fatalf("claim version: %v", err)
+		}
+
+		assertLeaseExpired(t, "RenewVersionLease wrong worker", store.RenewVersionLease(ctx, claimed.ID, "worker-b", base.Add(4*time.Minute)))
+		assertLeaseExpired(t, "RequeueVersionForRetry wrong worker", store.RequeueVersionForRetry(ctx, claimed.ID, "worker-b", base.Add(3*time.Minute), "err"))
+		assertLeaseExpired(t, "FailClaimedVersion wrong worker", store.FailClaimedVersion(ctx, claimed.ID, "worker-b", "err"))
+	})
+
+	t.Run("PDF job lease-loss methods return ErrLeaseExpired and ErrConflict", func(t *testing.T) {
+		store := setupTestStore(t)
+		job := &core.PDFParseJob{ID: "j-ll-1", UserID: "u1", RawText: "resume text"}
+		if err := store.SubmitPendingJob(ctx, job, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit job: %v", err)
+		}
+		claimed, err := store.ClaimNextJob(ctx, core.ClaimJobRequest{WorkerID: "worker-a", Now: base, LeaseDuration: 2 * time.Minute})
+		if err != nil || claimed == nil {
+			t.Fatalf("claim job: %v", err)
+		}
+
+		assertLeaseExpired(t, "RenewJobLease wrong worker", store.RenewJobLease(ctx, claimed.ID, "worker-b", base.Add(4*time.Minute)))
+		assertLeaseExpired(t, "RequeueJobForRetry wrong worker", store.RequeueJobForRetry(ctx, claimed.ID, "worker-b", base.Add(3*time.Minute), "err"))
+		assertLeaseExpired(t, "CompleteClaimedJob wrong worker", store.CompleteClaimedJob(ctx, claimed.ID, "worker-b", &core.JSONResume{}))
+		assertLeaseExpired(t, "FailClaimedJob wrong worker", store.FailClaimedJob(ctx, claimed.ID, "worker-b", "err"))
+	})
+
+	t.Run("stale worker CompleteVersion fails after requeue, after same-number completion, and for missing version", func(t *testing.T) {
+		store := setupTestStore(t)
+		br := &core.Branch{ID: "br-stale-cv", UserID: "u1", Name: "StaleCV", TemplateSetID: core.TemplateStandardCleanID}
+		if err := store.CreateBranch(ctx, br); err != nil {
+			t.Fatalf("create branch: %v", err)
+		}
+
+		if _, err := store.SubmitPendingVersion(ctx, &core.BranchVersion{ID: "v-stale-1", UserID: "u1", BranchID: br.ID}, core.PendingJobOptions{Now: base, TTL: 10 * time.Minute}); err != nil {
+			t.Fatalf("submit version: %v", err)
+		}
+		claimedA, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{WorkerID: "worker-a", Now: base, LeaseDuration: 2 * time.Minute})
+		if err != nil || claimedA == nil {
+			t.Fatalf("claim by worker-a: %v", err)
+		}
+
+		// Missing version with ClaimedBy set must fail with ErrLeaseExpired.
+		missingClaimed := &core.BranchVersion{
+			ID:        "v-does-not-exist",
+			UserID:    "u1",
+			BranchID:  br.ID,
+			ClaimedBy: "worker-a",
+			Status:    core.VersionStatusCompleted,
+		}
+		assertLeaseExpired(t, "CompleteVersion missing claimed version", store.CompleteVersion(ctx, missingClaimed))
+		if _, err := store.Version(ctx, br.ID, missingClaimed.ID); !errors.Is(err, core.ErrNotFound) {
+			t.Fatalf("expected missing claimed version not to be persisted, got %v", err)
+		}
+
+		// Requeue to Pending: stale worker-a CompleteVersion must fail with ErrLeaseExpired.
+		retryAt := base.Add(time.Minute)
+		if err := store.RequeueVersionForRetry(ctx, claimedA.ID, "worker-a", retryAt, "transient"); err != nil {
+			t.Fatalf("requeue version: %v", err)
+		}
+		staleAfterRequeue := *claimedA
+		staleAfterRequeue.Status = core.VersionStatusCompleted
+		staleAfterRequeue.HTMLOutput = "<html>stale-a</html>"
+		assertLeaseExpired(t, "CompleteVersion after requeue", store.CompleteVersion(ctx, &staleAfterRequeue))
+
+		pendingCheck, err := store.Version(ctx, br.ID, claimedA.ID)
+		if err != nil || pendingCheck.Status != core.VersionStatusPending {
+			t.Fatalf("expected version to remain pending after stale CompleteVersion, got %+v err=%v", pendingCheck, err)
+		}
+
+		// Reclaim by worker-b and complete at the same VersionNumber (1).
+		claimedB, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{WorkerID: "worker-b", Now: retryAt, LeaseDuration: 2 * time.Minute})
+		if err != nil || claimedB == nil || claimedB.ClaimedBy != "worker-b" {
+			t.Fatalf("reclaim by worker-b: got %+v err=%v", claimedB, err)
+		}
+		claimedB.Status = core.VersionStatusCompleted
+		claimedB.HTMLOutput = "<html>winner-b</html>"
+		if err := store.CompleteVersion(ctx, claimedB); err != nil {
+			t.Fatalf("CompleteVersion by worker-b: %v", err)
+		}
+
+		// ClaimedBy must be cleared on completion in both returned version and stored record.
+		if claimedB.ClaimedBy != "" || claimedB.LeaseExpiresAt != nil || claimedB.NextRetryAt != nil {
+			t.Errorf("expected lease fields cleared on completed input, got ClaimedBy=%q LeaseExpiresAt=%v NextRetryAt=%v", claimedB.ClaimedBy, claimedB.LeaseExpiresAt, claimedB.NextRetryAt)
+		}
+		storedB, err := store.Version(ctx, br.ID, claimedB.ID)
+		if err != nil {
+			t.Fatalf("get completed version: %v", err)
+		}
+		if storedB.ClaimedBy != "" || storedB.LeaseExpiresAt != nil || storedB.NextRetryAt != nil {
+			t.Errorf("expected lease fields cleared in store, got ClaimedBy=%q LeaseExpiresAt=%v NextRetryAt=%v", storedB.ClaimedBy, storedB.LeaseExpiresAt, storedB.NextRetryAt)
+		}
+
+		// Stale worker-a attempting CompleteVersion at same VersionNumber after worker-b completion must fail with ErrLeaseExpired.
+		staleAfterComplete := *claimedA
+		staleAfterComplete.Status = core.VersionStatusCompleted
+		staleAfterComplete.HTMLOutput = "<html>stale-overwrite</html>"
+		assertLeaseExpired(t, "CompleteVersion after same-number completion", store.CompleteVersion(ctx, &staleAfterComplete))
+
+		storedAfterStale, _ := store.Version(ctx, br.ID, claimedB.ID)
+		if storedAfterStale.HTMLOutput != "<html>winner-b</html>" {
+			t.Errorf("expected winner-b HTMLOutput preserved, got %q", storedAfterStale.HTMLOutput)
+		}
+	})
+
+	t.Run("terminal version and empty ClaimedBy on active claim return non-lease ErrConflict", func(t *testing.T) {
+		store := setupTestStore(t)
+		br := &core.Branch{ID: "br-term-claim", UserID: "u1", Name: "TermClaim", TemplateSetID: core.TemplateStandardCleanID}
+		if err := store.CreateBranch(ctx, br); err != nil {
+			t.Fatalf("create branch: %v", err)
+		}
+		if _, err := store.SubmitPendingVersion(ctx, &core.BranchVersion{ID: "v-tc-1", UserID: "u1", BranchID: br.ID}, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit v1: %v", err)
+		}
+		claimed, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{WorkerID: "worker-a", Now: base})
+		if err != nil || claimed == nil {
+			t.Fatalf("claim v1: %v", err)
+		}
+
+		emptyClaimComplete := *claimed
+		emptyClaimComplete.ClaimedBy = ""
+		emptyClaimComplete.Status = core.VersionStatusCompleted
+		if err := store.CompleteVersion(ctx, &emptyClaimComplete); !errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrLeaseExpired) {
+			t.Errorf("expected non-lease ErrConflict for empty ClaimedBy on claimed version, got %v", err)
+		}
+
+		if err := store.FailClaimedVersion(ctx, claimed.ID, "worker-a", "failed"); err != nil {
+			t.Fatalf("FailClaimedVersion: %v", err)
+		}
+		failedClaimComplete := *claimed
+		failedClaimComplete.Status = core.VersionStatusCompleted
+		if err := store.CompleteVersion(ctx, &failedClaimComplete); !errors.Is(err, core.ErrConflict) || errors.Is(err, core.ErrLeaseExpired) {
+			t.Errorf("expected non-lease ErrConflict for terminal failed version even with ClaimedBy set, got %v", err)
+		}
+	})
+}
+
+// TestMemoryStore_UpdateBranchEpochGuards verifies that UpdateBranch changes to ActiveVersionID
+// or tailoring configuration block completion of already-claimed processing versions with ErrConflict,
+// while non-config updates like branch rename do not block completion.
+func TestMemoryStore_UpdateBranchEpochGuards(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("rollback of ActiveVersionID blocks claimed higher-numbered processing version", func(t *testing.T) {
+		store := setupTestStore(t)
+		br := &core.Branch{
+			ID:            "br-epoch-rollback",
+			UserID:        "u1",
+			Name:          "Backend Role",
+			TemplateSetID: core.TemplateStandardCleanID,
+		}
+		if err := store.CreateBranch(ctx, br); err != nil {
+			t.Fatalf("create branch: %v", err)
+		}
+
+		v1 := &core.BranchVersion{ID: "v-rb-1", UserID: "u1", BranchID: br.ID, Status: core.VersionStatusCompleted, HTMLOutput: "<html>v1</html>"}
+		if err := store.CreateVersion(ctx, v1); err != nil {
+			t.Fatalf("create v1: %v", err)
+		}
+		if err := store.CompleteVersion(ctx, v1); err != nil {
+			t.Fatalf("complete v1: %v", err)
+		}
+
+		v2 := &core.BranchVersion{ID: "v-rb-2", UserID: "u1", BranchID: br.ID, Status: core.VersionStatusCompleted, HTMLOutput: "<html>v2</html>"}
+		if err := store.CreateVersion(ctx, v2); err != nil {
+			t.Fatalf("create v2: %v", err)
+		}
+		if err := store.CompleteVersion(ctx, v2); err != nil {
+			t.Fatalf("complete v2: %v", err)
+		}
+
+		v3 := &core.BranchVersion{ID: "v-rb-3", UserID: "u1", BranchID: br.ID}
+		if _, err := store.SubmitPendingVersion(ctx, v3, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit v3: %v", err)
+		}
+		claimedV3, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{WorkerID: "w1", Now: base})
+		if err != nil || claimedV3 == nil || claimedV3.VersionNumber != 3 {
+			t.Fatalf("claim v3: got %+v err=%v", claimedV3, err)
+		}
+
+		// Roll back ActiveVersionID from v2 to v1 while v3 (version 3) is processing.
+		currentBr, err := store.Branch(ctx, "u1", br.ID)
+		if err != nil {
+			t.Fatalf("get branch: %v", err)
+		}
+		rollbackID := v1.ID
+		currentBr.ActiveVersionID = &rollbackID
+		if err := store.UpdateBranch(ctx, currentBr); err != nil {
+			t.Fatalf("rollback UpdateBranch: %v", err)
+		}
+
+		claimedV3.Status = core.VersionStatusCompleted
+		claimedV3.HTMLOutput = "<html>v3</html>"
+		err = store.CompleteVersion(ctx, claimedV3)
+		if !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected ErrConflict completing processing v3 after ActiveVersionID rollback, got %v", err)
+		}
+		if errors.Is(err, core.ErrLeaseExpired) {
+			t.Errorf("expected non-lease ErrConflict after branch rollback, got %v", err)
+		}
+
+		gotBr, _ := store.Branch(ctx, "u1", br.ID)
+		if gotBr.ActiveVersionID == nil || *gotBr.ActiveVersionID != v1.ID {
+			t.Errorf("expected ActiveVersionID to remain rolled back to %s, got %v", v1.ID, gotBr.ActiveVersionID)
+		}
+	})
+
+	t.Run("TargetRequirements change blocks processing version while rename and nil-vs-empty slices do not", func(t *testing.T) {
+		store := setupTestStore(t)
+		br := &core.Branch{
+			ID:                 "br-epoch-cfg",
+			UserID:             "u1",
+			Name:               "Original Name",
+			TemplateSetID:      core.TemplateStandardCleanID,
+			TargetRequirements: "Go and PostgreSQL",
+			PinnedEntityIDs:    nil,
+		}
+		if err := store.CreateBranch(ctx, br); err != nil {
+			t.Fatalf("create branch: %v", err)
+		}
+
+		// Submit & claim v1.
+		if _, err := store.SubmitPendingVersion(ctx, &core.BranchVersion{ID: "v-cfg-1", UserID: "u1", BranchID: br.ID}, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit v1: %v", err)
+		}
+		claimed1, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{WorkerID: "w1", Now: base})
+		if err != nil || claimed1 == nil {
+			t.Fatalf("claim v1: %v", err)
+		}
+
+		// Non-config update: rename + nil vs empty PinnedEntityIDs slice.
+		renameBr, err := store.Branch(ctx, "u1", br.ID)
+		if err != nil {
+			t.Fatalf("get branch: %v", err)
+		}
+		renameBr.Name = "Renamed Branch"
+		renameBr.PinnedEntityIDs = []string{}
+		if err := store.UpdateBranch(ctx, renameBr); err != nil {
+			t.Fatalf("rename UpdateBranch: %v", err)
+		}
+
+		claimed1.Status = core.VersionStatusCompleted
+		claimed1.HTMLOutput = "<html>v1-ok</html>"
+		if err := store.CompleteVersion(ctx, claimed1); err != nil {
+			t.Fatalf("expected CompleteVersion to succeed after non-config rename, got %v", err)
+		}
+
+		// Submit & claim v2, then change TargetRequirements while v2 is processing.
+		if _, err := store.SubmitPendingVersion(ctx, &core.BranchVersion{ID: "v-cfg-2", UserID: "u1", BranchID: br.ID}, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit v2: %v", err)
+		}
+		claimed2, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{WorkerID: "w1", Now: base})
+		if err != nil || claimed2 == nil {
+			t.Fatalf("claim v2: %v", err)
+		}
+
+		cfgBr, err := store.Branch(ctx, "u1", br.ID)
+		if err != nil {
+			t.Fatalf("get branch: %v", err)
+		}
+		cfgBr.TargetRequirements = "Rust and Kubernetes"
+		if err := store.UpdateBranch(ctx, cfgBr); err != nil {
+			t.Fatalf("config UpdateBranch: %v", err)
+		}
+
+		claimed2.Status = core.VersionStatusCompleted
+		claimed2.HTMLOutput = "<html>v2-stale-cfg</html>"
+		if err := store.CompleteVersion(ctx, claimed2); !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected ErrConflict completing v2 after TargetRequirements change, got %v", err)
+		}
+		if err := store.FailClaimedVersion(ctx, claimed2.ID, "w1", "aborted after branch config change"); err != nil {
+			t.Fatalf("FailClaimedVersion v2: %v", err)
+		}
+
+		// Config change before ClaimNextVersion picks up the new epoch upon claiming.
+		if _, err := store.SubmitPendingVersion(ctx, &core.BranchVersion{ID: "v-cfg-3", UserID: "u1", BranchID: br.ID}, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit v3: %v", err)
+		}
+		cfgBr2, _ := store.Branch(ctx, "u1", br.ID)
+		cfgBr2.TargetRequirements = "Rust, Kubernetes, and Kafka"
+		if err := store.UpdateBranch(ctx, cfgBr2); err != nil {
+			t.Fatalf("pre-claim config UpdateBranch: %v", err)
+		}
+		claimed3, err := store.ClaimNextVersion(ctx, core.ClaimJobRequest{WorkerID: "w1", Now: base})
+		if err != nil || claimed3 == nil || claimed3.ID != "v-cfg-3" {
+			t.Fatalf("claim v3: got %+v err=%v", claimed3, err)
+		}
+		claimed3.Status = core.VersionStatusCompleted
+		claimed3.HTMLOutput = "<html>v3-fresh-cfg</html>"
+		if err := store.CompleteVersion(ctx, claimed3); err != nil {
+			t.Fatalf("expected v3 claimed after UpdateBranch to complete cleanly, got %v", err)
+		}
+	})
+
+	t.Run("all generation-defining Branch fields trigger epoch conflict for processing versions", func(t *testing.T) {
+		strPtr := func(s string) *string { return &s }
+		mutations := []struct {
+			name   string
+			mutate func(*core.Branch)
+		}{
+			{name: "TargetRole", mutate: func(b *core.Branch) { b.TargetRole = "Principal" }},
+			{name: "TargetCompany", mutate: func(b *core.Branch) { b.TargetCompany = "NewCo" }},
+			{name: "CustomDirectives", mutate: func(b *core.Branch) { b.CustomDirectives = "Be concise" }},
+			{name: "BranchInstructions", mutate: func(b *core.Branch) { b.BranchInstructions = "Use metrics" }},
+			{name: "TailoringStrategyID", mutate: func(b *core.Branch) { b.TailoringStrategyID = strPtr("strategy-2") }},
+			{name: "PresetID", mutate: func(b *core.Branch) { b.PresetID = strPtr("preset-2") }},
+			{name: "TemplateSetID", mutate: func(b *core.Branch) { b.TemplateSetID = "tmpl-2" }},
+			{name: "ProviderOverride", mutate: func(b *core.Branch) { b.ProviderOverride = "anthropic" }},
+			{name: "ModelOverride", mutate: func(b *core.Branch) { b.ModelOverride = "claude-4" }},
+			{name: "ReasoningLevel", mutate: func(b *core.Branch) { b.ReasoningLevel = "high" }},
+			{name: "PinnedEntityIDs", mutate: func(b *core.Branch) { b.PinnedEntityIDs = []string{"exp-1"} }},
+			{name: "ExcludedEntityIDs", mutate: func(b *core.Branch) { b.ExcludedEntityIDs = []string{"exp-2"} }},
+		}
+
+		for _, tc := range mutations {
+			t.Run(tc.name, func(t *testing.T) {
+				store := setupTestStore(t)
+				br := &core.Branch{
+					ID:                  "br-mut-" + tc.name,
+					UserID:              "u1",
+					Name:                "Branch",
+					TemplateSetID:       core.TemplateStandardCleanID,
+					TailoringStrategyID: strPtr("strategy-1"),
+					PresetID:            strPtr("preset-1"),
+				}
+				if err := store.CreateBranch(ctx, br); err != nil {
+					t.Fatalf("create branch: %v", err)
+				}
+				v := &core.BranchVersion{
+					ID:       "v-mut-" + tc.name,
+					UserID:   "u1",
+					BranchID: br.ID,
+					Status:   core.VersionStatusProcessing,
+				}
+				if err := store.CreateVersion(ctx, v); err != nil {
+					t.Fatalf("create processing version: %v", err)
+				}
+				updated, _ := store.Branch(ctx, "u1", br.ID)
+				tc.mutate(updated)
+				if err := store.UpdateBranch(ctx, updated); err != nil {
+					t.Fatalf("UpdateBranch: %v", err)
+				}
+				v.Status = core.VersionStatusCompleted
+				if err := store.CompleteVersion(ctx, v); !errors.Is(err, core.ErrConflict) {
+					t.Fatalf("%s: expected ErrConflict completing processing version, got %v", tc.name, err)
+				}
+			})
+		}
+	})
+
+	t.Run("DeleteBranch cleans up epoch tracking for deleted branch and versions", func(t *testing.T) {
+		store := setupTestStore(t)
+		br := &core.Branch{ID: "br-del-epoch", UserID: "u1", Name: "Temp", TemplateSetID: core.TemplateStandardCleanID}
+		if err := store.CreateBranch(ctx, br); err != nil {
+			t.Fatalf("create branch: %v", err)
+		}
+		br.TargetRole = "Staff Engineer"
+		if err := store.UpdateBranch(ctx, br); err != nil {
+			t.Fatalf("update branch: %v", err)
+		}
+		if _, err := store.SubmitPendingVersion(ctx, &core.BranchVersion{ID: "v-del-1", UserID: "u1", BranchID: br.ID}, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("submit v1: %v", err)
+		}
+		if err := store.DeleteBranch(ctx, "u1", br.ID); err != nil {
+			t.Fatalf("delete branch: %v", err)
+		}
+
+		// Recreating branch and version with the same IDs must start clean without false epoch conflict.
+		recreated := &core.Branch{ID: "br-del-epoch", UserID: "u1", Name: "Recreated", TemplateSetID: core.TemplateStandardCleanID}
+		if err := store.CreateBranch(ctx, recreated); err != nil {
+			t.Fatalf("recreate branch: %v", err)
+		}
+		vRecreated := &core.BranchVersion{ID: "v-del-1", UserID: "u1", BranchID: recreated.ID, Status: core.VersionStatusProcessing}
+		if err := store.CreateVersion(ctx, vRecreated); err != nil {
+			t.Fatalf("recreate version: %v", err)
+		}
+		vRecreated.Status = core.VersionStatusCompleted
+		if err := store.CompleteVersion(ctx, vRecreated); err != nil {
+			t.Fatalf("complete recreated version: %v", err)
+		}
+	})
+}
+
+// TestMemoryStore_BranchClockDeterminism verifies CreateBranch, UpdateBranch, and ATS score
+// mirroring use the injected clock from NewWithClock rather than wall-clock time.
+func TestMemoryStore_BranchClockDeterminism(t *testing.T) {
+	ctx := context.Background()
+	t0 := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	clk := newFakeClock(t0)
+	store := memory.NewWithClock(clk.Now)
+
+	br := &core.Branch{
+		ID:            "br-clock-det",
+		UserID:        "u-clock",
+		Name:          "Clock Branch",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
+	if err := store.CreateBranch(ctx, br); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+	if !br.CreatedAt.Equal(t0) || !br.UpdatedAt.Equal(t0) {
+		t.Fatalf("expected CreatedAt and UpdatedAt equal to %v, got created=%v updated=%v", t0, br.CreatedAt, br.UpdatedAt)
+	}
+
+	t1 := clk.Advance(5 * time.Minute)
+	br.Name = "Renamed Clock Branch"
+	if err := store.UpdateBranch(ctx, br); err != nil {
+		t.Fatalf("update branch: %v", err)
+	}
+	fetched, err := store.Branch(ctx, "u-clock", br.ID)
+	if err != nil {
+		t.Fatalf("get branch: %v", err)
+	}
+	if !fetched.CreatedAt.Equal(t0) || !fetched.UpdatedAt.Equal(t1) {
+		t.Fatalf("expected CreatedAt=%v UpdatedAt=%v, got created=%v updated=%v", t0, t1, fetched.CreatedAt, fetched.UpdatedAt)
+	}
+
+	v := &core.BranchVersion{ID: "v-clock-1", UserID: "u-clock", BranchID: br.ID, Status: core.VersionStatusCompleted}
+	if err := store.CreateVersion(ctx, v); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := store.CompleteVersion(ctx, v); err != nil {
+		t.Fatalf("complete version: %v", err)
+	}
+
+	t2 := clk.Advance(3 * time.Minute)
+	if err := store.UpdateVersionATSScore(ctx, v.ID, &core.ATSScore{ExtractionConfidenceScore: 95, JobMatchingScore: 88}); err != nil {
+		t.Fatalf("UpdateVersionATSScore: %v", err)
+	}
+	fetchedAfterATS, err := store.Branch(ctx, "u-clock", br.ID)
+	if err != nil {
+		t.Fatalf("get branch after ATS: %v", err)
+	}
+	if !fetchedAfterATS.UpdatedAt.Equal(t2) {
+		t.Errorf("expected mirrored ATS score UpdatedAt=%v, got %v", t2, fetchedAfterATS.UpdatedAt)
+	}
+}
+
+// TestMemoryStore_SubmitPendingJob_MaxRawTextBytes verifies SubmitPendingJob enforces default
+// and custom MaxRawTextBytes caps with ErrValidation without persisting oversized jobs.
+func TestMemoryStore_SubmitPendingJob_MaxRawTextBytes(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("default 1 MiB limit accepts exact boundary and rejects +1 byte", func(t *testing.T) {
+		store := setupTestStore(t)
+
+		okJob := &core.PDFParseJob{
+			ID:      "job-default-ok",
+			UserID:  "u1",
+			RawText: strings.Repeat("a", core.DefaultMaxPDFRawTextBytes),
+		}
+		if err := store.SubmitPendingJob(ctx, okJob, core.PendingJobOptions{Now: base}); err != nil {
+			t.Fatalf("expected exact DefaultMaxPDFRawTextBytes job to succeed, got %v", err)
+		}
+
+		oversizedJob := &core.PDFParseJob{
+			ID:      "job-default-too-big",
+			UserID:  "u1",
+			RawText: strings.Repeat("a", core.DefaultMaxPDFRawTextBytes+1),
+		}
+		err := store.SubmitPendingJob(ctx, oversizedJob, core.PendingJobOptions{Now: base})
+		if !errors.Is(err, core.ErrValidation) {
+			t.Fatalf("expected ErrValidation for >1 MiB RawText, got %v", err)
+		}
+		if _, lookupErr := store.Job(ctx, "u1", oversizedJob.ID); !errors.Is(lookupErr, core.ErrNotFound) {
+			t.Fatalf("expected oversized job not to be persisted, got %v", lookupErr)
+		}
+	})
+
+	t.Run("custom MaxRawTextBytes accepts exact boundary and rejects +1 byte", func(t *testing.T) {
+		store := setupTestStore(t)
+		opts := core.PendingJobOptions{Now: base, MaxRawTextBytes: 64}
+
+		okJob := &core.PDFParseJob{
+			ID:      "job-custom-ok",
+			UserID:  "u1",
+			RawText: strings.Repeat("b", 64),
+		}
+		if err := store.SubmitPendingJob(ctx, okJob, opts); err != nil {
+			t.Fatalf("expected exact custom limit job to succeed, got %v", err)
+		}
+
+		oversizedJob := &core.PDFParseJob{
+			ID:      "job-custom-too-big",
+			UserID:  "u1",
+			RawText: strings.Repeat("b", 65),
+		}
+		err := store.SubmitPendingJob(ctx, oversizedJob, opts)
+		if !errors.Is(err, core.ErrValidation) {
+			t.Fatalf("expected ErrValidation for >64 byte RawText, got %v", err)
+		}
+		if _, lookupErr := store.Job(ctx, "u1", oversizedJob.ID); !errors.Is(lookupErr, core.ErrNotFound) {
+			t.Fatalf("expected oversized custom job not to be persisted, got %v", lookupErr)
+		}
+	})
+}

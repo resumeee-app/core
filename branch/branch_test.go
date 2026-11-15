@@ -3351,3 +3351,399 @@ func TestFakeBranchStore_LeaseGuardsAndLifecycle(t *testing.T) {
 		t.Errorf("expected ErrConflict completing failed version, got %v", err)
 	}
 }
+
+func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
+	setupTailoredWithActiveAndProcessing := func(t *testing.T, withSecondCompleted bool) (
+		context.Context,
+		*fakeBranchStore,
+		*contextCapturingQuotaRepo,
+		*branch.Service,
+		*core.Branch,
+		*core.BranchVersion,
+		*core.BranchVersion,
+		*core.BranchVersion,
+	) {
+		t.Helper()
+		ctx := context.Background()
+		userID := "user-epoch-" + uuid.New().String()
+		baseStore := newSeededBranchStore(ctx, userID)
+		quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
+		svc := branch.New(branch.Config{
+			Branches:       baseStore,
+			Profiles:       baseStore,
+			Presets:        baseStore,
+			Templates:      baseStore,
+			Quotas:         quotaSpy,
+			CleanupTimeout: 2 * time.Second,
+		})
+
+		b, err := svc.CreateBranch(ctx, &core.Branch{
+			ID:                 "branch-epoch-" + uuid.New().String(),
+			UserID:             userID,
+			Name:               "Principal Go Engineer",
+			TargetRequirements: "Go, PostgreSQL, distributed systems",
+			TemplateSetID:      core.TemplateStandardCleanID,
+		})
+		if err != nil {
+			t.Fatalf("CreateBranch failed: %v", err)
+		}
+
+		v1 := &core.BranchVersion{
+			ID:                "ver-epoch-1-" + uuid.New().String(),
+			UserID:            userID,
+			BranchID:          b.ID,
+			Status:            core.VersionStatusCompleted,
+			MainRevisionUsed:  1,
+			TemplateSetIDUsed: core.TemplateStandardCleanID,
+			SourceType:        core.SourceTypeLLMGeneration,
+		}
+		if err := baseStore.CreateVersion(ctx, v1); err != nil {
+			t.Fatalf("CreateVersion v1 failed: %v", err)
+		}
+		if err := baseStore.CompleteVersion(ctx, v1); err != nil {
+			t.Fatalf("CompleteVersion v1 failed: %v", err)
+		}
+
+		if withSecondCompleted {
+			v2 := &core.BranchVersion{
+				ID:                "ver-epoch-2-" + uuid.New().String(),
+				UserID:            userID,
+				BranchID:          b.ID,
+				Status:            core.VersionStatusCompleted,
+				MainRevisionUsed:  1,
+				TemplateSetIDUsed: core.TemplateStandardCleanID,
+				SourceType:        core.SourceTypeLLMGeneration,
+			}
+			if err := baseStore.CreateVersion(ctx, v2); err != nil {
+				t.Fatalf("CreateVersion v2 failed: %v", err)
+			}
+			if err := baseStore.CompleteVersion(ctx, v2); err != nil {
+				t.Fatalf("CompleteVersion v2 failed: %v", err)
+			}
+		}
+
+		pendingVer, err := svc.GenerateVersion(ctx, userID, b.ID)
+		if err != nil {
+			t.Fatalf("GenerateVersion failed: %v", err)
+		}
+		claimedVer, err := baseStore.ClaimNextVersion(ctx, core.ClaimJobRequest{
+			WorkerID:      "worker-1",
+			LeaseDuration: 2 * time.Minute,
+		})
+		if err != nil || claimedVer == nil || claimedVer.ID != pendingVer.ID {
+			t.Fatalf("ClaimNextVersion failed: claimed=%+v err=%v", claimedVer, err)
+		}
+
+		loadedBranch, err := svc.Branch(ctx, userID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch reload failed: %v", err)
+		}
+		return ctx, baseStore, quotaSpy, svc, loadedBranch, v1, pendingVer, claimedVer
+	}
+
+	t.Run("rollback of ActiveVersionID cancels higher-numbered processing version, releases quota, and blocks stale CompleteVersion", func(t *testing.T) {
+		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedV3 := setupTailoredWithActiveAndProcessing(t, true)
+		callCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		spyStore := &spyAbortStore{
+			fakeBranchStore: baseStore,
+			cancelCtxFn:     cancel,
+		}
+		svcWithCancel := branch.New(branch.Config{
+			Branches:       spyStore,
+			Profiles:       baseStore,
+			Presets:        baseStore,
+			Templates:      baseStore,
+			Quotas:         quotaSpy,
+			CleanupTimeout: 2 * time.Second,
+		})
+
+		b.ActiveVersionID = &v1.ID
+		updated, err := svcWithCancel.UpdateBranch(callCtx, b)
+		if err != nil {
+			t.Fatalf("UpdateBranch rollback failed: %v", err)
+		}
+		if updated.ActiveVersionID == nil || *updated.ActiveVersionID != v1.ID {
+			t.Fatalf("expected ActiveVersionID=%s, got %v", v1.ID, updated.ActiveVersionID)
+		}
+
+		reloadedV3, err := svc.Version(ctx, b.ID, pendingVer.ID)
+		if err != nil {
+			t.Fatalf("Version v3 reload failed: %v", err)
+		}
+		if reloadedV3.Status != core.VersionStatusCancelled {
+			t.Errorf("expected processing v3 to be cancelled, got %s", reloadedV3.Status)
+		}
+		if reloadedV3.ErrorMessage != "superseded by branch update" {
+			t.Errorf("expected reason 'superseded by branch update', got %q", reloadedV3.ErrorMessage)
+		}
+
+		releases := quotaSpy.Releases()
+		if len(releases) != 1 {
+			t.Fatalf("expected 1 quota release, got %d (%+v)", len(releases), releases)
+		}
+		if releases[0].reservationID != pendingVer.ReservationID || !releases[0].hasDeadline || releases[0].ctxErr != nil {
+			t.Errorf("unexpected quota release details: %+v", releases[0])
+		}
+
+		staleComplete := *claimedV3
+		staleComplete.Status = core.VersionStatusCompleted
+		if err := baseStore.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected stale CompleteVersion to return ErrConflict, got %v", err)
+		}
+
+		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch refetch failed: %v", err)
+		}
+		if afterBranch.ActiveVersionID == nil || *afterBranch.ActiveVersionID != v1.ID {
+			t.Errorf("expected ActiveVersionID to remain %s, got %v", v1.ID, afterBranch.ActiveVersionID)
+		}
+	})
+
+	t.Run("TargetRequirements change cancels processing version, releases quota, and blocks stale CompleteVersion", func(t *testing.T) {
+		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedV2 := setupTailoredWithActiveAndProcessing(t, false)
+
+		b.TargetRequirements = "Rust, Raft consensus, zero-copy networking"
+		updated, err := svc.UpdateBranch(ctx, b)
+		if err != nil {
+			t.Fatalf("UpdateBranch failed: %v", err)
+		}
+		if updated.ActiveVersionID == nil || *updated.ActiveVersionID != v1.ID {
+			t.Fatalf("expected ActiveVersionID=%s, got %v", v1.ID, updated.ActiveVersionID)
+		}
+
+		reloadedV2, err := svc.Version(ctx, b.ID, pendingVer.ID)
+		if err != nil {
+			t.Fatalf("Version v2 reload failed: %v", err)
+		}
+		if reloadedV2.Status != core.VersionStatusCancelled {
+			t.Errorf("expected processing v2 to be cancelled, got %s", reloadedV2.Status)
+		}
+
+		releases := quotaSpy.Releases()
+		if len(releases) != 1 || releases[0].reservationID != pendingVer.ReservationID {
+			t.Fatalf("expected reservation %s released, got %+v", pendingVer.ReservationID, releases)
+		}
+
+		staleComplete := *claimedV2
+		staleComplete.Status = core.VersionStatusCompleted
+		if err := baseStore.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected stale CompleteVersion to return ErrConflict, got %v", err)
+		}
+
+		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch refetch failed: %v", err)
+		}
+		if afterBranch.ActiveVersionID == nil || *afterBranch.ActiveVersionID != v1.ID {
+			t.Errorf("expected ActiveVersionID to remain %s, got %v", v1.ID, afterBranch.ActiveVersionID)
+		}
+	})
+
+	t.Run("store rejects stale processing CompleteVersion via epoch bump even before abort runs", func(t *testing.T) {
+		ctx, baseStore, _, svc, b, v1, _, claimedV3 := setupTailoredWithActiveAndProcessing(t, true)
+
+		b.ActiveVersionID = &v1.ID
+		if err := baseStore.UpdateBranch(ctx, b); err != nil {
+			t.Fatalf("direct store UpdateBranch failed: %v", err)
+		}
+
+		staleComplete := *claimedV3
+		staleComplete.Status = core.VersionStatusCompleted
+		if err := baseStore.CompleteVersion(ctx, &staleComplete); !errors.Is(err, core.ErrConflict) {
+			t.Fatalf("expected ErrConflict from epoch guard while still processing, got %v", err)
+		}
+
+		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch refetch failed: %v", err)
+		}
+		if afterBranch.ActiveVersionID == nil || *afterBranch.ActiveVersionID != v1.ID {
+			t.Errorf("expected ActiveVersionID to remain %s, got %v", v1.ID, afterBranch.ActiveVersionID)
+		}
+	})
+
+	t.Run("non-config metadata update does not abort in-flight processing version", func(t *testing.T) {
+		ctx, baseStore, quotaSpy, svc, b, _, pendingVer, claimedV2 := setupTailoredWithActiveAndProcessing(t, false)
+
+		b.Name = "Renamed Metadata Only"
+		b.PinnedEntityIDs = []string{}
+		b.ExcludedEntityIDs = []string{}
+		updated, err := svc.UpdateBranch(ctx, b)
+		if err != nil {
+			t.Fatalf("UpdateBranch metadata failed: %v", err)
+		}
+		if updated.Name != "Renamed Metadata Only" {
+			t.Fatalf("expected updated Name, got %q", updated.Name)
+		}
+
+		reloadedV2, err := svc.Version(ctx, b.ID, pendingVer.ID)
+		if err != nil {
+			t.Fatalf("Version v2 reload failed: %v", err)
+		}
+		if reloadedV2.Status != core.VersionStatusProcessing {
+			t.Errorf("expected processing v2 to remain processing, got %s", reloadedV2.Status)
+		}
+		if len(quotaSpy.Releases()) != 0 {
+			t.Errorf("expected zero quota releases on metadata update, got %+v", quotaSpy.Releases())
+		}
+
+		validComplete := *claimedV2
+		validComplete.Status = core.VersionStatusCompleted
+		if err := baseStore.CompleteVersion(ctx, &validComplete); err != nil {
+			t.Fatalf("expected CompleteVersion to succeed after metadata update, got %v", err)
+		}
+
+		afterBranch, err := svc.Branch(ctx, b.UserID, b.ID)
+		if err != nil {
+			t.Fatalf("Branch refetch failed: %v", err)
+		}
+		if afterBranch.ActiveVersionID == nil || *afterBranch.ActiveVersionID != pendingVer.ID {
+			t.Errorf("expected ActiveVersionID=%s, got %v", pendingVer.ID, afterBranch.ActiveVersionID)
+		}
+		if afterBranch.Name != "Renamed Metadata Only" {
+			t.Errorf("expected Name preserved after CompleteVersion, got %q", afterBranch.Name)
+		}
+	})
+}
+
+func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-clock-" + uuid.New().String()
+	store := newSeededBranchStore(ctx, userID)
+	fixedNow := time.Date(2024, 3, 15, 9, 30, 0, 0, time.UTC)
+
+	exp := &core.WorkExperience{
+		ID:        "exp-clock-1",
+		UserID:    userID,
+		Company:   "Acme Corp",
+		RoleTitle: "Staff Engineer",
+		StartDate: core.NewDate(2020, 1, 1),
+	}
+	if err := store.CreateExperience(ctx, exp); err != nil {
+		t.Fatalf("CreateExperience failed: %v", err)
+	}
+	fact := &core.Fact{
+		ID:        "fact-clock-1",
+		UserID:    userID,
+		OwnerID:   exp.ID,
+		OwnerType: core.OwnerTypeWorkExperience,
+		Statement: "Built deterministic Go services.",
+	}
+	if err := store.CreateFact(ctx, fact); err != nil {
+		t.Fatalf("CreateFact failed: %v", err)
+	}
+
+	svc := branch.New(branch.Config{
+		Branches:  store,
+		Profiles:  store,
+		Presets:   store,
+		Templates: store,
+		Quotas:    store,
+		Validator: provenance.New(),
+		Renderer:  renderer.New(),
+		Clock:     func() time.Time { return fixedNow },
+	})
+
+	tailored, err := svc.CreateBranch(ctx, &core.Branch{
+		ID:                 "branch-clock-" + uuid.New().String(),
+		UserID:             userID,
+		Name:               "Clock Branch",
+		TargetRequirements: "Go, PostgreSQL, deterministic services",
+		TemplateSetID:      core.TemplateStandardCleanID,
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch failed: %v", err)
+	}
+
+	v1 := &core.BranchVersion{
+		ID:                "ver-clock-1",
+		UserID:            userID,
+		BranchID:          tailored.ID,
+		Status:            core.VersionStatusCompleted,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
+		SourceType:        core.SourceTypeLLMGeneration,
+		MarkdownOutput:    "# Staff Engineer\nBuilt deterministic Go services.",
+	}
+	if err := store.CreateVersion(ctx, v1); err != nil {
+		t.Fatalf("CreateVersion failed: %v", err)
+	}
+	if err := store.CompleteVersion(ctx, v1); err != nil {
+		t.Fatalf("CompleteVersion failed: %v", err)
+	}
+
+	edited, err := svc.EditVersion(ctx, userID, tailored.ID, v1.ID, core.TailoredContent{
+		Summary: "Go systems engineer",
+		Experiences: []core.TailoredExperience{
+			{
+				SourceEntityID: exp.ID,
+				Company:        exp.Company,
+				RoleTitle:      exp.RoleTitle,
+				StartDate:      exp.StartDate,
+				Bullets: []core.TailoredBullet{
+					{
+						Text:          "Built deterministic Go services.",
+						SourceFactIDs: []string{fact.ID},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EditVersion failed: %v", err)
+	}
+	if !edited.CreatedAt.Equal(fixedNow) {
+		t.Errorf("EditVersion CreatedAt = %v, want %v", edited.CreatedAt, fixedNow)
+	}
+
+	defBranch, err := svc.Branch(ctx, userID, core.DefaultBranchID(userID))
+	if err != nil {
+		t.Fatalf("Branch default failed: %v", err)
+	}
+	defBranch.TemplateSetID = core.TemplateDetailedImmigrationCVID
+	updatedDef, err := svc.UpdateBranch(ctx, defBranch)
+	if err != nil {
+		t.Fatalf("UpdateBranch default failed: %v", err)
+	}
+	if updatedDef.ActiveVersionID == nil {
+		t.Fatalf("expected ActiveVersionID on re-rendered default branch")
+	}
+	defVer, err := svc.Version(ctx, defBranch.ID, *updatedDef.ActiveVersionID)
+	if err != nil {
+		t.Fatalf("Version default failed: %v", err)
+	}
+	if !defVer.CreatedAt.Equal(fixedNow) {
+		t.Errorf("default branch re-render CreatedAt = %v, want %v", defVer.CreatedAt, fixedNow)
+	}
+
+	score, err := svc.SimulateATS(ctx, userID, tailored.ID, &core.ATSSimulationOptions{
+		VersionID: edited.ID,
+	})
+	if err != nil {
+		t.Fatalf("SimulateATS deterministic failed: %v", err)
+	}
+	if score.EvaluatedAt == nil || !score.EvaluatedAt.Equal(fixedNow) {
+		t.Errorf("SimulateATS deterministic EvaluatedAt = %v, want %v", score.EvaluatedAt, fixedNow)
+	}
+
+	svcWithGen := branch.New(branch.Config{
+		Branches:  store,
+		Profiles:  store,
+		Templates: store,
+		Quotas:    store,
+		Renderer:  renderer.New(),
+		Generator: &stubATSSimulator{},
+		Clock:     func() time.Time { return fixedNow },
+	})
+	genScore, err := svcWithGen.SimulateATS(ctx, userID, tailored.ID, &core.ATSSimulationOptions{
+		VersionID: v1.ID,
+	})
+	if err != nil {
+		t.Fatalf("SimulateATS generator failed: %v", err)
+	}
+	if genScore.EvaluatedAt == nil || !genScore.EvaluatedAt.Equal(fixedNow) {
+		t.Errorf("SimulateATS generator EvaluatedAt = %v, want %v", genScore.EvaluatedAt, fixedNow)
+	}
+}

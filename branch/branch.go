@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -181,6 +182,48 @@ func (s *Service) supersedePendingVersions(ctx context.Context, branchID, reason
 		return
 	}
 	s.releaseReservationsWithDetachedContext(released)
+}
+
+// abortBranchVersions cancels pending and processing versions on branchID and releases their quota reservations.
+func (s *Service) abortBranchVersions(ctx context.Context, branchID, reason string) error {
+	released, err := s.branches.AbortBranchVersions(ctx, branchID, reason)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("failed to abort branch versions", "branch_id", branchID, "reason", reason, "err", err)
+		}
+		return err
+	}
+	s.releaseReservationsWithDetachedContext(released)
+	return nil
+}
+
+// equalStringPtr reports whether two optional string pointers are both nil or point to equal values.
+func equalStringPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// branchGenerationOrActiveChanged reports whether updated alters active version selection or tailoring configuration.
+func branchGenerationOrActiveChanged(existing, updated *core.Branch) bool {
+	if existing == nil || updated == nil {
+		return existing != updated
+	}
+	return !equalStringPtr(existing.ActiveVersionID, updated.ActiveVersionID) ||
+		existing.TargetRole != updated.TargetRole ||
+		existing.TargetCompany != updated.TargetCompany ||
+		existing.TargetRequirements != updated.TargetRequirements ||
+		existing.CustomDirectives != updated.CustomDirectives ||
+		existing.BranchInstructions != updated.BranchInstructions ||
+		!equalStringPtr(existing.TailoringStrategyID, updated.TailoringStrategyID) ||
+		!equalStringPtr(existing.PresetID, updated.PresetID) ||
+		existing.TemplateSetID != updated.TemplateSetID ||
+		existing.ProviderOverride != updated.ProviderOverride ||
+		existing.ModelOverride != updated.ModelOverride ||
+		existing.ReasoningLevel != updated.ReasoningLevel ||
+		!slices.Equal(existing.PinnedEntityIDs, updated.PinnedEntityIDs) ||
+		!slices.Equal(existing.ExcludedEntityIDs, updated.ExcludedEntityIDs)
 }
 
 // notifyJob wakes background workers via JobNotifier or falls back to JobEnqueuer without
@@ -415,7 +458,11 @@ func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.
 	if err := s.branches.UpdateBranch(ctx, branch); err != nil {
 		return nil, err
 	}
-	s.supersedePendingVersions(ctx, branch.ID, "superseded by branch update")
+	if branchGenerationOrActiveChanged(existing, branch) {
+		_ = s.abortBranchVersions(ctx, branch.ID, "superseded by branch update")
+	} else {
+		s.supersedePendingVersions(ctx, branch.ID, "superseded by branch update")
+	}
 	return s.Branch(ctx, branch.UserID, branch.ID)
 }
 
@@ -481,10 +528,8 @@ func (s *Service) DeleteBranch(ctx context.Context, userID, id string) error {
 	if branch.IsDefault {
 		return fmt.Errorf("%w: cannot delete default branch", core.ErrDefaultBranchImmutable)
 	}
-	released, err := s.branches.AbortBranchVersions(ctx, id, "branch deleted")
-	if err != nil {
+	if err := s.abortBranchVersions(ctx, id, "branch deleted"); err != nil {
 		return err
 	}
-	s.releaseReservationsWithDetachedContext(released)
 	return s.branches.DeleteBranch(ctx, userID, id)
 }

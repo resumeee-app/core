@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -262,7 +261,7 @@ func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 		HTMLOutput:        rendered.HTML,
 		MarkdownOutput:    rendered.Markdown,
 		PlainTextOutput:   rendered.PlainText,
-		CreatedAt:         time.Now().UTC(),
+		CreatedAt:         s.now(),
 	}
 
 	if err := s.branches.CreateVersion(ctx, newVer); err != nil {
@@ -308,7 +307,7 @@ func (s *Service) renderDefaultBranchVersion(ctx context.Context, userID string,
 		return nil, fmt.Errorf("rendering default branch: %w", err)
 	}
 
-	now := time.Now().UTC()
+	now := s.now()
 	ver := &core.BranchVersion{
 		ID:                "ver-" + uuid.New().String(),
 		UserID:            userID,

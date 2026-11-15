@@ -315,17 +315,19 @@ func mapSDKError(err error) (*llm.Response, error) {
 	var clientErr *apierrors.CreateInteractionClientError
 	if errors.As(err, &clientErr) {
 		statusCode := httpStatusFromMeta(clientErr.HTTPMeta.GetResponse(), http.StatusBadRequest)
+		code := derefString(clientErr.Error_.Code)
 		msg := derefString(clientErr.Error_.Message)
 		rawBody := clientErr.Error()
-		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, formatErrorMessage(statusCode, msg, rawBody)
+		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, formatErrorMessage(statusCode, code, msg, rawBody)
 	}
 
 	var srvErr *apierrors.CreateInteractionServerError
 	if errors.As(err, &srvErr) {
 		statusCode := httpStatusFromMeta(srvErr.HTTPMeta.GetResponse(), http.StatusInternalServerError)
+		code := derefString(srvErr.Error_.Code)
 		msg := derefString(srvErr.Error_.Message)
 		rawBody := srvErr.Error()
-		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, formatErrorMessage(statusCode, msg, rawBody)
+		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, formatErrorMessage(statusCode, code, msg, rawBody)
 	}
 
 	var valErr *apierrors.ResponseValidationError
@@ -378,15 +380,16 @@ func mapValidationError(statusCode int, body string, cause error) (*llm.Response
 	return &llm.Response{RawBody: body, StatusCode: statusCode}, parseErrorBody(statusCode, []byte(body))
 }
 
-// formatErrorMessage formats a Gemini error payload, falling back to JSON body parsing when msg is blank.
-func formatErrorMessage(statusCode int, msg, fallbackRaw string) error {
-	if strings.TrimSpace(msg) != "" {
-		return mapCleanError(statusCode, dedupeErrorLines(msg))
+// formatErrorMessage formats a Gemini error payload preserving error code and raw quota indicators when present.
+func formatErrorMessage(statusCode int, code, msg, fallbackRaw string) error {
+	clean := formatErrorWithCode(code, msg)
+	if clean != "" {
+		return mapCleanError(statusCode, clean, fallbackRaw)
 	}
 	return parseErrorBody(statusCode, []byte(fallbackRaw))
 }
 
-// parseErrorBody extracts the message from a JSON or plain-text Gemini error response body.
+// parseErrorBody extracts the error code and message from a JSON or plain-text Gemini error response body.
 func parseErrorBody(statusCode int, bodyBytes []byte) error {
 	raw := strings.TrimSpace(string(bodyBytes))
 	var msg string
@@ -394,24 +397,51 @@ func parseErrorBody(statusCode int, bodyBytes []byte) error {
 	if len(raw) > 0 {
 		var objErr struct {
 			Error struct {
-				Message string `json:"message"`
+				Code    json.RawMessage `json:"code"`
+				Message string          `json:"message"`
+				Status  string          `json:"status"`
 			} `json:"error"`
 		}
-		if err := json.Unmarshal(bodyBytes, &objErr); err == nil && objErr.Error.Message != "" {
-			msg = objErr.Error.Message
+		if err := json.Unmarshal(bodyBytes, &objErr); err == nil && (objErr.Error.Message != "" || len(objErr.Error.Code) > 0 || objErr.Error.Status != "") {
+			codeText := strings.TrimSpace(strings.Trim(string(objErr.Error.Code), "\""))
+			if objErr.Error.Status != "" && !strings.EqualFold(objErr.Error.Status, codeText) {
+				if codeText != "" {
+					codeText = codeText + " " + objErr.Error.Status
+				} else {
+					codeText = objErr.Error.Status
+				}
+			}
+			msg = formatErrorWithCode(codeText, objErr.Error.Message)
 		} else {
 			var strErr struct {
 				Error string `json:"error"`
 			}
 			if err := json.Unmarshal(bodyBytes, &strErr); err == nil && strErr.Error != "" {
-				msg = strErr.Error
+				msg = dedupeErrorLines(strErr.Error)
 			} else {
-				msg = raw
+				msg = dedupeErrorLines(raw)
 			}
 		}
 	}
 
-	return mapCleanError(statusCode, dedupeErrorLines(msg))
+	return mapCleanError(statusCode, msg, raw)
+}
+
+// formatErrorWithCode prepends a non-empty error code to the cleaned error message without duplicating it.
+func formatErrorWithCode(code, msg string) string {
+	cleanCode := strings.TrimSpace(strings.Trim(code, "\""))
+	cleanMsg := dedupeErrorLines(msg)
+	switch {
+	case cleanCode != "" && cleanMsg != "":
+		if strings.Contains(cleanMsg, cleanCode) {
+			return cleanMsg
+		}
+		return cleanCode + ": " + cleanMsg
+	case cleanMsg != "":
+		return cleanMsg
+	default:
+		return cleanCode
+	}
 }
 
 // dedupeErrorLines removes duplicate non-empty lines produced by wrapped SDK error messages.
@@ -435,12 +465,19 @@ func dedupeErrorLines(msg string) string {
 	return strings.TrimSpace(msg)
 }
 
-// mapCleanError maps an HTTP status code and cleaned error message to canonical llm sentinel errors.
-func mapCleanError(statusCode int, cleanMsg string) error {
+// mapCleanError maps an HTTP status code, cleaned message, and raw fallback body to canonical llm sentinel errors.
+func mapCleanError(statusCode int, cleanMsg, rawFallback string) error {
 	if cleanMsg == "" {
 		cleanMsg = fmt.Sprintf("gemini api returned status %d", statusCode)
 	}
-	return llm.MapHTTPStatusError("gemini", statusCode, cleanMsg)
+	mapped := llm.MapHTTPStatusError("gemini", statusCode, cleanMsg)
+	// Preserve upstream quota detection if an indicator only appeared in an unextracted field of the raw payload.
+	if !errors.Is(mapped, llm.ErrUpstreamQuota) && strings.TrimSpace(rawFallback) != "" {
+		if quotaErr := llm.MapHTTPStatusError("gemini", statusCode, rawFallback); errors.Is(quotaErr, llm.ErrUpstreamQuota) {
+			return fmt.Errorf("%w: status %d: %s", llm.ErrUpstreamQuota, statusCode, cleanMsg)
+		}
+	}
+	return mapped
 }
 
 // _ enforces at compile time that Client implements llm.Client.

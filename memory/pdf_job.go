@@ -42,6 +42,13 @@ func (s *Store) SubmitPendingJob(_ context.Context, job *core.PDFParseJob, opts 
 	if job.UserID == "" {
 		return fmt.Errorf("%w: user id is required", core.ErrValidation)
 	}
+	maxRawBytes := opts.MaxRawTextBytes
+	if maxRawBytes <= 0 {
+		maxRawBytes = core.DefaultMaxPDFRawTextBytes
+	}
+	if len(job.RawText) > maxRawBytes {
+		return fmt.Errorf("%w: raw text exceeds maximum size of %d bytes", core.ErrValidation, maxRawBytes)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -379,7 +386,7 @@ func (s *Store) claimedPDFJobLocked(jobID, claimedBy string) (*core.PDFParseJob,
 		return nil, core.ErrNotFound
 	}
 	if job.Status != core.PDFParseJobStatusProcessing || job.ClaimedBy != claimedBy {
-		return nil, fmt.Errorf("%w: job %s is not actively claimed by %q", core.ErrConflict, jobID, claimedBy)
+		return nil, fmt.Errorf("%w: job %s is not actively claimed by %q", core.ErrLeaseExpired, jobID, claimedBy)
 	}
 	return job, nil
 }

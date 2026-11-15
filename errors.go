@@ -68,31 +68,34 @@ var (
 	ErrTransientFailure = errors.New("transient retryable failure")
 
 	// ErrUpstreamQuota indicates upstream LLM provider account billing or credit exhaustion.
-	ErrUpstreamQuota = &taggedError{
+	ErrUpstreamQuota error = &taggedError{
 		msg:  "upstream provider billing or quota exhausted",
 		tags: []error{ErrPermanentFailure},
 	}
 
 	// ErrPendingLimitExceeded indicates a tenant or system reached its persisted pending job admission cap.
-	ErrPendingLimitExceeded = &taggedError{
+	ErrPendingLimitExceeded error = &taggedError{
 		msg:  "pending job admission limit exceeded",
 		tags: []error{ErrQueueFull},
 	}
 
 	// ErrJobExpired indicates a queued job passed its expiration deadline before completing.
-	ErrJobExpired = &taggedError{
+	ErrJobExpired error = &taggedError{
 		msg:  "queued job expired",
 		tags: []error{ErrPermanentFailure},
 	}
 
 	// ErrJobCancelled indicates a pending job was cancelled prior to execution.
-	ErrJobCancelled = &taggedError{
+	ErrJobCancelled error = &taggedError{
 		msg:  "job cancelled",
 		tags: []error{ErrPermanentFailure},
 	}
 
-	// ErrLeaseExpired indicates an active worker lease timed out before completion.
-	ErrLeaseExpired = errors.New("worker lease expired")
+	// ErrLeaseExpired indicates an active worker lease timed out or lost ownership before completion.
+	ErrLeaseExpired error = &taggedError{
+		msg:  "worker lease expired",
+		tags: []error{ErrConflict},
+	}
 )
 
 // ErrorClass categorizes asynchronous job failures into fail-fast or retryable classes.

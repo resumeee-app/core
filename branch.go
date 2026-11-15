@@ -255,6 +255,10 @@ type BranchStore interface {
 	DeleteBranch(ctx context.Context, userID, id string) error
 
 	// Versioning
+	// Lease-mutating operations (RenewVersionLease, RequeueVersionForRetry, FailClaimedVersion,
+	// and claimed CompleteVersion) must return ErrNotFound when the version is missing and
+	// ErrLeaseExpired (wrapping ErrConflict) or ErrConflict when the version is no longer actively
+	// processing under the expected ClaimedBy worker.
 	CreateVersion(ctx context.Context, version *BranchVersion) error
 	SubmitPendingVersion(ctx context.Context, version *BranchVersion, opts PendingJobOptions) ([]ReleasedReservation, error)
 	SupersedePendingVersions(ctx context.Context, branchID, reason string) ([]ReleasedReservation, error)

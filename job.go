@@ -15,6 +15,9 @@ const (
 
 	// DefaultMaxPendingPerTenant caps persisted pending jobs per tenant when not overridden.
 	DefaultMaxPendingPerTenant = 25
+
+	// DefaultMaxPDFRawTextBytes caps transient resume raw text payloads accepted for PDF jobs (1 MiB).
+	DefaultMaxPDFRawTextBytes = 1 << 20
 )
 
 // JobNotifier signals background workers that new persisted pending work is available.
@@ -32,15 +35,20 @@ func (f JobNotifierFunc) Notify() {
 	}
 }
 
-// PendingJobOptions configures atomic admission control and expiration TTL when queuing pending jobs.
+// PendingJobOptions configures atomic admission control, payload limits, and expiration TTL when queuing pending jobs.
 type PendingJobOptions struct {
 	MaxPendingPerTenant int
 	MaxGlobalPending    int
+	MaxRawTextBytes     int
 	TTL                 time.Duration
 	Now                 time.Time
 }
 
 // ClaimJobRequest configures atomic direct-store claiming, lease ownership, fairness, and tenant caps.
+// Callers using a shared persistent store across branch versions and PDF jobs—or running single-workload
+// pools sharing a store with other pools—should leave OtherActiveByTenant nil so the store enforces
+// cross-queue concurrency directly from persisted active leases. Supply a non-nil OtherActiveByTenant
+// map only when explicitly overriding sibling counts for separate non-shared stores.
 type ClaimJobRequest struct {
 	WorkerID               string
 	Now                    time.Time
@@ -156,15 +164,21 @@ type PDFJobStore interface {
 	ClaimNextJob(ctx context.Context, req ClaimJobRequest) (*PDFParseJob, error)
 
 	// RenewJobLease extends an active processing job lease owned by claimedBy.
+	// Implementations must return ErrNotFound if the job is missing and ErrLeaseExpired (wrapping ErrConflict)
+	// or ErrConflict when the job is no longer actively processing under claimedBy.
 	RenewJobLease(ctx context.Context, jobID, claimedBy string, leaseExpiresAt time.Time) error
 
 	// RequeueJobForRetry returns a transiently failed claimed job back to pending for future retry prior to expiration.
+	// Implementations must return ErrNotFound if missing, ErrLeaseExpired/ErrConflict if lease ownership is lost,
+	// or ErrJobExpired when nextRetryAt meets or exceeds ExpiresAt.
 	RequeueJobForRetry(ctx context.Context, jobID, claimedBy string, nextRetryAt time.Time, errMsg string) error
 
 	// CompleteClaimedJob finalizes a claimed processing PDF job and prunes transient raw input text.
+	// Implementations must return ErrNotFound if missing and ErrLeaseExpired/ErrConflict if lease ownership is lost.
 	CompleteClaimedJob(ctx context.Context, jobID, claimedBy string, result *JSONResume) error
 
 	// FailClaimedJob transitions an active claimed job to failed and prunes transient raw input text.
+	// Implementations must return ErrNotFound if missing and ErrLeaseExpired/ErrConflict if lease ownership is lost.
 	FailClaimedJob(ctx context.Context, jobID, claimedBy, errMsg string) error
 
 	// ExpirePendingJobs fails pending PDF parse jobs whose ExpiresAt deadline has passed and returns released reservations.

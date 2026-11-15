@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -62,7 +63,7 @@ func (s *Store) CreateBranch(_ context.Context, branch *core.Branch) error {
 	if _, exists := s.branches[branch.ID]; exists {
 		return core.ErrConflict
 	}
-	now := time.Now().UTC()
+	now := s.now()
 	if branch.CreatedAt.IsZero() {
 		branch.CreatedAt = now
 	}
@@ -84,7 +85,10 @@ func (s *Store) UpdateBranch(_ context.Context, branch *core.Branch) error {
 	if !exists || existing.UserID != branch.UserID {
 		return core.ErrNotFound
 	}
-	branch.UpdatedAt = time.Now().UTC()
+	if branchGenerationOrActiveChanged(existing, branch) {
+		s.branchEpoch[branch.ID]++
+	}
+	branch.UpdatedAt = s.now()
 	s.branches[branch.ID] = clone(branch)
 	return nil
 }
@@ -105,9 +109,11 @@ func (s *Store) DeleteBranch(_ context.Context, userID, id string) error {
 	for vID, v := range s.versions {
 		if versionMatchesBranch(v, id) {
 			delete(s.versions, vID)
+			delete(s.versionEpoch, vID)
 		}
 	}
 	delete(s.branches, id)
+	delete(s.branchEpoch, id)
 	return nil
 }
 
@@ -140,6 +146,9 @@ func (s *Store) CreateVersion(_ context.Context, version *core.BranchVersion) er
 	}
 
 	s.versions[version.ID] = clone(version)
+	if targetID != "" {
+		s.versionEpoch[version.ID] = s.branchEpoch[targetID]
+	}
 	return nil
 }
 
@@ -160,10 +169,14 @@ func (s *Store) SubmitPendingVersion(_ context.Context, version *core.BranchVers
 	if branchID == "" {
 		return nil, fmt.Errorf("%w: branch id is required", core.ErrValidation)
 	}
+	br, branchExists := s.branches[branchID]
+	if !branchExists {
+		return nil, core.ErrNotFound
+	}
 	if version.UserID == "" {
-		if b, ok := s.branches[branchID]; ok && b.UserID != "" {
-			version.UserID = b.UserID
-		}
+		version.UserID = br.UserID
+	} else if br.UserID != "" && br.UserID != version.UserID {
+		return nil, core.ErrNotFound
 	}
 	if version.UserID == "" {
 		return nil, fmt.Errorf("%w: user id is required", core.ErrValidation)
@@ -213,6 +226,7 @@ func (s *Store) SubmitPendingVersion(_ context.Context, version *core.BranchVers
 	version.CompletedAt = nil
 
 	s.versions[version.ID] = clone(version)
+	s.versionEpoch[version.ID] = s.branchEpoch[branchID]
 	return released, nil
 }
 
@@ -324,6 +338,9 @@ func (s *Store) ClaimNextVersion(_ context.Context, req core.ClaimJobRequest) (*
 	v.NextRetryAt = nil
 	v.AttemptCount++
 	v.UpdatedAt = now
+	if branchID := peekVersionBranchID(v); branchID != "" {
+		s.versionEpoch[v.ID] = s.branchEpoch[branchID]
+	}
 
 	copyV := clone(v)
 	if copyV.UserID == "" {
@@ -342,12 +359,9 @@ func (s *Store) RenewVersionLease(_ context.Context, versionID, claimedBy string
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	v, ok := s.versions[versionID]
-	if !ok {
-		return core.ErrNotFound
-	}
-	if v.Status != core.VersionStatusProcessing || v.ClaimedBy != claimedBy {
-		return fmt.Errorf("%w: version %s is not actively claimed by %q", core.ErrConflict, versionID, claimedBy)
+	v, err := s.claimedVersionLocked(versionID, claimedBy)
+	if err != nil {
+		return err
 	}
 
 	exp := leaseExpiresAt.UTC()
@@ -365,12 +379,9 @@ func (s *Store) RequeueVersionForRetry(_ context.Context, versionID, claimedBy s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	v, ok := s.versions[versionID]
-	if !ok {
-		return core.ErrNotFound
-	}
-	if v.Status != core.VersionStatusProcessing || v.ClaimedBy != claimedBy {
-		return fmt.Errorf("%w: version %s is not actively claimed by %q", core.ErrConflict, versionID, claimedBy)
+	v, err := s.claimedVersionLocked(versionID, claimedBy)
+	if err != nil {
+		return err
 	}
 
 	retryAt := nextRetryAt.UTC()
@@ -398,12 +409,9 @@ func (s *Store) FailClaimedVersion(_ context.Context, versionID, claimedBy, errM
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	v, ok := s.versions[versionID]
-	if !ok {
-		return core.ErrNotFound
-	}
-	if v.Status != core.VersionStatusProcessing || v.ClaimedBy != claimedBy {
-		return fmt.Errorf("%w: version %s is not actively claimed by %q", core.ErrConflict, versionID, claimedBy)
+	v, err := s.claimedVersionLocked(versionID, claimedBy)
+	if err != nil {
+		return err
 	}
 
 	s.transitionVersionTerminalLocked(v, core.VersionStatusFailed, errMsg, s.now(), false)
@@ -574,7 +582,7 @@ func (s *Store) CompleteVersion(_ context.Context, version *core.BranchVersion) 
 	}
 
 	existing, exists := s.versions[version.ID]
-	if err := validateVersionCompletionLocked(existing, exists, br, s.versions, version); err != nil {
+	if err := s.validateVersionCompletionLocked(existing, exists, br, version); err != nil {
 		return err
 	}
 
@@ -604,6 +612,7 @@ func (s *Store) CompleteVersion(_ context.Context, version *core.BranchVersion) 
 		version.CompletedAt = &completedAt
 	}
 	version.UpdatedAt = now
+	version.ClaimedBy = ""
 	version.LeaseExpiresAt = nil
 	version.NextRetryAt = nil
 
@@ -706,15 +715,32 @@ func (s *Store) transitionVersionTerminalLocked(v *core.BranchVersion, status co
 	}, true
 }
 
-// validateVersionCompletionLocked enforces non-resurrection, lease ownership, and monotonic branch promotion checks.
-func validateVersionCompletionLocked(existing *core.BranchVersion, exists bool, br *core.Branch, versions map[string]*core.BranchVersion, incoming *core.BranchVersion) error {
-	if exists {
-		if existing.Status == core.VersionStatusFailed || existing.Status == core.VersionStatusCancelled {
-			return fmt.Errorf("%w: cannot complete terminal version %s in %s state", core.ErrConflict, incoming.ID, existing.Status)
+// claimedVersionLocked validates that versionID exists and is actively claimed by claimedBy.
+func (s *Store) claimedVersionLocked(versionID, claimedBy string) (*core.BranchVersion, error) {
+	v, ok := s.versions[versionID]
+	if !ok {
+		return nil, core.ErrNotFound
+	}
+	if v.Status != core.VersionStatusProcessing || v.ClaimedBy != claimedBy {
+		return nil, fmt.Errorf("%w: version %s is not actively claimed by %q", core.ErrLeaseExpired, versionID, claimedBy)
+	}
+	return v, nil
+}
+
+// validateVersionCompletionLocked enforces non-resurrection, lease ownership, branch epoch, and monotonic branch promotion checks.
+func (s *Store) validateVersionCompletionLocked(existing *core.BranchVersion, exists bool, br *core.Branch, incoming *core.BranchVersion) error {
+	if exists && (existing.Status == core.VersionStatusFailed || existing.Status == core.VersionStatusCancelled) {
+		return fmt.Errorf("%w: cannot complete terminal version %s in %s state", core.ErrConflict, incoming.ID, existing.Status)
+	}
+	if incoming.ClaimedBy != "" {
+		if !exists || existing.Status != core.VersionStatusProcessing || existing.ClaimedBy != incoming.ClaimedBy {
+			return fmt.Errorf("%w: version %s is not actively claimed by %q", core.ErrLeaseExpired, incoming.ID, incoming.ClaimedBy)
 		}
-		if existing.Status == core.VersionStatusProcessing && existing.ClaimedBy != incoming.ClaimedBy {
-			return fmt.Errorf("%w: version %s is claimed by %q, not %q", core.ErrConflict, incoming.ID, existing.ClaimedBy, incoming.ClaimedBy)
-		}
+	} else if exists && existing.Status == core.VersionStatusProcessing && existing.ClaimedBy != "" {
+		return fmt.Errorf("%w: version %s is actively claimed by %q", core.ErrConflict, incoming.ID, existing.ClaimedBy)
+	}
+	if exists && existing.Status == core.VersionStatusProcessing && s.versionEpoch[incoming.ID] != s.branchEpoch[br.ID] {
+		return fmt.Errorf("%w: branch configuration or active version changed while version %s was processing", core.ErrConflict, incoming.ID)
 	}
 
 	verNum := incoming.VersionNumber
@@ -722,11 +748,40 @@ func validateVersionCompletionLocked(existing *core.BranchVersion, exists bool, 
 		verNum = existing.VersionNumber
 	}
 	if br.ActiveVersionID != nil && *br.ActiveVersionID != "" {
-		if activeVer, ok := versions[*br.ActiveVersionID]; ok && activeVer.VersionNumber > verNum {
+		if activeVer, ok := s.versions[*br.ActiveVersionID]; ok && activeVer.VersionNumber > verNum {
 			return fmt.Errorf("%w: stale version %d cannot overwrite active version %d", core.ErrConflict, verNum, activeVer.VersionNumber)
 		}
 	}
 	return nil
+}
+
+// branchGenerationOrActiveChanged reports whether generation-defining configuration or ActiveVersionID changed between a and b.
+func branchGenerationOrActiveChanged(a, b *core.Branch) bool {
+	if a == nil || b == nil {
+		return a != b
+	}
+	return !equalStringPtr(a.ActiveVersionID, b.ActiveVersionID) ||
+		a.TargetRole != b.TargetRole ||
+		a.TargetCompany != b.TargetCompany ||
+		a.TargetRequirements != b.TargetRequirements ||
+		a.CustomDirectives != b.CustomDirectives ||
+		a.BranchInstructions != b.BranchInstructions ||
+		!equalStringPtr(a.TailoringStrategyID, b.TailoringStrategyID) ||
+		!equalStringPtr(a.PresetID, b.PresetID) ||
+		a.TemplateSetID != b.TemplateSetID ||
+		a.ProviderOverride != b.ProviderOverride ||
+		a.ModelOverride != b.ModelOverride ||
+		a.ReasoningLevel != b.ReasoningLevel ||
+		!slices.Equal(a.PinnedEntityIDs, b.PinnedEntityIDs) ||
+		!slices.Equal(a.ExcludedEntityIDs, b.ExcludedEntityIDs)
+}
+
+// equalStringPtr reports whether two optional string pointers hold equal values.
+func equalStringPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // resolveVersionBranchID canonicalizes ResumeID and BranchID on version and returns the branch ID.
@@ -789,5 +844,5 @@ func (s *Store) mirrorATSScoreIfActiveLocked(branchID, versionID string, score *
 	} else {
 		br.ATSScore = nil
 	}
-	br.UpdatedAt = time.Now().UTC()
+	br.UpdatedAt = s.now()
 }

@@ -2,7 +2,6 @@ package branch
 
 import (
 	"context"
-	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -19,7 +18,6 @@ type Store interface {
 	SupersedePendingVersions(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error)
 	AbortBranchVersions(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error)
 	CancelVersion(ctx context.Context, userID, branchID, versionID, reason string) (*core.BranchVersion, error)
-	ExpirePendingVersions(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error)
 	Version(ctx context.Context, branchID, versionID string) (*core.BranchVersion, error)
 	VersionByNumber(ctx context.Context, branchID string, versionNumber int) (*core.BranchVersion, error)
 	VersionsByIDs(ctx context.Context, versionIDs []string) ([]core.BranchVersion, error)

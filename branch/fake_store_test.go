@@ -3,6 +3,7 @@ package branch_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -26,6 +27,8 @@ type fakeBranchStore struct {
 	presets      map[string]*core.Preset
 	templates    map[string]*core.TemplateSet
 	usageRecords map[string]*core.LLMUsageRecord
+	branchEpoch  map[string]int64
+	versionEpoch map[string]int64
 }
 
 func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchStore {
@@ -39,6 +42,8 @@ func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchSt
 		presets:      make(map[string]*core.Preset),
 		templates:    make(map[string]*core.TemplateSet),
 		usageRecords: make(map[string]*core.LLMUsageRecord),
+		branchEpoch:  make(map[string]int64),
+		versionEpoch: make(map[string]int64),
 	}
 
 	// 1. Seed Profile
@@ -75,11 +80,64 @@ func newSeededBranchStore(_ context.Context, defaultUserID string) *fakeBranchSt
 		UpdatedAt:              time.Now().UTC(),
 	}
 	s.branches[defaultBranchID] = &defaultBranch
+	s.branchEpoch[defaultBranchID] = 1
 
 	return s
 }
 
 // --- BranchStore ---
+
+func equalFakeStringPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func fakeBranchGenerationOrActiveChanged(existing, updated *core.Branch) bool {
+	if existing == nil || updated == nil {
+		return existing != updated
+	}
+	return !equalFakeStringPtr(existing.ActiveVersionID, updated.ActiveVersionID) ||
+		existing.TargetRole != updated.TargetRole ||
+		existing.TargetCompany != updated.TargetCompany ||
+		existing.TargetRequirements != updated.TargetRequirements ||
+		existing.CustomDirectives != updated.CustomDirectives ||
+		existing.BranchInstructions != updated.BranchInstructions ||
+		!equalFakeStringPtr(existing.TailoringStrategyID, updated.TailoringStrategyID) ||
+		!equalFakeStringPtr(existing.PresetID, updated.PresetID) ||
+		existing.TemplateSetID != updated.TemplateSetID ||
+		existing.ProviderOverride != updated.ProviderOverride ||
+		existing.ModelOverride != updated.ModelOverride ||
+		existing.ReasoningLevel != updated.ReasoningLevel ||
+		!slices.Equal(existing.PinnedEntityIDs, updated.PinnedEntityIDs) ||
+		!slices.Equal(existing.ExcludedEntityIDs, updated.ExcludedEntityIDs)
+}
+
+func cloneBranch(b *core.Branch) *core.Branch {
+	if b == nil {
+		return nil
+	}
+	cp := *b
+	cp.TailoringStrategyID = cloneStringPtr(b.TailoringStrategyID)
+	cp.PresetID = cloneStringPtr(b.PresetID)
+	cp.ActiveVersionID = cloneStringPtr(b.ActiveVersionID)
+	if b.PinnedEntityIDs != nil {
+		cp.PinnedEntityIDs = slices.Clone(b.PinnedEntityIDs)
+	}
+	if b.ExcludedEntityIDs != nil {
+		cp.ExcludedEntityIDs = slices.Clone(b.ExcludedEntityIDs)
+	}
+	if b.GapReport != nil {
+		gr := *b.GapReport
+		cp.GapReport = &gr
+	}
+	if b.ATSScore != nil {
+		as := *b.ATSScore
+		cp.ATSScore = &as
+	}
+	return &cp
+}
 
 func (s *fakeBranchStore) CreateBranch(_ context.Context, branch *core.Branch) error {
 	s.mu.Lock()
@@ -94,8 +152,8 @@ func (s *fakeBranchStore) CreateBranch(_ context.Context, branch *core.Branch) e
 	if branch.ID == "" {
 		branch.ID = "branch-" + uuid.New().String()
 	}
-	cp := *branch
-	s.branches[branch.ID] = &cp
+	s.branches[branch.ID] = cloneBranch(branch)
+	s.branchEpoch[branch.ID] = 1
 	return nil
 }
 
@@ -107,13 +165,13 @@ func (s *fakeBranchStore) Branch(_ context.Context, userID, id string) (*core.Br
 	if !ok || (userID != "" && b.UserID != userID) {
 		return nil, core.ErrNotFound
 	}
-	cp := *b
+	cp := cloneBranch(b)
 	var mainRev int64 = 1
 	if p, ok := s.profiles[b.UserID]; ok {
 		mainRev = p.MainRevision
 	}
 	cp.IsStale = cp.IsStaleRevision(mainRev)
-	return &cp, nil
+	return cp, nil
 }
 
 func (s *fakeBranchStore) ListBranches(_ context.Context, userID string) ([]core.Branch, error) {
@@ -128,9 +186,9 @@ func (s *fakeBranchStore) ListBranches(_ context.Context, userID string) ([]core
 	var res []core.Branch
 	for _, b := range s.branches {
 		if b.UserID == userID {
-			cp := *b
+			cp := cloneBranch(b)
 			cp.IsStale = cp.IsStaleRevision(mainRev)
-			res = append(res, cp)
+			res = append(res, *cp)
 		}
 	}
 	return res, nil
@@ -146,8 +204,10 @@ func (s *fakeBranchStore) UpdateBranch(_ context.Context, branch *core.Branch) e
 		}
 	}
 
-	cp := *branch
-	s.branches[branch.ID] = &cp
+	if existing, ok := s.branches[branch.ID]; ok && fakeBranchGenerationOrActiveChanged(existing, branch) {
+		s.branchEpoch[branch.ID]++
+	}
+	s.branches[branch.ID] = cloneBranch(branch)
 	return nil
 }
 
@@ -160,9 +220,11 @@ func (s *fakeBranchStore) DeleteBranch(_ context.Context, userID, id string) err
 		return core.ErrNotFound
 	}
 	delete(s.branches, id)
+	delete(s.branchEpoch, id)
 	for vid, v := range s.versions {
 		if v.BranchID == id {
 			delete(s.versions, vid)
+			delete(s.versionEpoch, vid)
 		}
 	}
 	return nil
@@ -296,6 +358,7 @@ func (s *fakeBranchStore) CreateVersion(_ context.Context, version *core.BranchV
 	}
 
 	s.versions[version.ID] = cloneVersion(version)
+	s.versionEpoch[version.ID] = s.branchEpoch[parentID]
 	return nil
 }
 
@@ -383,6 +446,7 @@ func (s *fakeBranchStore) SubmitPendingVersion(_ context.Context, version *core.
 	}
 
 	s.versions[version.ID] = cloneVersion(version)
+	s.versionEpoch[version.ID] = s.branchEpoch[parentID]
 	return superseded, nil
 }
 
@@ -537,6 +601,8 @@ func (s *fakeBranchStore) ClaimNextVersion(_ context.Context, req core.ClaimJobR
 	chosen.AttemptCount++
 	chosen.NextRetryAt = nil
 	chosen.UpdatedAt = now
+	parentID := resolveFakeVersionBranchID(chosen)
+	s.versionEpoch[chosen.ID] = s.branchEpoch[parentID]
 	return cloneVersion(chosen), nil
 }
 
@@ -778,6 +844,9 @@ func (s *fakeBranchStore) CompleteVersion(_ context.Context, version *core.Branc
 	br, ok := s.branches[parentID]
 	if !ok {
 		return core.ErrNotFound
+	}
+	if existing.Status == core.VersionStatusProcessing && s.versionEpoch[version.ID] != s.branchEpoch[parentID] {
+		return fmt.Errorf("%w: version %s epoch %d does not match branch %s epoch %d", core.ErrConflict, version.ID, s.versionEpoch[version.ID], parentID, s.branchEpoch[parentID])
 	}
 
 	if version.VersionNumber <= 0 {

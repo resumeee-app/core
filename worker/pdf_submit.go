@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ type PDFSubmitConfig struct {
 	DefaultEstimatedTokens int
 	MaxPendingPerTenant    int
 	MaxGlobalPending       int
+	MaxRawTextBytes        int
 	JobTTL                 time.Duration
 	CleanupTimeout         time.Duration
 	Clock                  func() time.Time
@@ -56,6 +58,13 @@ func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission
 	}
 	if strings.TrimSpace(sub.RawText) == "" {
 		return nil, fmt.Errorf("%w: raw text is required", core.ErrValidation)
+	}
+	maxRawTextBytes := cfg.MaxRawTextBytes
+	if maxRawTextBytes <= 0 {
+		maxRawTextBytes = core.DefaultMaxPDFRawTextBytes
+	}
+	if len(sub.RawText) > maxRawTextBytes {
+		return nil, fmt.Errorf("%w: raw text exceeds maximum allowed size of %d bytes", core.ErrValidation, maxRawTextBytes)
 	}
 
 	estimatedTokens := cfg.DefaultEstimatedTokens
@@ -108,6 +117,7 @@ func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission
 	err := cfg.PDFJobs.SubmitPendingJob(ctx, job, core.PendingJobOptions{
 		MaxPendingPerTenant: maxPendingPerTenant,
 		MaxGlobalPending:    cfg.MaxGlobalPending,
+		MaxRawTextBytes:     maxRawTextBytes,
 		TTL:                 ttl,
 		Now:                 now,
 	})
@@ -115,7 +125,7 @@ func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission
 		if cfg.Quotas != nil && reservationID != "" {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 			defer cancel()
-			_ = cfg.Quotas.ReleaseQuota(cleanupCtx, reservationID, err.Error())
+			_ = cfg.Quotas.ReleaseQuota(cleanupCtx, reservationID, sanitizePDFSubmitFailureReason(err))
 		}
 		return nil, err
 	}
@@ -158,4 +168,18 @@ func CancelPDFJob(
 		_ = quotas.ReleaseQuota(cleanupCtx, cancelled.ReservationID, "cancelled by user")
 	}
 	return cancelled, nil
+}
+
+// sanitizePDFSubmitFailureReason maps a pending PDF job admission error to a bounded non-sensitive quota release reason.
+func sanitizePDFSubmitFailureReason(err error) string {
+	switch {
+	case errors.Is(err, core.ErrPendingLimitExceeded):
+		return "pending job limit exceeded"
+	case errors.Is(err, core.ErrValidation):
+		return "invalid pdf job submission"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "pdf job submission cancelled or timed out"
+	default:
+		return "pdf job submission rejected"
+	}
 }

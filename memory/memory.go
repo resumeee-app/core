@@ -80,6 +80,8 @@ type Store struct {
 	templates      map[string]*core.TemplateSet
 	branches       map[string]*core.Branch
 	versions       map[string]*core.BranchVersion
+	branchEpoch    map[string]uint64
+	versionEpoch   map[string]uint64
 	pdfJobs        map[string]*core.PDFParseJob
 	quotas         map[string]*core.TenantQuota
 	usageRecords   map[string]*core.LLMUsageRecord
@@ -106,6 +108,8 @@ func NewWithClock(clock func() time.Time) *Store {
 		templates:      make(map[string]*core.TemplateSet),
 		branches:       make(map[string]*core.Branch),
 		versions:       make(map[string]*core.BranchVersion),
+		branchEpoch:    make(map[string]uint64),
+		versionEpoch:   make(map[string]uint64),
 		pdfJobs:        make(map[string]*core.PDFParseJob),
 		quotas:         make(map[string]*core.TenantQuota),
 		usageRecords:   make(map[string]*core.LLMUsageRecord),

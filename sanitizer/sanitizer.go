@@ -15,18 +15,30 @@ import (
 // Canonical deterministic PII placeholder constants.
 const (
 	// PlaceholderFullName replaces the candidate's full name in obfuscated prompts.
-	PlaceholderFullName = "[John Doe]"
+	PlaceholderFullName = "[NAME_PLACEHOLDER]"
 	// PlaceholderEmail replaces the candidate's email address in obfuscated prompts.
-	PlaceholderEmail = "candidate@email.com"
+	PlaceholderEmail = "[EMAIL_PLACEHOLDER]"
 	// PlaceholderPhone replaces the candidate's phone number in obfuscated prompts.
-	PlaceholderPhone = "+1 111 111 1111"
+	PlaceholderPhone = "[PHONE_PLACEHOLDER]"
 	// PlaceholderWebsite replaces personal website URLs in obfuscated prompts.
-	PlaceholderWebsite = "https://candidate.example.com"
-	// PlaceholderSocialURLPrefix prefixes indexed synthetic social profile URLs.
-	PlaceholderSocialURLPrefix = "https://social.example.com/profile-"
-	// PlaceholderSocialUserPrefix prefixes indexed synthetic social handles.
-	PlaceholderSocialUserPrefix = "candidate-social-"
+	PlaceholderWebsite = "[WEBSITE_PLACEHOLDER]"
+	// PlaceholderSocialURLPrefix prefixes indexed sentinel social profile URLs.
+	PlaceholderSocialURLPrefix = "[SOCIAL_URL_PLACEHOLDER_"
+	// PlaceholderSocialHandlePrefix prefixes indexed sentinel social handles.
+	PlaceholderSocialHandlePrefix = "[SOCIAL_HANDLE_PLACEHOLDER_"
+	// PlaceholderSocialSuffix closes indexed social URL and handle sentinel placeholders.
+	PlaceholderSocialSuffix = "]"
 )
+
+// PlaceholderSocialURL returns the indexed sentinel placeholder for a social profile URL.
+func PlaceholderSocialURL(index int) string {
+	return PlaceholderSocialURLPrefix + strconv.Itoa(index) + PlaceholderSocialSuffix
+}
+
+// PlaceholderSocialHandle returns the indexed sentinel placeholder for a social profile handle.
+func PlaceholderSocialHandle(index int) string {
+	return PlaceholderSocialHandlePrefix + strconv.Itoa(index) + PlaceholderSocialSuffix
+}
 
 // textRule pairs a compiled regex with its literal or capture-aware replacement.
 type textRule struct {
@@ -122,14 +134,6 @@ func (b *mappingBuilder) addPair(orig, placeholder string, wordBound bool) {
 func (b *mappingBuilder) addContactRules(profile core.Profile) {
 	if profile.FullName != "" {
 		b.addPair(profile.FullName, PlaceholderFullName, isWordBounded(profile.FullName))
-		// Also support reverse deobfuscation if LLM dropped the brackets.
-		if !strings.EqualFold(profile.FullName, "John Doe") {
-			b.reverse = append(b.reverse, rawMapping{
-				source:      "John Doe",
-				replacement: profile.FullName,
-				wordBound:   true,
-			})
-		}
 	}
 
 	if profile.Email != "" {
@@ -188,9 +192,8 @@ func (b *mappingBuilder) addWebsiteAndSocialRules(profile core.Profile) {
 	}
 
 	for i, p := range profile.Profiles {
-		idx := strconv.Itoa(i + 1)
-		placeholderURL := PlaceholderSocialURLPrefix + idx
-		placeholderUser := PlaceholderSocialUserPrefix + idx
+		placeholderURL := PlaceholderSocialURL(i + 1)
+		placeholderHandle := PlaceholderSocialHandle(i + 1)
 
 		cleanURL := strings.TrimSpace(p.URL)
 		if cleanURL != "" && cleanURL != realWebsite && isValidURL(cleanURL) {
@@ -201,7 +204,7 @@ func (b *mappingBuilder) addWebsiteAndSocialRules(profile core.Profile) {
 		// corrupting technical terms and common words.
 		cleanUser := strings.TrimSpace(p.Username)
 		if len(cleanUser) >= 3 {
-			b.addPair(cleanUser, placeholderUser, isWordBounded(cleanUser))
+			b.addPair(cleanUser, placeholderHandle, isWordBounded(cleanUser))
 		}
 	}
 }

@@ -165,7 +165,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 	transportClient := &sanitizerPipelineClient{
 		resp: core.GenerationResponse{
 			TailoredContent: core.TailoredContent{
-				Summary: "Pioneering software executive " + sanitizer.PlaceholderFullName + " with expertise in fault-tolerant asynchronous execution. Contact: " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". Portfolio: " + sanitizer.PlaceholderWebsite + ". GitHub: candidate-social-2.",
+				Summary: "Pioneering software executive " + sanitizer.PlaceholderFullName + " with expertise in fault-tolerant asynchronous execution. Contact: " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". Portfolio: " + sanitizer.PlaceholderWebsite + ". GitHub: " + sanitizer.PlaceholderSocialHandle(2) + ".",
 				Experiences: []core.TailoredExperience{
 					{
 						SourceEntityID: exp.EffectiveShortID(),
@@ -258,20 +258,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		t.Fatalf("failed to enqueue job: %v", err)
 	}
 
-	// Await completion
-	var completedVer *core.BranchVersion
-	for range 50 {
-		time.Sleep(20 * time.Millisecond)
-		v, err := env.branchRepo.Version(ctx, env.branchID, ver.ID)
-		if err == nil && (v.Status == core.VersionStatusCompleted || v.Status == core.VersionStatusCompletedWithWarnings || v.Status == core.VersionStatusFailed) {
-			completedVer = v
-			break
-		}
-	}
-
-	if completedVer == nil || (completedVer.Status != core.VersionStatusCompleted && completedVer.Status != core.VersionStatusCompletedWithWarnings) {
-		t.Fatalf("expected version completed or completed_with_warnings, got %+v", completedVer)
-	}
+	completedVer := awaitCompletedVersion(ctx, t, env.branchRepo, env.branchID, ver.ID)
 
 	// 1. Verify outbound LLM transport wire scrubbed all real candidate PII to deterministic placeholders
 	transportClient.mu.Lock()
@@ -311,7 +298,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		sanitizer.PlaceholderEmail,
 		sanitizer.PlaceholderPhone,
 		sanitizer.PlaceholderWebsite,
-		"candidate-social-2",
+		sanitizer.PlaceholderSocialHandle(2),
 	} {
 		if strings.Contains(completedVer.TailoredContent.Summary, placeholder) {
 			t.Errorf("version TailoredContent.Summary retained placeholder %q: %s", placeholder, completedVer.TailoredContent.Summary)
@@ -360,7 +347,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		sanitizer.PlaceholderEmail,
 		sanitizer.PlaceholderPhone,
 		sanitizer.PlaceholderWebsite,
-		"candidate-social-2",
+		sanitizer.PlaceholderSocialHandle(2),
 	} {
 		if strings.Contains(eduBullet, placeholder) {
 			t.Errorf("education Bullets[0].Text retained placeholder %q: %q", placeholder, eduBullet)
@@ -388,7 +375,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 			sanitizer.PlaceholderEmail,
 			sanitizer.PlaceholderPhone,
 			sanitizer.PlaceholderWebsite,
-			"candidate-social-2",
+			sanitizer.PlaceholderSocialHandle(2),
 		} {
 			if strings.Contains(content, placeholder) {
 				t.Errorf("%s retained placeholder %q", format, placeholder)
@@ -408,4 +395,243 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 	assertRendered("HTMLOutput", completedVer.HTMLOutput)
 	assertRendered("MarkdownOutput", completedVer.MarkdownOutput)
 	assertRendered("PlainTextOutput", completedVer.PlainTextOutput)
+}
+
+// awaitCompletedVersion polls store until versionID reaches a terminal completed status or fails the test.
+func awaitCompletedVersion(ctx context.Context, t *testing.T, store core.BranchStore, branchID, versionID string) *core.BranchVersion {
+	t.Helper()
+	for range 50 {
+		time.Sleep(20 * time.Millisecond)
+		v, err := store.Version(ctx, branchID, versionID)
+		if err == nil && (v.Status == core.VersionStatusCompleted || v.Status == core.VersionStatusCompletedWithWarnings || v.Status == core.VersionStatusFailed) {
+			if v.Status == core.VersionStatusFailed {
+				t.Fatalf("expected version completed or completed_with_warnings, got failed: %+v", v)
+			}
+			return v
+		}
+	}
+	t.Fatalf("timed out waiting for version %q to complete", versionID)
+	return nil
+}
+
+// setupNameEmbeddedCompanyEnv seeds a Spanish-language branch and career records embedding realCompany.
+func setupNameEmbeddedCompanyEnv(ctx context.Context, t *testing.T, realName, realCompany string) (*testWorkerEnv, core.WorkExperience, core.Fact) {
+	t.Helper()
+	env := setupTestWorkerEnv(t)
+
+	preset := &core.Preset{
+		ID:                 "preset-es-consulting",
+		UserID:             env.defaultUser,
+		Name:               "Spanish Executive",
+		Language:           "Spanish",
+		SystemInstructions: "Redacta logros técnicos con claridad.",
+	}
+	if err := env.presetRepo.CreatePreset(ctx, preset); err != nil {
+		t.Fatalf("failed to create preset: %v", err)
+	}
+	b, err := env.branchRepo.Branch(ctx, env.defaultUser, env.branchID)
+	if err != nil {
+		t.Fatalf("failed to load branch: %v", err)
+	}
+	b.PresetID = &preset.ID
+	if err := env.branchRepo.UpdateBranch(ctx, b); err != nil {
+		t.Fatalf("failed to attach preset to branch: %v", err)
+	}
+
+	realProf := &core.Profile{
+		ID:           "profile-" + env.defaultUser,
+		UserID:       env.defaultUser,
+		FullName:     realName,
+		Email:        "jane.doe@example.org",
+		Phone:        "+1 (415) 555-0199",
+		Headline:     "Arquitecta de Sistemas (" + realName + ")",
+		Summary:      realName + " fundó " + realCompany + " para diseñar plataformas resilientes.",
+		MainRevision: 2,
+	}
+	if err := env.profileRepo.UpsertProfile(ctx, realProf); err != nil {
+		t.Fatalf("failed to update profile: %v", err)
+	}
+
+	consultExp := core.WorkExperience{
+		ID:            "exp-jane-consulting",
+		UserID:        env.defaultUser,
+		Company:       realCompany,
+		RoleTitle:     "Arquitecta Principal",
+		StartDate:     core.NewDate(2020, 1, 1),
+		DutiesSummary: realName + " dirigió proyectos en la nube en " + realCompany + ".",
+	}
+	if err := env.careerRepo.CreateExperience(ctx, &consultExp); err != nil {
+		t.Fatalf("failed to create consulting experience: %v", err)
+	}
+
+	consultFact := core.Fact{
+		ID:        "fact-jane-consulting-1",
+		UserID:    env.defaultUser,
+		OwnerID:   consultExp.ID,
+		OwnerType: core.OwnerTypeWorkExperience,
+		Statement: realName + " diseñó arquitectura tolerante a fallos para empresas en " + realCompany + ".",
+	}
+	if err := env.careerRepo.CreateFact(ctx, &consultFact); err != nil {
+		t.Fatalf("failed to create consulting fact: %v", err)
+	}
+
+	return env, consultExp, consultFact
+}
+
+// runSanitizerPipelineVersion executes a single tailoring job through worker.Pool and returns the completed version and outbound wire prompt.
+func runSanitizerPipelineVersion(ctx context.Context, t *testing.T, env *testWorkerEnv, client *sanitizerPipelineClient, versionID string) (*core.BranchVersion, string) {
+	t.Helper()
+	reg := llm.NewRegistry()
+	reg.Register(client)
+	svc := llm.NewService(reg)
+
+	pool := worker.New(worker.Config{
+		Concurrency: 1,
+		QueueSize:   10,
+		Branches:    env.branchRepo,
+		Profiles:    env.profileRepo,
+		Presets:     env.presetRepo,
+		Templates:   env.templateRepo,
+		Generator:   svc,
+		Validator:   env.validator,
+		Renderer:    env.renderer,
+	})
+
+	pool.Start(ctx)
+	defer pool.Stop()
+
+	ver := core.BranchVersion{
+		ID:                versionID,
+		BranchID:          env.branchID,
+		Status:            core.VersionStatusPending,
+		MainRevisionUsed:  2,
+		TemplateSetIDUsed: core.TemplateStandardCleanID,
+		SourceType:        core.SourceTypeLLMGeneration,
+	}
+	if err := env.branchRepo.CreateVersion(ctx, &ver); err != nil {
+		t.Fatalf("failed to create version: %v", err)
+	}
+
+	if err := pool.Enqueue(core.GenerationJob{
+		UserID:    env.defaultUser,
+		BranchID:  env.branchID,
+		VersionID: ver.ID,
+	}); err != nil {
+		t.Fatalf("failed to enqueue job: %v", err)
+	}
+
+	completedVer := awaitCompletedVersion(ctx, t, env.branchRepo, env.branchID, ver.ID)
+
+	client.mu.Lock()
+	outboundWire := client.capturedReq.SystemPrompt + "\n" + client.capturedReq.UserPrompt
+	client.mu.Unlock()
+	return completedVer, outboundWire
+}
+
+// assertNameEmbeddedCompanyResult verifies outbound PII scrubbing and end-to-end restoration of realCompany across stored and rendered outputs.
+func assertNameEmbeddedCompanyResult(t *testing.T, completedVer *core.BranchVersion, outboundWire, realName, realCompany, email, phone string) {
+	t.Helper()
+	maskedCompany := sanitizer.PlaceholderFullName + " Consulting"
+
+	for _, leaked := range []string{realName, realCompany, email, phone} {
+		if strings.Contains(outboundWire, leaked) {
+			t.Errorf("outbound LLM transport prompt leaked authentic PII %q", leaked)
+		}
+	}
+	for _, expected := range []string{"Target Output Language: Spanish", maskedCompany} {
+		if !strings.Contains(outboundWire, expected) {
+			t.Errorf("outbound LLM transport prompt missing %q", expected)
+		}
+	}
+
+	wantSummary := "Arquitecta principal en " + realCompany + " especializada en sistemas distribuidos."
+	if completedVer.TailoredContent.Summary != wantSummary {
+		t.Errorf("TailoredContent.Summary = %q, want %q", completedVer.TailoredContent.Summary, wantSummary)
+	}
+	if len(completedVer.TailoredContent.Experiences) != 1 {
+		t.Fatalf("expected 1 tailored experience, got %d", len(completedVer.TailoredContent.Experiences))
+	}
+	gotExp := completedVer.TailoredContent.Experiences[0]
+	if gotExp.Company != realCompany {
+		t.Errorf("Experience.Company = %q, want %q", gotExp.Company, realCompany)
+	}
+	wantDuties := realName + " lideró entregas críticas en " + realCompany + "."
+	if gotExp.DutiesSummary != wantDuties {
+		t.Errorf("Experience.DutiesSummary = %q, want %q", gotExp.DutiesSummary, wantDuties)
+	}
+	if len(gotExp.Bullets) != 1 {
+		t.Fatalf("expected 1 tailored bullet, got %d", len(gotExp.Bullets))
+	}
+	wantBullet := "Diseñó arquitectura tolerante a fallos en " + realCompany + "."
+	if gotExp.Bullets[0].Text != wantBullet {
+		t.Errorf("Experience.Bullets[0].Text = %q, want %q", gotExp.Bullets[0].Text, wantBullet)
+	}
+
+	wantGapSummary := realName + " aporta liderazgo comprobado en " + realCompany + "."
+	if completedVer.GapReport.OverallMatchSummary != wantGapSummary {
+		t.Errorf("GapReport.OverallMatchSummary = %q, want %q", completedVer.GapReport.OverallMatchSummary, wantGapSummary)
+	}
+	wantGapRec := "Destacar proyectos de resiliencia ejecutados en " + realCompany + "."
+	if len(completedVer.GapReport.StrategicRecommendations) != 1 || completedVer.GapReport.StrategicRecommendations[0] != wantGapRec {
+		t.Errorf("GapReport.StrategicRecommendations = %+v, want [%q]", completedVer.GapReport.StrategicRecommendations, wantGapRec)
+	}
+
+	for _, rendered := range []struct {
+		name    string
+		content string
+	}{
+		{"HTMLOutput", completedVer.HTMLOutput},
+		{"MarkdownOutput", completedVer.MarkdownOutput},
+		{"PlainTextOutput", completedVer.PlainTextOutput},
+	} {
+		if strings.Contains(rendered.content, sanitizer.PlaceholderFullName) {
+			t.Errorf("%s retained placeholder %q", rendered.name, sanitizer.PlaceholderFullName)
+		}
+		if !strings.Contains(rendered.content, realCompany) {
+			t.Errorf("%s missing restored company %q", rendered.name, realCompany)
+		}
+		if !strings.Contains(rendered.content, wantBullet) {
+			t.Errorf("%s missing restored translated bullet %q", rendered.name, wantBullet)
+		}
+	}
+}
+
+func TestWorkerPool_TailoringPipeline_NameEmbeddedCompanyTranslatedNarrative(t *testing.T) {
+	ctx := context.Background()
+	realName := "Jane Doe"
+	realCompany := "Jane Doe Consulting"
+	env, consultExp, consultFact := setupNameEmbeddedCompanyEnv(ctx, t, realName, realCompany)
+
+	maskedCompany := sanitizer.PlaceholderFullName + " Consulting"
+	transportClient := &sanitizerPipelineClient{
+		resp: core.GenerationResponse{
+			TailoredContent: core.TailoredContent{
+				Summary: "Arquitecta principal en " + maskedCompany + " especializada en sistemas distribuidos.",
+				Experiences: []core.TailoredExperience{
+					{
+						SourceEntityID: consultExp.EffectiveShortID(),
+						Company:        maskedCompany,
+						RoleTitle:      "Arquitecta Principal",
+						StartDate:      core.NewDate(2020, 1, 1),
+						DutiesSummary:  sanitizer.PlaceholderFullName + " lideró entregas críticas en " + maskedCompany + ".",
+						Bullets: []core.TailoredBullet{
+							{
+								Text:          "Diseñó arquitectura tolerante a fallos en " + maskedCompany + ".",
+								SourceFactIDs: []string{consultFact.EffectiveShortID()},
+							},
+						},
+					},
+				},
+			},
+			GapReport: core.GapReport{
+				OverallMatchSummary: sanitizer.PlaceholderFullName + " aporta liderazgo comprobado en " + maskedCompany + ".",
+				StrategicRecommendations: []string{
+					"Destacar proyectos de resiliencia ejecutados en " + maskedCompany + ".",
+				},
+			},
+		},
+	}
+
+	completedVer, outboundWire := runSanitizerPipelineVersion(ctx, t, env, transportClient, "ver-name-embedded-company")
+	assertNameEmbeddedCompanyResult(t, completedVer, outboundWire, realName, realCompany, "jane.doe@example.org", "+1 (415) 555-0199")
 }

@@ -5,7 +5,7 @@ Tier 1: Global Writing Rules:
 Tier 2: Preset Formatting Instructions:
 {{if .PresetInstructions}}{{.PresetInstructions}}{{else}}None{{end}}
 {{- if and .TargetLanguage (ne .TargetLanguage "English")}}
-Target Output Language: {{.TargetLanguage}} (Translate all tailored narrative content into {{.TargetLanguage}} while preserving proper nouns, technical terms, and citation short IDs).
+Target Output Language: {{.TargetLanguage}} (Translate all tailored narrative content into {{.TargetLanguage}} while preserving proper nouns, technical terms, citation short IDs, and any bracketed uppercase PII placeholder tokens such as [FIELD_PLACEHOLDER] and [SOCIAL_*_PLACEHOLDER_N] verbatim — never translate, transliterate, reformat, alter casing, drop brackets from, or modify placeholder tokens, including inside company names or translated prose).
 {{- end}}
 
 Tier 3: Branch Target & Custom Instructions:
@@ -32,4 +32,4 @@ Excluded Entity IDs (Must Omit): {{if .ExcludedEntities}}{{.ExcludedEntities}}{{
 {{else}}{}
 {{end}}</main_profile_data>
 
-Produce a valid JSON object matching the required schema with top-level keys "tailored_content" (containing "summary", "skill_groups", "experiences", "projects", "education", "certifications") and "gap_report" (containing "overall_match_summary", "missing_requirements", and "strategic_recommendations"). Adhere strictly to the No Lies grounding rules. Output valid JSON only.
+Produce a valid JSON object matching the required schema with top-level keys "tailored_content" (containing "summary", "skill_groups", "experiences", "projects", "education", "certifications") and "gap_report" (containing "overall_match_summary", "missing_requirements", and "strategic_recommendations"). Adhere strictly to the No Lies grounding rules. Preserve any bracketed uppercase PII placeholder tokens (such as [FIELD_PLACEHOLDER] and [SOCIAL_*_PLACEHOLDER_N]) verbatim; never translate, transliterate, reformat, alter casing, drop brackets from, or modify them, including when embedded in company names or translated prose. Output valid JSON only.

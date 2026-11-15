@@ -468,7 +468,7 @@ type atsMatchPromptContext struct {
 
 // promptTagRegex matches internal prompt XML delimiter tags across all prompt templates
 // to prevent embedded tag smuggling from untrusted inputs.
-var promptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|raw_resume_text|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|instructions|json_schema_hints|grounding_and_provenance_rules|gap_analysis_guidelines|schema_and_tailoring_hints|language_and_localization_rules|target_context|main_profile_data|prior_active_version|response_schema|json_output_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
+var promptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|raw_resume_text|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|instructions|json_schema_hints|grounding_and_provenance_rules|gap_analysis_guidelines|schema_and_tailoring_hints|language_and_localization_rules|pii_placeholder_rules|target_context|main_profile_data|prior_active_version|response_schema|json_output_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
 
 // sanitizePromptValue strips matching outer wrapper tags and escapes embedded XML delimiter tags in untrusted text.
 func sanitizePromptValue(content, stripOuterTag string) string {

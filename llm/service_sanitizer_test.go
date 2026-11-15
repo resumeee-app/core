@@ -61,7 +61,7 @@ func TestService_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 		defaultModel: "gpt-4o",
 		tailoredResp: &core.GenerationResponse{
 			TailoredContent: core.TailoredContent{
-				Summary: "Results-driven engineer " + sanitizer.PlaceholderFullName + " reachable at " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". Portfolio: " + sanitizer.PlaceholderWebsite + ". Handle: candidate-social-1.",
+				Summary: "Results-driven engineer " + sanitizer.PlaceholderFullName + " reachable at " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". Portfolio: " + sanitizer.PlaceholderWebsite + ". Handle: " + sanitizer.PlaceholderSocialHandle(1) + ".",
 				Experiences: []core.TailoredExperience{
 					{
 						Company:       "Acme",
@@ -194,7 +194,7 @@ func TestService_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 	mockProv := &mockSanitizerClient{
 		name:         "openai",
 		defaultModel: "gpt-4o",
-		completeText: `{"gap_report":{"overall_match_summary":"` + sanitizer.PlaceholderFullName + ` demonstrates strong capability.","missing_requirements":[{"requirement":"Kubernetes","missing_area":"Cloud","clarifying_prompt":"Does ` + sanitizer.PlaceholderFullName + ` have experience?","recommended_action":"Review ` + sanitizer.PlaceholderFullName + `'s GitHub candidate-social-1"}]}}`,
+		completeText: `{"gap_report":{"overall_match_summary":"` + sanitizer.PlaceholderFullName + ` demonstrates strong capability.","missing_requirements":[{"requirement":"Kubernetes","missing_area":"Cloud","clarifying_prompt":"Does ` + sanitizer.PlaceholderFullName + ` have experience?","recommended_action":"Review ` + sanitizer.PlaceholderFullName + `'s GitHub ` + sanitizer.PlaceholderSocialHandle(1) + `"}]}}`,
 	}
 
 	reg := llm.NewRegistry()

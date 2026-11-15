@@ -483,8 +483,58 @@ func TestGeminiClient_Complete_Telemetry(t *testing.T) {
 				if resp.Usage != tc.wantUsage {
 					t.Errorf("Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
 				}
+				if strings.Contains(err.Error(), "invalid key") || strings.Contains(err.Error(), "quota exceeded") || strings.Contains(err.Error(), "boom") || strings.Contains(err.Error(), "safety") {
+					t.Errorf("expected gemini error string not to echo raw upstream body/message, got %q", err.Error())
+				}
 			})
 		}
+
+		t.Run("upstream error bodies containing PII never leak into error string", func(t *testing.T) {
+			const secretPII = "SENSITIVE_GEMINI_ECHO_PII_5599"
+			for _, tc := range []struct {
+				name        string
+				statusCode  int
+				contentType string
+				body        string
+				wantErr     error
+			}{
+				{
+					name:        "json error message redacted",
+					statusCode:  http.StatusBadRequest,
+					contentType: "application/json",
+					body:        `{"error":{"code":"invalid_argument","message":"` + secretPII + `"}}`,
+					wantErr:     llm.ErrBadRequest,
+				},
+				{
+					name:        "plain text 502 error body redacted",
+					statusCode:  http.StatusBadGateway,
+					contentType: "text/plain",
+					body:        "upstream proxy failed with " + secretPII,
+					wantErr:     llm.ErrUpstream,
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("Content-Type", tc.contentType)
+						w.WriteHeader(tc.statusCode)
+						_, _ = w.Write([]byte(tc.body))
+					}))
+					defer srv.Close()
+
+					client := gemini.New("test-key", gemini.WithBaseURL(srv.URL), gemini.WithHTTPClient(srv.Client()))
+					resp, err := client.Complete(context.Background(), llm.Request{UserPrompt: "hello"})
+					if !errors.Is(err, tc.wantErr) {
+						t.Fatalf("error = %v, want %v", err, tc.wantErr)
+					}
+					if strings.Contains(err.Error(), secretPII) {
+						t.Errorf("error string leaked upstream PII: %q", err.Error())
+					}
+					if resp == nil || !strings.Contains(resp.RawBody, secretPII) {
+						t.Errorf("expected RawBody to retain raw response for in-memory diagnostics, got %+v", resp)
+					}
+				})
+			}
+		})
 	})
 
 	t.Run("timeout and transport errors return non-nil telemetry with zero status", func(t *testing.T) {

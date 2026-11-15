@@ -356,6 +356,23 @@ func (r *Registry) resolveClient(req core.GenerationRequest) (Client, error) {
 	return r.Client(providerName)
 }
 
+// canonicalProviderName normalizes provider identifiers and collapses accepted aliases to their canonical name.
+func canonicalProviderName(name string) string {
+	norm := strings.ToLower(strings.TrimSpace(name))
+	if norm == ProviderCompatAlt {
+		return ProviderCompat
+	}
+	return norm
+}
+
+// resolvedRequestModel selects req.Model when non-blank, falling back to client or provider defaults.
+func resolvedRequestModel(client Client, req Request) string {
+	if model := strings.TrimSpace(req.Model); model != "" {
+		return model
+	}
+	return resolvedClientDefaultModel(client, client.Name())
+}
+
 // resolveModel resolves the target model using request override, branch override, registry default, or client default.
 func (r *Registry) resolveModel(req core.GenerationRequest, client Client) string {
 	if m := strings.TrimSpace(req.Model); m != "" {
@@ -364,7 +381,7 @@ func (r *Registry) resolveModel(req core.GenerationRequest, client Client) strin
 	if m := strings.TrimSpace(req.BranchContext.ModelOverride); m != "" {
 		return m
 	}
-	if defMod := r.DefaultModel(); defMod != "" && r.DefaultProvider() == client.Name() {
+	if defMod := r.DefaultModel(); defMod != "" && canonicalProviderName(r.DefaultProvider()) == canonicalProviderName(client.Name()) {
 		return defMod
 	}
 	return resolvedClientDefaultModel(client, client.Name())
@@ -403,10 +420,7 @@ func (r *Registry) sortedCanonicalProvidersLocked() []string {
 	providers := make([]string, 0, len(r.clients))
 	seen := make(map[string]bool, len(r.clients))
 	for name := range r.clients {
-		canonical := name
-		if canonical == ProviderCompatAlt {
-			canonical = ProviderCompat
-		}
+		canonical := canonicalProviderName(name)
 		if !seen[canonical] {
 			seen[canonical] = true
 			providers = append(providers, canonical)
@@ -458,10 +472,7 @@ func (r *Registry) Complete(ctx context.Context, client Client, operation string
 		return nil, ErrNoProviders
 	}
 
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		model = resolvedClientDefaultModel(client, client.Name())
-	}
+	model := resolvedRequestModel(client, req)
 	req.Model = model
 
 	if strings.TrimSpace(operation) == "" {
@@ -495,10 +506,7 @@ func (r *Registry) CompleteStructured(ctx context.Context, client Client, operat
 		return "", core.LLMTelemetry{}, ErrNoProviders
 	}
 
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		model = resolvedClientDefaultModel(client, client.Name())
-	}
+	model := resolvedRequestModel(client, req)
 	req.Model = model
 
 	// Strip transport-level schemas when the selected model requires inline prompt instructions instead.

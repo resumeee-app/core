@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	core "github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 	"github.com/resumeee-app/resumeee-core/llm/internal/httpx"
 )
@@ -44,6 +46,10 @@ func TestTransportUtilities_BoundsAndStatusError(t *testing.T) {
 	}
 	if err := httpx.CheckStatusError("openai", http.StatusTeapot, []byte("418")); err == nil {
 		t.Error("expected error for status 418")
+	}
+	const secretBody = "SENSITIVE_UPSTREAM_BODY_9911"
+	if err := httpx.CheckStatusError("openai", http.StatusBadRequest, []byte(secretBody)); err == nil || strings.Contains(err.Error(), secretBody) {
+		t.Errorf("expected CheckStatusError to redact upstream body from error string, got %v", err)
 	}
 
 	oversizedBody := strings.Repeat("A", 64)
@@ -252,4 +258,46 @@ func TestPostJSON_StatusAndErrorPreservation(t *testing.T) {
 			t.Fatalf("expected ErrUpstream with status 503 and empty body for nil Body, got (%q, %d, %v)", string(body), status, err)
 		}
 	})
+}
+
+type stubHTTPXClient struct {
+	body []byte
+}
+
+func (c *stubHTTPXClient) Name() string                           { return llm.ProviderOpenAI }
+func (c *stubHTTPXClient) DefaultModel() string                   { return "gpt-4o" }
+func (c *stubHTTPXClient) Models() []core.ModelOption             { return nil }
+func (c *stubHTTPXClient) SupportsStructuredOutput(_ string) bool { return true }
+func (c *stubHTTPXClient) Complete(_ context.Context, _ llm.Request) (*llm.Response, error) {
+	return &llm.Response{
+		RawBody:    string(c.body),
+		StatusCode: http.StatusBadRequest,
+	}, httpx.CheckStatusError(llm.ProviderOpenAI, http.StatusBadRequest, c.body)
+}
+
+func TestRegistry_Complete_RedactsHTTPXBodyFromLogs(t *testing.T) {
+	const secretPII = "SECRET_PROMPT_LEAK_TOKEN_7788"
+	body := []byte(`{"error":{"message":"echoed prompt: ` + secretPII + `"}}`)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	client := &stubHTTPXClient{body: body}
+	reg := llm.NewRegistry(llm.WithLogger(logger))
+	reg.Register(client)
+
+	_, _, err := reg.CompleteStructured(context.Background(), client, "GenerateGapAnalysis", llm.Request{
+		Model:        "gpt-4o",
+		SystemPrompt: "sys",
+		UserPrompt:   secretPII,
+	})
+	if !errors.Is(err, llm.ErrBadRequest) {
+		t.Fatalf("expected ErrBadRequest, got %v", err)
+	}
+	if strings.Contains(err.Error(), secretPII) {
+		t.Errorf("expected sanitized error without response body, got %q", err.Error())
+	}
+	if strings.Contains(logBuf.String(), secretPII) {
+		t.Errorf("structured logs leaked upstream error body:\n%s", logBuf.String())
+	}
 }

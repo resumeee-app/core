@@ -39,7 +39,7 @@ func (p *Pool) processPDFJob(ctx context.Context, task core.PDFParseJobTask) {
 		if p.logger != nil {
 			p.logger.Error("failed to update pdf job status to processing", "job_id", task.JobID, "err", err)
 		}
-		p.releaseJobQuota(ctx, task.ReservationID, err.Error(), core.LLMTelemetry{})
+		p.releaseJobQuota(ctx, task.ReservationID, "failed to update pdf job status to processing", core.LLMTelemetry{})
 		return
 	}
 	if p.resumeExtractor == nil {
@@ -70,7 +70,7 @@ func (p *Pool) processPDFJob(ctx context.Context, task core.PDFParseJobTask) {
 		if p.logger != nil {
 			p.logger.Error("failed to update pdf job status to completed", "job_id", task.JobID, "err", err)
 		}
-		p.releaseJobQuota(ctx, task.ReservationID, err.Error(), telemetry)
+		p.releaseJobQuota(ctx, task.ReservationID, "Failed to save extracted resume.", telemetry)
 		p.failPDFJob(ctx, task.JobID, "Failed to save extracted resume.")
 		return
 	}
@@ -92,7 +92,7 @@ func classifyPDFExtractionError(err error) string {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "Resume extraction timed out after 10 minutes. Please try again with a shorter document."
 	case errors.Is(err, core.ErrValidation):
-		return "Document validation failed during extraction: " + err.Error()
+		return "Document validation failed during extraction."
 	default:
 		return "Failed to extract resume from document. Please ensure the PDF contains valid text."
 	}

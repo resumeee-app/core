@@ -908,3 +908,261 @@ func runConcurrentTelemetryRace(
 		}
 	}
 }
+
+type strictContextQuotaManager struct {
+	inner branch.QuotaManager
+}
+
+func (m *strictContextQuotaManager) ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.inner.ReserveQuota(ctx, userID, op, estimatedTokens, dailyLimit, monthlyLimit)
+}
+
+func (m *strictContextQuotaManager) CommitUsage(ctx context.Context, reservationID string, telemetry core.LLMTelemetry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.inner.CommitUsage(ctx, reservationID, telemetry)
+}
+
+func (m *strictContextQuotaManager) ReleaseQuota(ctx context.Context, reservationID string, errMsg string, telemetry core.LLMTelemetry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.inner.ReleaseQuota(ctx, reservationID, errMsg, telemetry)
+}
+
+type cancelDuringGenerateGapStub struct {
+	cancel context.CancelFunc
+	resp   *core.GapAnalysisResponse
+	err    error
+}
+
+func (g *cancelDuringGenerateGapStub) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
+	return nil, nil
+}
+
+func (g *cancelDuringGenerateGapStub) GenerateGapAnalysis(_ context.Context, _ core.GenerationRequest) (*core.GapAnalysisResponse, error) {
+	g.cancel()
+	return g.resp, g.err
+}
+
+func (g *cancelDuringGenerateGapStub) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+	return nil, nil
+}
+
+type cancelDuringATSStub struct {
+	cancel  context.CancelFunc
+	atsResp *core.ATSSimulationResponse
+	atsErr  error
+}
+
+func (s *cancelDuringATSStub) GenerateTailoredResume(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
+	return nil, nil
+}
+
+func (s *cancelDuringATSStub) GenerateGapAnalysis(_ context.Context, _ core.GenerationRequest) (*core.GapAnalysisResponse, error) {
+	return nil, nil
+}
+
+func (s *cancelDuringATSStub) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
+	s.cancel()
+	return s.atsResp, s.atsErr
+}
+
+type cancelOnCreateVersionStore struct {
+	branch.Store
+	cancel context.CancelFunc
+	err    error
+}
+
+func (s *cancelOnCreateVersionStore) CreateVersion(_ context.Context, _ *core.BranchVersion) error {
+	s.cancel()
+	return s.err
+}
+
+type cancelOnEnqueue struct {
+	cancel context.CancelFunc
+	err    error
+}
+
+func (e *cancelOnEnqueue) Enqueue(_ core.GenerationJob) error {
+	e.cancel()
+	return e.err
+}
+
+func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
+	t.Run("AnalyzeGaps releases quota when LLM fails due to caller cancellation", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+		quotaStore := memory.New()
+		strictQuotas := &strictContextQuotaManager{inner: quotaStore}
+
+		reqCtx, cancel := context.WithCancel(context.Background())
+		stub := &cancelDuringGenerateGapStub{
+			cancel: cancel,
+			err:    core.AttachLLMTelemetry(context.Canceled, core.LLMTelemetry{Provider: "openai", Model: "gpt-4o"}),
+		}
+		svc := branch.New(branch.Config{
+			Branches:  env.branchRepo,
+			Profiles:  env.profileRepo,
+			Quotas:    strictQuotas,
+			Generator: stub,
+		})
+
+		if _, err := svc.AnalyzeGaps(reqCtx, env.defaultUser, env.branchID); !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+
+		records, err := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)
+		if err != nil || len(records) != 1 || records[0].Status != core.ReservationStatusReleased {
+			t.Fatalf("expected 1 released usage record despite canceled ctx, got records=%+v err=%v", records, err)
+		}
+	})
+
+	t.Run("AnalyzeGaps commits quota when caller ctx cancels right after LLM response", func(t *testing.T) {
+		env := setupTestBranchEnv(t, 10)
+		quotaStore := memory.New()
+		strictQuotas := &strictContextQuotaManager{inner: quotaStore}
+
+		reqCtx, cancel := context.WithCancel(context.Background())
+		stub := &cancelDuringGenerateGapStub{
+			cancel: cancel,
+			resp: &core.GapAnalysisResponse{
+				GapReport: core.GapReport{OverallMatchSummary: "Committed under canceled caller ctx"},
+				Telemetry: core.LLMTelemetry{
+					Provider:   "anthropic",
+					Model:      "claude-sonnet-4-5",
+					StatusCode: 200,
+					Usage:      core.TokenUsage{PromptTokens: 40, CompletionTokens: 10, TotalTokens: 50},
+				},
+			},
+		}
+		svc := branch.New(branch.Config{
+			Branches:  env.branchRepo,
+			Profiles:  env.profileRepo,
+			Quotas:    strictQuotas,
+			Generator: stub,
+		})
+
+		if _, err := svc.AnalyzeGaps(reqCtx, env.defaultUser, env.branchID); err != nil {
+			t.Fatalf("AnalyzeGaps failed: %v", err)
+		}
+
+		records, err := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)
+		if err != nil || len(records) != 1 || records[0].Status != core.ReservationStatusCommitted {
+			t.Fatalf("expected 1 committed usage record despite canceled ctx, got records=%+v err=%v", records, err)
+		}
+		if records[0].TotalTokens != 50 {
+			t.Errorf("TotalTokens = %d, want 50", records[0].TotalTokens)
+		}
+	})
+
+	t.Run("SimulateATS releases and commits quota under canceled caller context", func(t *testing.T) {
+		for _, shouldFail := range []bool{true, false} {
+			env := setupTestBranchEnv(t, 10)
+			seedCompletedATSVersion(context.Background(), t, env, "ver-ats-cancel")
+			quotaStore := memory.New()
+			strictQuotas := &strictContextQuotaManager{inner: quotaStore}
+
+			reqCtx, cancel := context.WithCancel(context.Background())
+			stub := &cancelDuringATSStub{cancel: cancel}
+			if shouldFail {
+				stub.atsErr = core.AttachLLMTelemetry(context.Canceled, core.LLMTelemetry{Provider: "gemini", Model: "gemini-2.5-pro"})
+			} else {
+				stub.atsResp = &core.ATSSimulationResponse{
+					Score: core.ATSScore{ExtractionConfidenceScore: 91, JobMatchingScore: 88, FormatUsed: string(core.OutputFormatMarkdown)},
+					Telemetry: core.LLMTelemetry{
+						Provider:   "gemini",
+						Model:      "gemini-2.5-pro",
+						StatusCode: 200,
+						Usage:      core.TokenUsage{PromptTokens: 90, CompletionTokens: 30},
+					},
+				}
+			}
+
+			svc := branch.New(branch.Config{
+				Branches:  env.branchRepo,
+				Profiles:  env.profileRepo,
+				Quotas:    strictQuotas,
+				Generator: stub,
+			})
+
+			_, err := svc.SimulateATS(reqCtx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{VersionID: "ver-ats-cancel"})
+			if shouldFail && !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected context.Canceled, got %v", err)
+			}
+			if !shouldFail && err != nil {
+				t.Fatalf("SimulateATS failed: %v", err)
+			}
+
+			records, listErr := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)
+			if listErr != nil || len(records) != 1 {
+				t.Fatalf("ListUsageRecords failed or wrong len: %v %+v", listErr, records)
+			}
+			wantStatus := core.ReservationStatusCommitted
+			if shouldFail {
+				wantStatus = core.ReservationStatusReleased
+			}
+			if records[0].Status != wantStatus {
+				t.Errorf("record status = %s, want %s", records[0].Status, wantStatus)
+			}
+		}
+	})
+
+	t.Run("GenerateVersion CreateVersion and Enqueue failures release quota under canceled ctx", func(t *testing.T) {
+		t.Run("CreateVersion failure", func(t *testing.T) {
+			env := setupTestBranchEnv(t, 10)
+			quotaStore := memory.New()
+			strictQuotas := &strictContextQuotaManager{inner: quotaStore}
+			reqCtx, cancel := context.WithCancel(context.Background())
+
+			svc := branch.New(branch.Config{
+				Branches: &cancelOnCreateVersionStore{
+					Store:  env.branchRepo,
+					cancel: cancel,
+					err:    errors.New("db connection dropped"),
+				},
+				Profiles:    env.profileRepo,
+				Quotas:      strictQuotas,
+				JobEnqueuer: newStubEnqueuer(10),
+			})
+
+			if _, err := svc.GenerateVersion(reqCtx, env.defaultUser, env.branchID); err == nil {
+				t.Fatal("expected error from CreateVersion")
+			}
+
+			records, err := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)
+			if err != nil || len(records) != 1 || records[0].Status != core.ReservationStatusReleased {
+				t.Fatalf("expected 1 released record, got records=%+v err=%v", records, err)
+			}
+		})
+
+		t.Run("Enqueue failure", func(t *testing.T) {
+			env := setupTestBranchEnv(t, 10)
+			quotaStore := memory.New()
+			strictQuotas := &strictContextQuotaManager{inner: quotaStore}
+			reqCtx, cancel := context.WithCancel(context.Background())
+
+			svc := branch.New(branch.Config{
+				Branches: env.branchRepo,
+				Profiles: env.profileRepo,
+				Quotas:   strictQuotas,
+				JobEnqueuer: &cancelOnEnqueue{
+					cancel: cancel,
+					err:    core.ErrQueueFull,
+				},
+			})
+
+			if _, err := svc.GenerateVersion(reqCtx, env.defaultUser, env.branchID); !errors.Is(err, core.ErrQueueFull) {
+				t.Fatalf("expected ErrQueueFull, got %v", err)
+			}
+
+			records, err := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)
+			if err != nil || len(records) != 1 || records[0].Status != core.ReservationStatusReleased {
+				t.Fatalf("expected 1 released record, got records=%+v err=%v", records, err)
+			}
+		})
+	})
+}

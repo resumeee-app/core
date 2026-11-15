@@ -15,9 +15,25 @@ type LLMTelemetry struct {
 	Usage      TokenUsage    `json:"usage"`
 }
 
-// Normalize backfills TotalTokens on Usage when component token counts are present.
+// Normalize clamps negative metadata and token counts to zero and backfills TotalTokens on Usage.
 func (t LLMTelemetry) Normalize() LLMTelemetry {
+	if t.StatusCode < 0 {
+		t.StatusCode = 0
+	}
+	if t.Latency < 0 {
+		t.Latency = 0
+	}
 	t.Usage = t.Usage.Normalize()
+	return t
+}
+
+// resolveResponseTelemetry returns normalized telemetry with Usage backfilled from usage when Telemetry.Usage is zero.
+func resolveResponseTelemetry(telemetry LLMTelemetry, usage TokenUsage) LLMTelemetry {
+	t := telemetry.Normalize()
+	normalizedUsage := usage.Normalize()
+	if t.Usage.IsZero() && !normalizedUsage.IsZero() {
+		t.Usage = normalizedUsage
+	}
 	return t
 }
 
@@ -77,13 +93,17 @@ func (e *LLMTelemetryError) Unwrap() error {
 	return e.Err
 }
 
-// AttachLLMTelemetry wraps err with telemetry when err is non-nil and telemetry is non-zero.
+// AttachLLMTelemetry wraps err with telemetry when err is non-nil and telemetry is non-zero,
+// avoiding duplicate wrapping when err already exposes equal outermost telemetry.
 func AttachLLMTelemetry(err error, telemetry LLMTelemetry) error {
 	if err == nil {
 		return nil
 	}
 	normalized := telemetry.Normalize()
 	if normalized.IsZero() {
+		return err
+	}
+	if existing, ok := LLMTelemetryFromError(err); ok && existing == normalized {
 		return err
 	}
 	return &LLMTelemetryError{

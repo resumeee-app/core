@@ -168,11 +168,7 @@ func (r *ATSSimulationResponse) EffectiveTelemetry() LLMTelemetry {
 	if r == nil {
 		return LLMTelemetry{}
 	}
-	t := r.Telemetry.Normalize()
-	if t.Usage.IsZero() && !r.Usage.IsZero() {
-		t.Usage = r.Usage.Normalize()
-	}
-	return t
+	return resolveResponseTelemetry(r.Telemetry, r.Usage)
 }
 
 // ATSExtractedExperience represents a work experience entry extracted by simulated ATS parsing.

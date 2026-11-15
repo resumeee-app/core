@@ -714,59 +714,87 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 }
 
 // TestPool_WorkerPanicRecovery verifies that a panic during job execution is caught,
-// records the version as failed with panic diagnostics, and does not crash the worker goroutine,
-// allowing subsequent enqueued jobs to process successfully.
+// transitions the version to failed with a sanitized message, releases any pending quota
+// reservation, and keeps the worker goroutine alive for subsequent jobs.
 func TestPool_WorkerPanicRecovery(t *testing.T) {
-	env := setupTestWorkerEnv(t)
-	env.llm.mu.Lock()
-	env.llm.shouldPanic = true
-	env.llm.panicVal = "unexpected runtime nil pointer during model invocation"
-	env.llm.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Single concurrency to prove the single worker survives the panic
+	store, err := memory.NewSeeded(ctx, "user-panic-1")
+	if err != nil {
+		t.Fatalf("NewSeeded failed: %v", err)
+	}
+	b := &core.Branch{
+		ID:            "branch-panic-1",
+		UserID:        "user-panic-1",
+		Name:          "Panic Recovery Branch",
+		TemplateSetID: core.TemplateStandardCleanID,
+	}
+	if err := store.CreateBranch(ctx, b); err != nil {
+		t.Fatalf("CreateBranch failed: %v", err)
+	}
+
+	mockLLMClient := &mockLLM{
+		shouldPanic: true,
+		panicVal:    "unexpected runtime nil pointer during model invocation",
+	}
+
+	// Single concurrency to prove the single worker survives the panic.
 	pool := worker.New(worker.Config{
 		Concurrency: 1,
 		QueueSize:   5,
-		Branches:    env.branchRepo,
-		Profiles:    env.profileRepo,
-		Presets:     env.presetRepo,
-		Templates:   env.templateRepo,
-		Generator:   env.llm,
-		Validator:   env.validator,
-		Renderer:    env.renderer,
+		Branches:    store,
+		Profiles:    store,
+		Presets:     store,
+		Templates:   store,
+		Quotas:      store,
+		Generator:   mockLLMClient,
+		Validator:   provenance.New(),
+		Renderer:    renderer.New(),
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	pool.Start(ctx)
 	defer pool.Stop()
 
-	// 1. Enqueue job that panics
+	recPanic, err := store.ReserveQuota(ctx, "user-panic-1", core.OperationResumeTailoring, 2000, 50, 100000)
+	if err != nil {
+		t.Fatalf("ReserveQuota failed: %v", err)
+	}
+
+	// 1. Enqueue job that panics with an active reservation.
 	verPanic := &core.BranchVersion{
 		ID:                "ver-panic-1",
-		BranchID:          env.branchID,
+		BranchID:          b.ID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
-	if err := env.branchRepo.CreateVersion(ctx, verPanic); err != nil {
+	if err := store.CreateVersion(ctx, verPanic); err != nil {
 		t.Fatalf("failed to create panic version: %v", err)
 	}
 
-	if err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verPanic.ID}); err != nil {
+	if err := pool.Enqueue(core.GenerationJob{
+		UserID:        "user-panic-1",
+		BranchID:      b.ID,
+		VersionID:     verPanic.ID,
+		ReservationID: recPanic.ID,
+	}); err != nil {
 		t.Fatalf("failed to enqueue panic job: %v", err)
 	}
 
-	// Wait for panic version to fail
+	// Wait for panic version to fail.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		v, err := env.branchRepo.Version(ctx, env.branchID, verPanic.ID)
+		v, err := store.Version(ctx, b.ID, verPanic.ID)
 		if err != nil {
 			t.Fatalf("failed to get panic version: %v", err)
 		}
 		if v.Status == core.VersionStatusFailed {
 			if v.ErrorMessage == "" {
 				t.Errorf("expected non-empty error message on panic failure")
+			}
+			if strings.Contains(v.ErrorMessage, "unexpected runtime nil pointer") {
+				t.Errorf("expected sanitized error message without raw panic payload, got %q", v.ErrorMessage)
 			}
 			break
 		}
@@ -776,31 +804,56 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// 2. Clear panic condition and enqueue a second job to prove worker survived
-	env.llm.mu.Lock()
-	env.llm.shouldPanic = false
-	env.llm.panicVal = nil
-	env.llm.mu.Unlock()
+	// Verify the quota reservation was released and monthly/daily counters refunded.
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		recs, err := store.ListUsageRecords(ctx, "user-panic-1", 10)
+		if err != nil {
+			t.Fatalf("ListUsageRecords failed: %v", err)
+		}
+		if len(recs) == 1 && recs[0].Status == core.ReservationStatusReleased {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for panic job reservation release, records=%+v", recs)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	quotaAfterPanic, err := store.Quota(ctx, "user-panic-1")
+	if err != nil {
+		t.Fatalf("Quota failed: %v", err)
+	}
+	if quotaAfterPanic.MonthlyTokensUsed != 0 || quotaAfterPanic.DailyRequestsUsed != 0 {
+		t.Errorf("expected refunded quota (0, 0) after panic, got (%d, %d)",
+			quotaAfterPanic.MonthlyTokensUsed, quotaAfterPanic.DailyRequestsUsed)
+	}
+
+	// 2. Clear panic condition and enqueue a second job to prove worker survived.
+	mockLLMClient.mu.Lock()
+	mockLLMClient.shouldPanic = false
+	mockLLMClient.panicVal = nil
+	mockLLMClient.mu.Unlock()
 
 	verSuccess := &core.BranchVersion{
 		ID:                "ver-success-2",
-		BranchID:          env.branchID,
+		BranchID:          b.ID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
-	if err := env.branchRepo.CreateVersion(ctx, verSuccess); err != nil {
+	if err := store.CreateVersion(ctx, verSuccess); err != nil {
 		t.Fatalf("failed to create success version: %v", err)
 	}
 
-	if err := pool.Enqueue(core.GenerationJob{UserID: env.defaultUser, BranchID: env.branchID, VersionID: verSuccess.ID}); err != nil {
+	if err := pool.Enqueue(core.GenerationJob{UserID: "user-panic-1", BranchID: b.ID, VersionID: verSuccess.ID}); err != nil {
 		t.Fatalf("failed to enqueue second job: %v", err)
 	}
 
-	// Wait for second job to complete successfully
+	// Wait for second job to complete successfully.
 	deadline = time.Now().Add(2 * time.Second)
 	for {
-		v, err := env.branchRepo.Version(ctx, env.branchID, verSuccess.ID)
+		v, err := store.Version(ctx, b.ID, verSuccess.ID)
 		if err != nil {
 			t.Fatalf("failed to get success version: %v", err)
 		}

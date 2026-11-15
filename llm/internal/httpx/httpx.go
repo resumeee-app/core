@@ -179,21 +179,22 @@ func WrapBoundedClientWithLimit(client *http.Client, limitBytes int64) *http.Cli
 	return &cloned
 }
 
-// CheckStatusError maps non-200 upstream HTTP status codes to canonical domain llm sentinel errors.
+// CheckStatusError maps non-200 upstream HTTP status codes to canonical domain llm sentinel errors
+// without embedding raw upstream response body payloads into returned error messages.
 func CheckStatusError(provider string, statusCode int, body []byte) error {
 	switch {
 	case statusCode == http.StatusOK:
 		return nil
 	case statusCode == http.StatusBadRequest:
-		return fmt.Errorf("%w: status 400: %s", llm.ErrBadRequest, string(body))
+		return fmt.Errorf("%w: %s api returned status 400 (%d bytes)", llm.ErrBadRequest, provider, len(body))
 	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
-		return fmt.Errorf("%w: status %d: %s", llm.ErrUnauthorized, statusCode, string(body))
+		return fmt.Errorf("%w: %s api returned status %d (%d bytes)", llm.ErrUnauthorized, provider, statusCode, len(body))
 	case statusCode == http.StatusTooManyRequests:
-		return fmt.Errorf("%w: status 429: %s", llm.ErrRateLimited, string(body))
+		return fmt.Errorf("%w: %s api returned status 429 (%d bytes)", llm.ErrRateLimited, provider, len(body))
 	case statusCode >= http.StatusInternalServerError:
-		return fmt.Errorf("%w: status %d: %s", llm.ErrUpstream, statusCode, string(body))
+		return fmt.Errorf("%w: %s api returned status %d (%d bytes)", llm.ErrUpstream, provider, statusCode, len(body))
 	default:
-		return fmt.Errorf("%s api returned status %d: %s", provider, statusCode, string(body))
+		return fmt.Errorf("%s api returned status %d (%d bytes)", provider, statusCode, len(body))
 	}
 }
 

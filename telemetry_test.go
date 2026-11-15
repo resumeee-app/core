@@ -48,6 +48,25 @@ func TestTokenUsage_NormalizeAddAndWithFallback(t *testing.T) {
 			wantFB:   core.TokenUsage{TotalTokens: 500},
 			wantZero: true,
 		},
+		{
+			name:     "negative token counts clamp to zero and accept fallback",
+			usage:    core.TokenUsage{PromptTokens: -10, CompletionTokens: -5, TotalTokens: -20},
+			other:    core.TokenUsage{PromptTokens: 15, CompletionTokens: 5},
+			fallback: 500,
+			wantNorm: core.TokenUsage{},
+			wantSum:  core.TokenUsage{PromptTokens: 15, CompletionTokens: 5, TotalTokens: 20},
+			wantFB:   core.TokenUsage{TotalTokens: 500},
+			wantZero: true,
+		},
+		{
+			name:     "negative prompt token clamps without altering valid completion tokens",
+			usage:    core.TokenUsage{PromptTokens: -10, CompletionTokens: 30, TotalTokens: -1},
+			other:    core.TokenUsage{PromptTokens: -5, CompletionTokens: 10},
+			fallback: 500,
+			wantNorm: core.TokenUsage{PromptTokens: 0, CompletionTokens: 30, TotalTokens: 30},
+			wantSum:  core.TokenUsage{PromptTokens: 0, CompletionTokens: 40, TotalTokens: 40},
+			wantFB:   core.TokenUsage{PromptTokens: 0, CompletionTokens: 30, TotalTokens: 30},
+		},
 	}
 
 	for _, tc := range cases {
@@ -65,6 +84,16 @@ func TestTokenUsage_NormalizeAddAndWithFallback(t *testing.T) {
 				t.Errorf("WithFallback() = %+v, want %+v", got, tc.wantFB)
 			}
 		})
+	}
+
+	negTel := core.LLMTelemetry{
+		Provider:   "openai",
+		StatusCode: -1,
+		Latency:    -50 * time.Millisecond,
+		Usage:      core.TokenUsage{PromptTokens: -3, TotalTokens: -9},
+	}.Normalize()
+	if negTel.StatusCode != 0 || negTel.Latency != 0 || negTel.Usage != (core.TokenUsage{}) {
+		t.Errorf("expected negative telemetry fields clamped to zero, got %+v", negTel)
 	}
 }
 
@@ -117,6 +146,9 @@ func TestLLMTelemetry_MergeAndErrorChain(t *testing.T) {
 	}
 
 	wrapped := fmt.Errorf("stage failed: %w", core.AttachLLMTelemetry(baseErr, merged))
+	if dup := core.AttachLLMTelemetry(wrapped, merged); dup != wrapped {
+		t.Errorf("expected AttachLLMTelemetry with identical outermost telemetry not to re-wrap error")
+	}
 	if !errors.Is(wrapped, baseErr) {
 		t.Fatalf("expected wrapped error to match baseErr")
 	}

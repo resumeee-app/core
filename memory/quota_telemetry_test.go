@@ -182,3 +182,76 @@ func TestMemoryQuotaStore_ConcurrentTelemetryRace(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestMemoryQuotaStore_NegativeTelemetryClamped(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	userID := "user-neg-clamp"
+
+	// Establish prior positive monthly token consumption.
+	seedRec, err := store.ReserveQuota(ctx, userID, core.OperationGapAnalysis, 500, 10, 10000)
+	if err != nil {
+		t.Fatalf("seed ReserveQuota failed: %v", err)
+	}
+	if err := store.CommitUsage(ctx, seedRec.ID, core.LLMTelemetry{
+		Provider:   "openai",
+		Model:      "gpt-4o",
+		StatusCode: 200,
+		Usage:      core.TokenUsage{TotalTokens: 400},
+	}); err != nil {
+		t.Fatalf("seed CommitUsage failed: %v", err)
+	}
+
+	// Commit with negative token counts, negative status code, and negative latency.
+	recCommit, err := store.ReserveQuota(ctx, userID, core.OperationGapAnalysis, 300, 10, 10000)
+	if err != nil {
+		t.Fatalf("ReserveQuota for negative commit failed: %v", err)
+	}
+	if err := store.CommitUsage(ctx, recCommit.ID, core.LLMTelemetry{
+		Provider:   "openai",
+		Model:      "gpt-4o",
+		StatusCode: -500,
+		Latency:    -25 * time.Millisecond,
+		Usage: core.TokenUsage{
+			PromptTokens:     -150,
+			CompletionTokens: -50,
+			TotalTokens:      -200,
+		},
+	}); err != nil {
+		t.Fatalf("CommitUsage failed: %v", err)
+	}
+
+	// Negative committed tokens must clamp to 0 (never lowering prior 400 monthly tokens).
+	quotaAfterCommit, err := store.Quota(ctx, userID)
+	if err != nil {
+		t.Fatalf("Quota failed: %v", err)
+	}
+	if quotaAfterCommit.MonthlyTokensUsed != 400 {
+		t.Errorf("MonthlyTokensUsed after clamped commit = %d, want 400", quotaAfterCommit.MonthlyTokensUsed)
+	}
+
+	// Release with negative token counts must also record zeros cleanly.
+	recRelease, err := store.ReserveQuota(ctx, userID, core.OperationGapAnalysis, 200, 10, 10000)
+	if err != nil {
+		t.Fatalf("ReserveQuota for negative release failed: %v", err)
+	}
+	if err := store.ReleaseQuota(ctx, recRelease.ID, "upstream error", core.LLMTelemetry{
+		Provider:   "gemini",
+		Model:      "gemini-2.5-flash",
+		StatusCode: -1,
+		Latency:    -10 * time.Millisecond,
+		Usage:      core.TokenUsage{PromptTokens: -10, CompletionTokens: -5, TotalTokens: -15},
+	}); err != nil {
+		t.Fatalf("ReleaseQuota failed: %v", err)
+	}
+
+	records, err := store.ListUsageRecords(ctx, userID, 10)
+	if err != nil {
+		t.Fatalf("ListUsageRecords failed: %v", err)
+	}
+	for _, r := range records {
+		if r.StatusCode < 0 || r.Latency < 0 || r.PromptTokens < 0 || r.CompletionTokens < 0 || r.TotalTokens < 0 {
+			t.Errorf("found negative telemetry/usage persisted on record %s: %+v", r.ID, r)
+		}
+	}
+}

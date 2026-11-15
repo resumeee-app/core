@@ -324,24 +324,28 @@ func TestLLMLogging_DefensiveNilSafety(t *testing.T) {
 	if trace == nil {
 		t.Fatal("expected non-nil llmTrace")
 	}
-	logLLMResponse(ctx, nil, trace, 200, nil)
+	logLLMResponseTelemetry(ctx, nil, trace, 0, &Response{StatusCode: 200, Latency: 15 * time.Millisecond}, nil)
 
-	// Nil trace emits zero-valued metadata safely without panicking.
+	// Nil trace emits zero-valued metadata when latency and Response are also nil.
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	logLLMResponse(ctx, logger, nil, 502, errors.New("gateway timeout"))
+	logLLMResponseTelemetry(ctx, logger, nil, 0, nil, errors.New("gateway timeout"))
+	logLLMResponseTelemetry(ctx, logger, nil, 0, &Response{StatusCode: 502, Latency: 12 * time.Millisecond}, errors.New("gateway timeout"))
 
 	records := parseLogs(t, logBuf.String())
-	if len(records) != 1 {
-		t.Fatalf("expected 1 log record for nil trace response, got %d", len(records))
+	if len(records) != 2 {
+		t.Fatalf("expected 2 log records for nil trace responses, got %d", len(records))
 	}
-	if records[0].StatusCode == nil || *records[0].StatusCode != 502 {
-		t.Errorf("expected status_code 502, got %v", records[0].StatusCode)
+	if records[0].StatusCode == nil || *records[0].StatusCode != 0 || records[0].DurationMS == nil || *records[0].DurationMS != 0 {
+		t.Errorf("expected zero status/duration for nil trace + nil response, got %+v", records[0])
 	}
-	if records[0].DurationMS == nil || *records[0].DurationMS != 0 {
-		t.Errorf("expected duration_ms 0 for nil trace, got %v", records[0].DurationMS)
+	if records[1].StatusCode == nil || *records[1].StatusCode != 502 {
+		t.Errorf("expected status_code 502, got %v", records[1].StatusCode)
 	}
-	if records[0].Error != "gateway timeout" {
-		t.Errorf("expected error 'gateway timeout', got %q", records[0].Error)
+	if records[1].DurationMS == nil || *records[1].DurationMS != 12 {
+		t.Errorf("expected duration_ms 12 from Response.Latency, got %v", records[1].DurationMS)
+	}
+	if records[1].Error != "gateway timeout" {
+		t.Errorf("expected error 'gateway timeout', got %q", records[1].Error)
 	}
 }

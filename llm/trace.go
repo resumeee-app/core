@@ -3,8 +3,12 @@ package llm
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 )
+
+// maxTraceErrorRunes bounds the sanitized error summary emitted to structured logs.
+const maxTraceErrorRunes = 256
 
 // llmTrace coordinates in-flight timing and request metadata between request dispatch and response receipt.
 type llmTrace struct {
@@ -41,11 +45,6 @@ func logLLMRequest(ctx context.Context, logger *slog.Logger, provider, model, op
 	}
 }
 
-// logLLMResponse emits an info-level structured log record upon receiving a response or error from an LLM provider.
-func logLLMResponse(ctx context.Context, logger *slog.Logger, trace *llmTrace, statusCode int, err error) {
-	logLLMResponseRecord(ctx, logger, trace, trace.elapsed(), statusCode, err)
-}
-
 // logLLMResponseTelemetry emits a structured response log record using measured latency and response metadata.
 func logLLMResponseTelemetry(ctx context.Context, logger *slog.Logger, trace *llmTrace, latency time.Duration, resp *Response, err error) {
 	var statusCode int
@@ -59,6 +58,19 @@ func logLLMResponseTelemetry(ctx context.Context, logger *slog.Logger, trace *ll
 		latency = trace.elapsed()
 	}
 	logLLMResponseRecord(ctx, logger, trace, latency, statusCode, err)
+}
+
+// formatTraceError flattens whitespace and bounds error text before writing structured trace logs.
+func formatTraceError(err error) string {
+	if err == nil {
+		return ""
+	}
+	clean := strings.Join(strings.Fields(err.Error()), " ")
+	runes := []rune(clean)
+	if len(runes) > maxTraceErrorRunes {
+		return string(runes[:maxTraceErrorRunes]) + "..."
+	}
+	return clean
 }
 
 // logLLMResponseRecord writes the canonical structured response log entry without leaking prompt or body payloads.
@@ -86,7 +98,7 @@ func logLLMResponseRecord(ctx context.Context, logger *slog.Logger, trace *llmTr
 		slog.Int("status_code", statusCode),
 	}
 	if err != nil {
-		attrs = append(attrs, slog.String("error", err.Error()))
+		attrs = append(attrs, slog.String("error", formatTraceError(err)))
 	}
 	logger.LogAttrs(ctx, slog.LevelInfo, "received LLM response", attrs...)
 }

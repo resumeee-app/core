@@ -258,18 +258,12 @@ func interactionStatusCode(res *operations.CreateInteractionResponse) int {
 			return httpRes.StatusCode
 		}
 	}
-	return http.StatusOK
+	return 0
 }
 
-// formatInteractionFailure builds a concise failure summary from an unsuccessful interaction.
+// formatInteractionFailure builds a safe status summary from an unsuccessful interaction without echoing body payloads.
 func formatInteractionFailure(inter *interactions.Interaction) string {
-	detail := string(inter.Status)
-	if len(inter.Errors) > 0 && inter.Errors[0].Message != nil {
-		if msg := strings.TrimSpace(*inter.Errors[0].Message); msg != "" {
-			detail = fmt.Sprintf("%s: %s", inter.Status, msg)
-		}
-	}
-	return detail
+	return string(inter.Status)
 }
 
 // extractInteractionUsage reads token counts from inter and backfills TotalTokens when omitted.
@@ -311,44 +305,42 @@ func mapThinkingLevel(model, level string) *interactions.ThinkingLevel {
 	}
 }
 
-// mapSDKError converts GenAI SDK error types into canonical llm sentinel errors with HTTP metadata.
+// mapSDKError converts GenAI SDK error types into canonical llm sentinel errors without leaking upstream response bodies.
 func mapSDKError(err error) (*llm.Response, error) {
 	var clientErr *apierrors.CreateInteractionClientError
 	if errors.As(err, &clientErr) {
 		statusCode := httpStatusFromMeta(clientErr.HTTPMeta.GetResponse(), http.StatusBadRequest)
-		msg := derefString(clientErr.Error_.Message)
 		rawBody := clientErr.Error()
-		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, formatErrorMessage(statusCode, msg, rawBody)
+		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, mapCleanError(statusCode, len(rawBody))
 	}
 
 	var srvErr *apierrors.CreateInteractionServerError
 	if errors.As(err, &srvErr) {
 		statusCode := httpStatusFromMeta(srvErr.HTTPMeta.GetResponse(), http.StatusInternalServerError)
-		msg := derefString(srvErr.Error_.Message)
 		rawBody := srvErr.Error()
-		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, formatErrorMessage(statusCode, msg, rawBody)
+		return &llm.Response{RawBody: rawBody, StatusCode: statusCode}, mapCleanError(statusCode, len(rawBody))
 	}
 
 	var valErr *apierrors.ResponseValidationError
 	if errors.As(err, &valErr) {
-		return mapValidationError(valErr.StatusCode, valErr.Body, valErr)
+		return mapValidationError(valErr.StatusCode, valErr.Body)
 	}
 
 	var apiErr *apierrors.APIError
 	if errors.As(err, &apiErr) {
 		if apiErr.StatusCode == http.StatusOK {
 			return &llm.Response{RawBody: apiErr.Body, StatusCode: http.StatusOK},
-				fmt.Errorf("%w: unexpected gemini response: %v", llm.ErrInvalidResponse, apiErr)
+				fmt.Errorf("%w: unexpected gemini response (status 200, %d bytes)", llm.ErrInvalidResponse, len(apiErr.Body))
 		}
 		return &llm.Response{RawBody: apiErr.Body, StatusCode: apiErr.StatusCode},
-			parseErrorBody(apiErr.StatusCode, []byte(apiErr.Body))
+			mapCleanError(apiErr.StatusCode, len(apiErr.Body))
 	}
 
 	errText := err.Error()
 	if strings.Contains(errText, "error unmarshaling json response body") ||
 		strings.Contains(errText, "error unmarshalling json response body") {
 		return &llm.Response{StatusCode: http.StatusOK},
-			fmt.Errorf("%w: malformed gemini response: %v", llm.ErrInvalidResponse, err)
+			fmt.Errorf("%w: malformed gemini response json", llm.ErrInvalidResponse)
 	}
 
 	return &llm.Response{}, fmt.Errorf("gemini interactions request failed: %w", err)
@@ -362,96 +354,28 @@ func httpStatusFromMeta(resp *http.Response, fallbackStatus int) int {
 	return fallbackStatus
 }
 
-// derefString safely dereferences an optional string pointer.
-func derefString(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-
-// mapValidationError maps SDK response-validation failures to ErrInvalidResponse or HTTP errors.
-func mapValidationError(statusCode int, body string, cause error) (*llm.Response, error) {
+// mapValidationError maps SDK response-validation failures to ErrInvalidResponse or sanitized HTTP errors.
+func mapValidationError(statusCode int, body string) (*llm.Response, error) {
 	if statusCode == http.StatusOK || statusCode == 0 {
 		return &llm.Response{RawBody: body, StatusCode: http.StatusOK},
-			fmt.Errorf("%w: malformed gemini response: %v", llm.ErrInvalidResponse, cause)
+			fmt.Errorf("%w: malformed gemini response (status 200, %d bytes)", llm.ErrInvalidResponse, len(body))
 	}
-	return &llm.Response{RawBody: body, StatusCode: statusCode}, parseErrorBody(statusCode, []byte(body))
+	return &llm.Response{RawBody: body, StatusCode: statusCode}, mapCleanError(statusCode, len(body))
 }
 
-// formatErrorMessage formats a Gemini error payload, falling back to JSON body parsing when msg is blank.
-func formatErrorMessage(statusCode int, msg, fallbackRaw string) error {
-	if strings.TrimSpace(msg) != "" {
-		return mapCleanError(statusCode, dedupeErrorLines(msg))
-	}
-	return parseErrorBody(statusCode, []byte(fallbackRaw))
-}
-
-// parseErrorBody extracts the message from a JSON or plain-text Gemini error response body.
-func parseErrorBody(statusCode int, bodyBytes []byte) error {
-	raw := strings.TrimSpace(string(bodyBytes))
-	var msg string
-
-	if len(raw) > 0 {
-		var objErr struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := json.Unmarshal(bodyBytes, &objErr); err == nil && objErr.Error.Message != "" {
-			msg = objErr.Error.Message
-		} else {
-			var strErr struct {
-				Error string `json:"error"`
-			}
-			if err := json.Unmarshal(bodyBytes, &strErr); err == nil && strErr.Error != "" {
-				msg = strErr.Error
-			} else {
-				msg = raw
-			}
-		}
-	}
-
-	return mapCleanError(statusCode, dedupeErrorLines(msg))
-}
-
-// dedupeErrorLines removes duplicate non-empty lines produced by wrapped SDK error messages.
-func dedupeErrorLines(msg string) string {
-	if strings.TrimSpace(msg) == "" {
-		return ""
-	}
-	lines := strings.Split(msg, "\n")
-	var deduped []string
-	seen := make(map[string]bool)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !seen[trimmed] {
-			seen[trimmed] = true
-			deduped = append(deduped, trimmed)
-		}
-	}
-	if len(deduped) > 0 {
-		return strings.Join(deduped, "\n")
-	}
-	return strings.TrimSpace(msg)
-}
-
-// mapCleanError maps an HTTP status code and cleaned error message to canonical llm sentinel errors.
-func mapCleanError(statusCode int, cleanMsg string) error {
-	if cleanMsg == "" {
-		cleanMsg = fmt.Sprintf("gemini api returned status %d", statusCode)
-	}
+// mapCleanError maps an HTTP status code to canonical llm sentinel errors without leaking upstream body payloads.
+func mapCleanError(statusCode, bodyBytes int) error {
 	switch {
 	case statusCode == http.StatusBadRequest:
-		return fmt.Errorf("%w: %s", llm.ErrBadRequest, cleanMsg)
+		return fmt.Errorf("%w: gemini api returned status 400 (%d bytes)", llm.ErrBadRequest, bodyBytes)
 	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
-		return fmt.Errorf("%w: status %d: %s", llm.ErrUnauthorized, statusCode, cleanMsg)
+		return fmt.Errorf("%w: gemini api returned status %d (%d bytes)", llm.ErrUnauthorized, statusCode, bodyBytes)
 	case statusCode == http.StatusTooManyRequests:
-		return fmt.Errorf("%w: status 429: %s", llm.ErrRateLimited, cleanMsg)
+		return fmt.Errorf("%w: gemini api returned status 429 (%d bytes)", llm.ErrRateLimited, bodyBytes)
 	case statusCode >= http.StatusInternalServerError:
-		return fmt.Errorf("%w: status %d: %s", llm.ErrUpstream, statusCode, cleanMsg)
+		return fmt.Errorf("%w: gemini api returned status %d (%d bytes)", llm.ErrUpstream, statusCode, bodyBytes)
 	default:
-		return fmt.Errorf("gemini api returned status %d: %s", statusCode, cleanMsg)
+		return fmt.Errorf("gemini api returned status %d (%d bytes)", statusCode, bodyBytes)
 	}
 }
 

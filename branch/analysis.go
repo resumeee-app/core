@@ -10,7 +10,7 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// Quota token budgets reserved upfront and committed as fallbacks for analysis operations.
+// Quota token budgets, settlement timeouts, and error truncation limits for analysis operations.
 const (
 	// gapAnalysisEstimatedTokens is reserved before dispatching gap analysis to the LLM.
 	gapAnalysisEstimatedTokens = 1000
@@ -20,7 +20,35 @@ const (
 	atsSimulationEstimatedTokens = 1500
 	// atsSimulationFallbackTokens is committed when ATS simulation reports zero token usage.
 	atsSimulationFallbackTokens = 800
+	// quotaSettleTimeout bounds quota settlement writes when the caller context is already done.
+	quotaSettleTimeout = 5 * time.Second
+	// maxQuotaErrorMessageRunes bounds persisted failure diagnostics on released quota records.
+	maxQuotaErrorMessageRunes = 256
 )
+
+// detachedQuotaContext ensures quota settlement runs under an uncancelled bounded context when ctx is done.
+func detachedQuotaContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), quotaSettleTimeout)
+	}
+	if ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), quotaSettleTimeout)
+}
+
+// formatQuotaErrorMessage collapses line breaks and bounds failure error messages persisted on quota records.
+func formatQuotaErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	clean := strings.Join(strings.Fields(err.Error()), " ")
+	runes := []rune(clean)
+	if len(runes) > maxQuotaErrorMessageRunes {
+		return string(runes[:maxQuotaErrorMessageRunes]) + "..."
+	}
+	return clean
+}
 
 // reserveOperationQuota reserves quota for op and returns a completion callback to commit or release it.
 func (s *Service) reserveOperationQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, fallbackTokens int) (func(core.LLMTelemetry, error), error) {
@@ -41,14 +69,16 @@ func (s *Service) newQuotaFinalizer(ctx context.Context, rec *core.LLMUsageRecor
 			return
 		}
 		telemetry = core.ResolveTelemetry(telemetry, retErr)
+		quotaCtx, cancel := detachedQuotaContext(ctx)
+		defer cancel()
 		if retErr != nil {
-			if err := s.quotas.ReleaseQuota(ctx, rec.ID, retErr.Error(), telemetry); err != nil && s.logger != nil {
+			if err := s.quotas.ReleaseQuota(quotaCtx, rec.ID, formatQuotaErrorMessage(retErr), telemetry); err != nil && s.logger != nil {
 				s.logger.Error("failed to release quota reservation", "reservation_id", rec.ID, "err", err)
 			}
 			return
 		}
 		telemetry.Usage = telemetry.Usage.WithFallback(fallbackTokens)
-		if err := s.quotas.CommitUsage(ctx, rec.ID, telemetry); err != nil && s.logger != nil {
+		if err := s.quotas.CommitUsage(quotaCtx, rec.ID, telemetry); err != nil && s.logger != nil {
 			s.logger.Error("failed to commit quota usage", "reservation_id", rec.ID, "err", err)
 		}
 	}

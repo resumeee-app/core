@@ -42,13 +42,16 @@ func (p *Pool) processJob(ctx context.Context, job core.GenerationJob) {
 		if p.logger != nil {
 			p.logger.Error("failed to update version status to processing", "version_id", job.VersionID, "err", err)
 		}
-		p.releaseJobQuota(ctx, job.ReservationID, err.Error(), core.LLMTelemetry{})
+		p.releaseJobQuota(ctx, job.ReservationID, "failed to update version status to processing", core.LLMTelemetry{})
 		return
 	}
 
 	inputs, err := p.loadGenerationInputs(ctx, job)
 	if err != nil {
-		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, err.Error(), core.LLMTelemetry{})
+		if p.logger != nil {
+			p.logger.Error("failed to load generation inputs", "version_id", job.VersionID, "err", err)
+		}
+		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, "Failed to load inputs for resume generation.", core.LLMTelemetry{})
 		return
 	}
 
@@ -64,7 +67,10 @@ func (p *Pool) processJob(ctx context.Context, job core.GenerationJob) {
 	}
 
 	if err := p.persistCompletedVersion(ctx, job, inputs, resp, valRes, rendered, telemetry); err != nil {
-		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, err.Error(), telemetry)
+		if p.logger != nil {
+			p.logger.Error("failed to persist completed version", "version_id", job.VersionID, "err", err)
+		}
+		p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, "Failed to save generated resume version.", telemetry)
 		return
 	}
 

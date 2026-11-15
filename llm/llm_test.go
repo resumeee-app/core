@@ -854,3 +854,21 @@ func (p *unstructuredCustomClient) Complete(_ context.Context, req Request) (*Re
 		Usage:      core.TokenUsage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10},
 	}, nil
 }
+
+func TestRegistry_Resolve_CompatAliasDefaultModel(t *testing.T) {
+	reg := NewRegistry()
+	compatClient := &unstructuredCustomClient{name: ProviderCompat}
+	reg.Register(compatClient)
+	reg.SetDefault(ProviderCompatAlt, "custom-compat-alias-model")
+
+	client, model, err := reg.Resolve(core.GenerationRequest{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if client.Name() != ProviderCompat {
+		t.Errorf("resolved provider = %q, want %q", client.Name(), ProviderCompat)
+	}
+	if model != "custom-compat-alias-model" {
+		t.Errorf("resolved model = %q, want %q", model, "custom-compat-alias-model")
+	}
+}

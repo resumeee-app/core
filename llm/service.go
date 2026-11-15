@@ -73,25 +73,27 @@ func (s *Service) generateTailoredWithClient(ctx context.Context, client Client,
 	return parsed, nil
 }
 
-// parseTailoredGenerationResponse unmarshals a tailored resume payload and prioritizes transport usage metrics.
+// parseTailoredGenerationResponse unmarshals a tailored resume payload and attaches normalized transport usage.
 func parseTailoredGenerationResponse(rawText string, transportUsage core.TokenUsage) (*core.GenerationResponse, error) {
 	cleanJSON := ExtractJSON(rawText)
 	if strings.TrimSpace(cleanJSON) == "" {
 		return nil, fmt.Errorf("%w: failed to unmarshal generation response: empty JSON output", ErrInvalidResponse)
 	}
 
-	var parsed core.GenerationResponse
-	if err := json.Unmarshal([]byte(cleanJSON), &parsed); err != nil {
+	// Decode strictly into output content fields so untrusted model JSON cannot inject usage or telemetry.
+	var payload struct {
+		TailoredContent core.TailoredContent `json:"tailored_content"`
+		GapReport       core.GapReport       `json:"gap_report"`
+	}
+	if err := json.Unmarshal([]byte(cleanJSON), &payload); err != nil {
 		return nil, fmt.Errorf("%w: failed to unmarshal generation response: %v", ErrInvalidResponse, err)
 	}
 
-	normalizedTransport := transportUsage.Normalize()
-	if !normalizedTransport.IsZero() {
-		parsed.Usage = normalizedTransport
-	} else {
-		parsed.Usage = parsed.Usage.Normalize()
-	}
-	return &parsed, nil
+	return &core.GenerationResponse{
+		TailoredContent: payload.TailoredContent,
+		GapReport:       payload.GapReport,
+		Usage:           transportUsage.Normalize(),
+	}, nil
 }
 
 // GenerateGapAnalysis performs lightweight qualification gap evaluation before falling back

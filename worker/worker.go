@@ -11,7 +11,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -390,18 +389,18 @@ func (p *Pool) runJob(ctx context.Context, item pendingJob) {
 	}
 }
 
-// safeProcessJob executes a generation job with panic recovery so worker goroutines never terminate unhandled.
+// safeProcessJob executes a generation job with panic recovery so worker goroutines never terminate unhandled
+// and any pending quota reservation is released with a sanitized user-facing failure reason.
 func (p *Pool) safeProcessJob(ctx context.Context, job core.GenerationJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			errStr := fmt.Sprintf("panic recovered in worker: %v", r)
 			if p.logger != nil {
 				p.logger.Error("panic recovered during job execution",
 					"version_id", job.VersionID,
 					"panic", r,
 				)
 			}
-			p.failJob(ctx, job.VersionID, errStr)
+			p.failJobWithQuota(ctx, job.VersionID, job.ReservationID, "An unexpected internal error occurred during resume generation.", core.LLMTelemetry{})
 		}
 	}()
 

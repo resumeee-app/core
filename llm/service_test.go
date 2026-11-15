@@ -263,9 +263,22 @@ func TestService_GenerateTailoredResume_Telemetry(t *testing.T) {
 		t.Fatalf("marshal failed: %v", err)
 	}
 
-	bodyWithUnnormalizedUsage := copySampleResponse()
-	bodyWithUnnormalizedUsage.Usage = core.TokenUsage{PromptTokens: 60, CompletionTokens: 30}
-	rawUnnormUsage, err := json.Marshal(bodyWithUnnormalizedUsage)
+	bodyWithPositiveJSONUsage := copySampleResponse()
+	bodyWithPositiveJSONUsage.Usage = core.TokenUsage{PromptTokens: 60, CompletionTokens: 30}
+	rawPosUsage, err := json.Marshal(bodyWithPositiveJSONUsage)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	bodyWithSpoofedNegative := copySampleResponse()
+	bodyWithSpoofedNegative.Usage = core.TokenUsage{PromptTokens: -500, CompletionTokens: -200, TotalTokens: -700}
+	bodyWithSpoofedNegative.Telemetry = core.LLMTelemetry{
+		Provider:   "spoofed-provider",
+		Model:      "spoofed-model",
+		StatusCode: 500,
+		Usage:      core.TokenUsage{TotalTokens: -999},
+	}
+	rawSpoofedNegative, err := json.Marshal(bodyWithSpoofedNegative)
 	if err != nil {
 		t.Fatalf("marshal failed: %v", err)
 	}
@@ -293,17 +306,30 @@ func TestService_GenerateTailoredResume_Telemetry(t *testing.T) {
 			wantUsage:      core.TokenUsage{PromptTokens: 120, CompletionTokens: 80, TotalTokens: 200},
 		},
 		{
-			name: "zero transport usage falls back to normalized body JSON usage",
+			name: "zero transport usage ignores untrusted positive body JSON usage",
 			completeFn: func(_ context.Context, _ Request) (*Response, error) {
 				return &Response{
-					Text:       string(rawUnnormUsage),
+					Text:       string(rawPosUsage),
 					StatusCode: 200,
 					Latency:    14 * time.Millisecond,
 				}, nil
 			},
 			wantStatusCode: 200,
 			wantMinLatency: 14 * time.Millisecond,
-			wantUsage:      core.TokenUsage{PromptTokens: 60, CompletionTokens: 30, TotalTokens: 90},
+			wantUsage:      core.TokenUsage{},
+		},
+		{
+			name: "spoofed negative JSON usage and telemetry are ignored",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				return &Response{
+					Text:       string(rawSpoofedNegative),
+					StatusCode: 200,
+					Latency:    12 * time.Millisecond,
+				}, nil
+			},
+			wantStatusCode: 200,
+			wantMinLatency: 12 * time.Millisecond,
+			wantUsage:      core.TokenUsage{},
 		},
 		{
 			name: "HTTP 200 malformed JSON parse failure attaches transport telemetry to error",

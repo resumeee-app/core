@@ -108,18 +108,27 @@ type TokenUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// Normalize backfills TotalTokens from PromptTokens and CompletionTokens when TotalTokens is zero
-// and component token counts are present.
+// Normalize clamps negative token counts to zero and backfills TotalTokens from PromptTokens and CompletionTokens
+// when TotalTokens is zero and component token counts are present.
 func (u TokenUsage) Normalize() TokenUsage {
+	if u.PromptTokens < 0 {
+		u.PromptTokens = 0
+	}
+	if u.CompletionTokens < 0 {
+		u.CompletionTokens = 0
+	}
+	if u.TotalTokens < 0 {
+		u.TotalTokens = 0
+	}
 	if u.TotalTokens == 0 && (u.PromptTokens > 0 || u.CompletionTokens > 0) {
 		u.TotalTokens = u.PromptTokens + u.CompletionTokens
 	}
 	return u
 }
 
-// IsZero reports whether all token counts are zero.
+// IsZero reports whether all token counts are zero or negative.
 func (u TokenUsage) IsZero() bool {
-	return u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0
+	return u.PromptTokens <= 0 && u.CompletionTokens <= 0 && u.TotalTokens <= 0
 }
 
 // Add sums two TokenUsage values after normalizing missing TotalTokens on each operand.
@@ -169,11 +178,7 @@ func (r *GenerationResponse) EffectiveTelemetry() LLMTelemetry {
 	if r == nil {
 		return LLMTelemetry{}
 	}
-	t := r.Telemetry.Normalize()
-	if t.Usage.IsZero() && !r.Usage.IsZero() {
-		t.Usage = r.Usage.Normalize()
-	}
-	return t
+	return resolveResponseTelemetry(r.Telemetry, r.Usage)
 }
 
 // GapAnalysisResponse wraps structured gap analysis output, token usage, and provider call telemetry.
@@ -188,11 +193,7 @@ func (r *GapAnalysisResponse) EffectiveTelemetry() LLMTelemetry {
 	if r == nil {
 		return LLMTelemetry{}
 	}
-	t := r.Telemetry.Normalize()
-	if t.Usage.IsZero() && !r.Usage.IsZero() {
-		t.Usage = r.Usage.Normalize()
-	}
-	return t
+	return resolveResponseTelemetry(r.Telemetry, r.Usage)
 }
 
 // ValidationResult contains the sanitized tailored content and structured warnings.

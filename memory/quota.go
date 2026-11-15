@@ -75,9 +75,8 @@ func (s *Store) ReserveQuota(
 	return clone(record), nil
 }
 
-// applyUsageTelemetry normalizes and copies provider telemetry and token counters onto record.
-func applyUsageTelemetry(record *core.LLMUsageRecord, telemetry core.LLMTelemetry) core.LLMTelemetry {
-	normalized := telemetry.Normalize()
+// applyUsageTelemetry copies pre-normalized provider telemetry and token counters onto record.
+func applyUsageTelemetry(record *core.LLMUsageRecord, normalized core.LLMTelemetry) {
 	record.Provider = normalized.Provider
 	record.Model = normalized.Model
 	record.StatusCode = normalized.StatusCode
@@ -85,7 +84,6 @@ func applyUsageTelemetry(record *core.LLMUsageRecord, telemetry core.LLMTelemetr
 	record.PromptTokens = normalized.Usage.PromptTokens
 	record.CompletionTokens = normalized.Usage.CompletionTokens
 	record.TotalTokens = normalized.Usage.TotalTokens
-	return normalized
 }
 
 // CommitUsage reconciles estimated tokens against actual reported usage and telemetry for a reservation.

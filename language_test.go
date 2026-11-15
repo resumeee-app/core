@@ -134,11 +134,8 @@ func TestTailoringStrategy_DefaultLanguageOnSave(t *testing.T) {
 	preset := core.Preset{
 		Name: "Custom Strategy",
 	}
-	if err := preset.Normalize(); err != nil {
-		t.Fatalf("Normalize failed: %v", err)
-	}
-	if preset.Language != core.DefaultLanguage {
-		t.Fatalf("expected language %q, got %q", core.DefaultLanguage, preset.Language)
+	if got := preset.EffectiveLanguage(); got != core.DefaultLanguage {
+		t.Fatalf("expected effective language %q, got %q", core.DefaultLanguage, got)
 	}
 }
 

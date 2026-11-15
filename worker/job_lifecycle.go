@@ -9,16 +9,35 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// claimedJobDescriptor normalizes store lifecycle callbacks and metadata across claimed BranchVersion and PDFParseJob items.
+// claimedJobDescriptor normalizes lifecycle metadata for an active claimed core.Job.
 type claimedJobDescriptor struct {
-	kind          string
+	kind          core.JobKind
 	id            string
 	claimedBy     string
 	reservationID string
 	attemptCount  int
 	expiresAt     *time.Time
-	requeueFn     func(ctx context.Context, nextRetryAt time.Time, errMsg string) error
-	failFn        func(ctx context.Context, errMsg string) error
+}
+
+// jobDescriptor extracts normalized lifecycle metadata and ownership for job.
+func (p *Pool) jobDescriptor(job *core.Job, claimedBy string) claimedJobDescriptor {
+	if job == nil {
+		return claimedJobDescriptor{}
+	}
+	if claimedBy == "" {
+		claimedBy = job.ClaimedBy
+	}
+	if claimedBy == "" {
+		claimedBy = p.workerID
+	}
+	return claimedJobDescriptor{
+		kind:          job.Kind,
+		id:            job.ID,
+		claimedBy:     claimedBy,
+		reservationID: job.ReservationID,
+		attemptCount:  job.AttemptCount,
+		expiresAt:     job.ExpiresAt,
+	}
 }
 
 // isLeaseLossOrMissing reports whether err indicates the worker lost lease ownership or the target record no longer exists.
@@ -59,7 +78,7 @@ func (p *Pool) routeAttemptError(
 	errClass := core.ClassifyError(err)
 	userErrMsg := mapUserErr(err, errClass)
 
-	if errClass == core.ErrorClassTransient && job.requeueFn != nil {
+	if errClass == core.ErrorClassTransient && p.jobs != nil {
 		attempt := job.attemptCount
 		if attempt <= 0 {
 			attempt = 1
@@ -69,7 +88,7 @@ func (p *Pool) routeAttemptError(
 			nextRetryAt := p.now().Add(delay)
 			if job.expiresAt == nil || nextRetryAt.Before(*job.expiresAt) {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), p.cleanupDuration())
-				reqErr := job.requeueFn(cleanupCtx, nextRetryAt, userErrMsg)
+				reqErr := p.jobs.RequeueForRetry(cleanupCtx, job.id, job.claimedBy, nextRetryAt, userErrMsg)
 				cancel()
 
 				if reqErr == nil {
@@ -102,7 +121,7 @@ func (p *Pool) routeAttemptError(
 
 // failClaimedJob records terminal failure for a claimed job using a bounded detached context and optionally releases reserved quota.
 func (p *Pool) failClaimedJob(job claimedJobDescriptor, errMsg string, refundQuota bool, telemetry core.LLMTelemetry) {
-	if job.id == "" || job.failFn == nil {
+	if job.id == "" || p.jobs == nil {
 		return
 	}
 	if p.logger != nil {
@@ -118,7 +137,7 @@ func (p *Pool) failClaimedJob(job claimedJobDescriptor, errMsg string, refundQuo
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), p.cleanupDuration())
 	defer cancel()
 
-	if err := job.failFn(cleanupCtx, errMsg); err != nil {
+	if err := p.jobs.FailClaimed(cleanupCtx, job.id, job.claimedBy, errMsg); err != nil {
 		if p.logger != nil && !isLeaseLossOrMissing(err) {
 			p.logger.Error("failed to record claimed job failure in store",
 				"kind", job.kind,
@@ -159,15 +178,15 @@ func (p *Pool) releaseJobQuota(ctx context.Context, reservationID, reason string
 func (p *Pool) startLeaseHeartbeat(
 	parentCtx context.Context,
 	attemptCancel context.CancelFunc,
-	id string,
-	renewFn func(ctx context.Context, leaseExpiresAt time.Time) error,
-	kind string,
+	jobID string,
+	claimedBy string,
+	kind core.JobKind,
 ) func() {
 	interval := p.leaseRenewInterval
 	if interval <= 0 {
 		interval = p.leaseDuration / 3
 	}
-	if interval <= 0 || renewFn == nil {
+	if interval <= 0 || p.jobs == nil {
 		return func() {}
 	}
 
@@ -188,14 +207,14 @@ func (p *Pool) startLeaseHeartbeat(
 				return
 			case <-ticker.C:
 				renewCtx, cancel := context.WithTimeout(parentCtx, p.cleanupDuration())
-				err := renewFn(renewCtx, p.now().Add(p.leaseDuration))
+				err := p.jobs.RenewLease(renewCtx, jobID, claimedBy, p.now().Add(p.leaseDuration))
 				cancel()
 				if err != nil {
 					if isLeaseLossOrMissing(err) {
 						if p.logger != nil {
 							p.logger.Warn("lost worker lease during execution; cancelling attempt",
 								"kind", kind,
-								"id", id,
+								"id", jobID,
 								"worker_id", p.workerID,
 								"err", err,
 							)
@@ -208,7 +227,7 @@ func (p *Pool) startLeaseHeartbeat(
 					if p.logger != nil && parentCtx.Err() == nil {
 						p.logger.Warn("failed to renew worker lease",
 							"kind", kind,
-							"id", id,
+							"id", jobID,
 							"worker_id", p.workerID,
 							"err", err,
 						)

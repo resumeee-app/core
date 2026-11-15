@@ -209,13 +209,14 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 func TestPresetsAndBranches(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 
+	themeID := "tmpl-1"
 	preset := core.Preset{
 		ID:                 "preset-1",
 		UserID:             "user-1",
 		Name:               "1-Page Tech Resume",
 		Description:        "Ultra-concise engineering resume",
 		SystemInstructions: "Focus on metrics and active verbs.",
-		TemplateSetID:      "tmpl-1",
+		SuggestedThemeID:   &themeID,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
@@ -500,11 +501,11 @@ func TestMultiTenancyDomainModels(t *testing.T) {
 		t.Errorf("unexpected skill values: %+v", skill)
 	}
 
-	// 3. ResumeVersion with UserID
+	// 3. BranchVersion with UserID
 	version := core.BranchVersion{
 		ID:            "ver-1",
 		UserID:        "user-abc",
-		ResumeID:      "resume-1",
+		BranchID:      "resume-1",
 		VersionNumber: 1,
 		Status:        core.VersionStatusPending,
 	}
@@ -851,19 +852,19 @@ func TestSentinelsAndStatusHelpers(t *testing.T) {
 		}
 	}
 
-	pdfCases := []struct {
-		status       core.PDFParseJobStatus
+	jobCases := []struct {
+		status       core.JobStatus
 		wantTerminal bool
 	}{
-		{core.PDFParseJobStatusPending, false},
-		{core.PDFParseJobStatusProcessing, false},
-		{core.PDFParseJobStatusCompleted, true},
-		{core.PDFParseJobStatusFailed, true},
-		{core.PDFParseJobStatusCancelled, true},
+		{core.JobStatusPending, false},
+		{core.JobStatusProcessing, false},
+		{core.JobStatusCompleted, true},
+		{core.JobStatusFailed, true},
+		{core.JobStatusCancelled, true},
 	}
-	for _, tc := range pdfCases {
+	for _, tc := range jobCases {
 		if got := tc.status.IsTerminal(); got != tc.wantTerminal {
-			t.Errorf("PDFParseJobStatus(%q).IsTerminal() = %v, want %v", tc.status, got, tc.wantTerminal)
+			t.Errorf("JobStatus(%q).IsTerminal() = %v, want %v", tc.status, got, tc.wantTerminal)
 		}
 	}
 }
@@ -880,9 +881,7 @@ func TestBranch_GenerationOrActiveChanged(t *testing.T) {
 			TargetRole:             "Staff Engineer",
 			TargetCompany:          "Acme",
 			TargetRequirements:     "Go, PostgreSQL",
-			CustomDirectives:       "Keep concise",
 			BranchInstructions:     "Highlight systems work",
-			TailoringStrategyID:    strPtr("strategy-1"),
 			PresetID:               strPtr("preset-1"),
 			TemplateSetID:          core.TemplateStandardCleanID,
 			ProviderOverride:       "gemini",
@@ -890,6 +889,7 @@ func TestBranch_GenerationOrActiveChanged(t *testing.T) {
 			ReasoningLevel:         "medium",
 			PinnedEntityIDs:        []string{"exp-1"},
 			ExcludedEntityIDs:      []string{"proj-1"},
+			Epoch:                  1,
 			LastSyncedMainRevision: 2,
 		}
 	}
@@ -929,7 +929,6 @@ func TestBranch_GenerationOrActiveChanged(t *testing.T) {
 			right: func() *core.Branch {
 				b := baseBranch()
 				b.ActiveVersionID = strPtr("ver-1")
-				b.TailoringStrategyID = strPtr("strategy-1")
 				b.PresetID = strPtr("preset-1")
 				b.PinnedEntityIDs = []string{}
 				b.ExcludedEntityIDs = []string{}
@@ -945,6 +944,7 @@ func TestBranch_GenerationOrActiveChanged(t *testing.T) {
 				b.Name = "Renamed Branch"
 				b.GapReport = &core.GapReport{OverallMatchSummary: "Strong"}
 				b.ATSScore = &core.ATSScore{JobMatchingScore: 0.9}
+				b.Epoch = 99
 				b.LastSyncedMainRevision = 99
 				b.IsStale = true
 				b.CreatedAt = time.Unix(100, 0).UTC()
@@ -984,21 +984,9 @@ func TestBranch_GenerationOrActiveChanged(t *testing.T) {
 			want:  true,
 		},
 		{
-			name:  "CustomDirectives changed",
-			left:  baseBranch,
-			right: func() *core.Branch { b := baseBranch(); b.CustomDirectives = "Use metrics"; return b },
-			want:  true,
-		},
-		{
 			name:  "BranchInstructions changed",
 			left:  baseBranch,
 			right: func() *core.Branch { b := baseBranch(); b.BranchInstructions = "Focus on scale"; return b },
-			want:  true,
-		},
-		{
-			name:  "TailoringStrategyID changed",
-			left:  baseBranch,
-			right: func() *core.Branch { b := baseBranch(); b.TailoringStrategyID = strPtr("strategy-2"); return b },
 			want:  true,
 		},
 		{

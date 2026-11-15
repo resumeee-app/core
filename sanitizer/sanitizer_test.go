@@ -313,7 +313,6 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 			TargetCompany:      "Alice Walker Ventures",
 			TargetRequirements: "Looking for an engineer like Alice Walker (contact: alice.walker@example.org).",
 			BranchInstructions: "Emphasize Alice Walker's cloud background.",
-			CustomDirectives:   "Unused alias mentioning Alice Walker.",
 		},
 		PriorVersion: &core.TailoredContent{
 			Summary: "Prior version summary for Alice Walker.",
@@ -408,7 +407,6 @@ func TestSession_ObfuscateRequest_ScrubsProjectedAndSkipsNonLLMFields(t *testing
 		want string
 	}{
 		{"BranchContext.TargetCompany", obfReq.BranchContext.TargetCompany, "Alice Walker Ventures"},
-		{"BranchContext.CustomDirectives", obfReq.BranchContext.CustomDirectives, "Unused alias mentioning Alice Walker."},
 		{"PriorVersion.Education.Institution", obfReq.PriorVersion.Education[0].Institution, "MIT (Alice Walker)"},
 		{"PriorVersion.Education.Degree", obfReq.PriorVersion.Education[0].Degree, "M.S. (Alice Walker)"},
 		{"PriorVersion.Education.Field", obfReq.PriorVersion.Education[0].Field, "Systems (Alice Walker)"},

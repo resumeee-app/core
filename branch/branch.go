@@ -40,11 +40,11 @@ const (
 // Config defines the dependencies required to construct a branch Service.
 type Config struct {
 	Branches            Store
+	Jobs                JobStore
 	Profiles            ProfileReader
 	Presets             PresetReader
 	Templates           TemplateReader
 	Quotas              QuotaManager
-	JobEnqueuer         JobEnqueuer
 	JobNotifier         core.JobNotifier
 	Validator           ProvenanceValidator
 	Renderer            TemplateRenderer
@@ -62,11 +62,11 @@ type Config struct {
 // Service manages resume branch lifecycles, version generation, gap analysis, and ATS scoring.
 type Service struct {
 	branches            Store
+	jobs                JobStore
 	profiles            ProfileReader
 	presets             PresetReader
 	templates           TemplateReader
 	quotas              QuotaManager
-	jobEnqueuer         JobEnqueuer
 	jobNotifier         core.JobNotifier
 	validator           ProvenanceValidator
 	renderer            TemplateRenderer
@@ -112,11 +112,11 @@ func New(cfg Config) *Service {
 
 	return &Service{
 		branches:            cfg.Branches,
+		jobs:                cfg.Jobs,
 		profiles:            cfg.Profiles,
 		presets:             cfg.Presets,
 		templates:           cfg.Templates,
 		quotas:              cfg.Quotas,
-		jobEnqueuer:         cfg.JobEnqueuer,
 		jobNotifier:         cfg.JobNotifier,
 		validator:           cfg.Validator,
 		renderer:            cfg.Renderer,
@@ -141,17 +141,26 @@ func (s *Service) now() time.Time {
 	return time.Now().UTC()
 }
 
+// cleanupContext builds a bounded context that ignores caller cancellation for post-commit cleanup work.
+func (s *Service) cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := s.cleanupTimeout
+	if timeout <= 0 {
+		timeout = defaultCleanupTimeout
+	}
+	base := ctx
+	if base == nil {
+		base = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(base), timeout)
+}
+
 // releaseReservationWithDetachedContext refunds a single quota reservation using a bounded detached context
 // so caller context cancellation cannot leak reserved tenant quota.
 func (s *Service) releaseReservationWithDetachedContext(reservationID, reason string) {
 	if s.quotas == nil || reservationID == "" {
 		return
 	}
-	timeout := s.cleanupTimeout
-	if timeout <= 0 {
-		timeout = defaultCleanupTimeout
-	}
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	cleanupCtx, cancel := s.cleanupContext(context.Background())
 	defer cancel()
 	if err := s.quotas.ReleaseQuota(cleanupCtx, reservationID, reason, core.LLMTelemetry{}); err != nil && s.logger != nil {
 		s.logger.Warn("failed to release quota reservation", "reservation_id", reservationID, "reason", reason, "err", err)
@@ -174,7 +183,10 @@ func (s *Service) releaseReservationsWithDetachedContext(released []core.Release
 
 // supersedePendingVersions cancels queued pending versions on branchID and releases their quota reservations.
 func (s *Service) supersedePendingVersions(ctx context.Context, branchID, reason string) {
-	released, err := s.branches.SupersedePendingVersions(ctx, branchID, reason)
+	if s.jobs == nil {
+		return
+	}
+	released, err := s.jobs.SupersedeBranchTailor(ctx, branchID, reason)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Warn("failed to supersede pending versions", "branch_id", branchID, "reason", reason, "err", err)
@@ -186,7 +198,10 @@ func (s *Service) supersedePendingVersions(ctx context.Context, branchID, reason
 
 // abortBranchVersions cancels pending and processing versions on branchID and releases their quota reservations.
 func (s *Service) abortBranchVersions(ctx context.Context, branchID, reason string) error {
-	released, err := s.branches.AbortBranchVersions(ctx, branchID, reason)
+	if s.jobs == nil {
+		return nil
+	}
+	released, err := s.jobs.AbortBranchJobs(ctx, branchID, reason)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Warn("failed to abort branch versions", "branch_id", branchID, "reason", reason, "err", err)
@@ -205,21 +220,10 @@ func requireUserID(userID string) error {
 	return nil
 }
 
-// notifyJob wakes background workers via JobNotifier or falls back to JobEnqueuer without
-// failing an already-persisted pending version if the wakeup signal cannot be delivered.
-func (s *Service) notifyJob(job core.GenerationJob) {
+// notifyJob wakes background workers via JobNotifier without failing an already-persisted pending version.
+func (s *Service) notifyJob() {
 	if s.jobNotifier != nil {
 		s.jobNotifier.Notify()
-		return
-	}
-	if s.jobEnqueuer != nil {
-		if err := s.jobEnqueuer.Enqueue(job); err != nil && s.logger != nil {
-			s.logger.Warn("failed to notify worker pool of pending generation job",
-				"version_id", job.VersionID,
-				"branch_id", job.BranchID,
-				"err", err,
-			)
-		}
 	}
 }
 
@@ -235,9 +239,6 @@ func (s *Service) validateBranchReferences(ctx context.Context, branch *core.Bra
 		}
 	}
 	presetID := branch.PresetID
-	if presetID == nil && branch.TailoringStrategyID != nil {
-		presetID = branch.TailoringStrategyID
-	}
 	if s.presets != nil && presetID != nil && *presetID != "" {
 		preset, err := s.presets.Preset(ctx, branch.UserID, *presetID)
 		if err != nil {
@@ -465,12 +466,14 @@ func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.
 	if err := s.branches.UpdateBranch(ctx, branch); err != nil {
 		return nil, err
 	}
+	postCommitCtx, cancelPostCommit := s.cleanupContext(ctx)
+	defer cancelPostCommit()
 	if existing.GenerationOrActiveChanged(branch) {
-		_ = s.abortBranchVersions(ctx, branch.ID, "superseded by branch update")
+		_ = s.abortBranchVersions(postCommitCtx, branch.ID, "superseded by branch update")
 	} else {
-		s.supersedePendingVersions(ctx, branch.ID, "superseded by branch update")
+		s.supersedePendingVersions(postCommitCtx, branch.ID, "superseded by branch update")
 	}
-	return s.Branch(ctx, branch.UserID, branch.ID)
+	return s.Branch(postCommitCtx, branch.UserID, branch.ID)
 }
 
 // updateDefaultBranch enforces immutability on the default branch and re-renders if the template changed.

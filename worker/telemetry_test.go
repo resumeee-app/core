@@ -12,6 +12,7 @@ import (
 	"github.com/resumeee-app/resumeee-core/memory"
 	"github.com/resumeee-app/resumeee-core/provenance"
 	"github.com/resumeee-app/resumeee-core/renderer"
+	"github.com/resumeee-app/resumeee-core/store"
 	"github.com/resumeee-app/resumeee-core/worker"
 )
 
@@ -24,28 +25,28 @@ func (v *failingValidator) Validate(_ *core.TailoredContent, _ *core.MainProfile
 }
 
 type failingCompleteBranchStore struct {
-	worker.BranchStore
+	worker.JobStore
 	completeErr error
 }
 
-func (s *failingCompleteBranchStore) CompleteVersion(_ context.Context, _ *core.BranchVersion) error {
+func (s *failingCompleteBranchStore) CompleteBranchTailor(_ context.Context, _, _ string, _ *core.BranchVersion) error {
 	return s.completeErr
 }
 
 type failingCompletePDFStore struct {
-	worker.PDFJobStore
+	worker.JobStore
 	completeErr error
 }
 
-func (s *failingCompletePDFStore) CompleteClaimedJob(_ context.Context, _, _ string, _ *core.JSONResume) error {
+func (s *failingCompletePDFStore) CompletePDFParse(_ context.Context, _, _ string, _ *core.JSONResume) error {
 	return s.completeErr
 }
 
-func waitForVersionTerminal(ctx context.Context, t *testing.T, store core.BranchStore, branchID, versionID string) *core.BranchVersion {
+func waitForVersionTerminal(ctx context.Context, t *testing.T, brReader worker.BranchReader, branchID, versionID string) *core.BranchVersion {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		ver, err := store.Version(ctx, branchID, versionID)
+		ver, err := brReader.Version(ctx, branchID, versionID)
 		if err == nil && (ver.Status == core.VersionStatusCompleted || ver.Status == core.VersionStatusCompletedWithWarnings || ver.Status == core.VersionStatusFailed) {
 			return ver
 		}
@@ -56,12 +57,12 @@ func waitForVersionTerminal(ctx context.Context, t *testing.T, store core.Branch
 	}
 }
 
-func waitForPDFJobTerminal(ctx context.Context, t *testing.T, store core.PDFJobStore, userID, jobID string) *core.PDFParseJob {
+func waitForPDFJobTerminal(ctx context.Context, t *testing.T, jobs worker.JobStore, userID, jobID string) *core.Job {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		job, err := store.Job(ctx, userID, jobID)
-		if err == nil && (job.Status == core.PDFParseJobStatusCompleted || job.Status == core.PDFParseJobStatusFailed) {
+		job, err := jobs.Job(ctx, userID, jobID)
+		if err == nil && (job.Status == core.JobStatusCompleted || job.Status == core.JobStatusFailed) {
 			return job
 		}
 		if time.Now().After(deadline) {
@@ -71,11 +72,11 @@ func waitForPDFJobTerminal(ctx context.Context, t *testing.T, store core.PDFJobS
 	}
 }
 
-func waitForUsageSettled(ctx context.Context, t *testing.T, store core.QuotaStore, userID, reservationID string) core.LLMUsageRecord {
+func waitForUsageSettled(ctx context.Context, t *testing.T, quotas *store.Quotas, userID, reservationID string) core.LLMUsageRecord {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		records, err := store.ListUsageRecords(ctx, userID, 50)
+		records, err := quotas.ListUsageRecords(ctx, userID, 50)
 		if err == nil {
 			for _, rec := range records {
 				if rec.ID == reservationID && rec.Status != core.ReservationStatusPending {
@@ -87,6 +88,57 @@ func waitForUsageSettled(ctx context.Context, t *testing.T, store core.QuotaStor
 			t.Fatalf("timed out waiting for usage record %s to settle", reservationID)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func submitTelemetryTailorJob(ctx context.Context, t *testing.T, st *store.Store, userID, branchID, verID, reservationID, tmplID, provider, model string) {
+	t.Helper()
+	now := time.Now()
+	ver := &core.BranchVersion{
+		ID:                verID,
+		BranchID:          branchID,
+		UserID:            userID,
+		MainRevisionUsed:  1,
+		TemplateSetIDUsed: tmplID,
+		ProviderUsed:      provider,
+		ModelUsed:         model,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	job := &core.Job{
+		ID:            "job-" + verID,
+		Kind:          core.JobKindBranchTailor,
+		UserID:        userID,
+		ReservationID: reservationID,
+		Tailor: &core.BranchTailorSpec{
+			BranchID:  branchID,
+			VersionID: verID,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if _, err := st.Jobs().SubmitBranchTailor(ctx, job, ver, core.PendingJobOptions{}); err != nil {
+		t.Fatalf("SubmitBranchTailor failed: %v", err)
+	}
+}
+
+func submitTelemetryPDFJob(ctx context.Context, t *testing.T, st *store.Store, userID, jobID, rawText, provider, model, reservationID string) {
+	t.Helper()
+	now := time.Now()
+	if err := st.Jobs().SubmitPDFParse(ctx, &core.Job{
+		ID:            jobID,
+		Kind:          core.JobKindPDFParse,
+		UserID:        userID,
+		ReservationID: reservationID,
+		PDF: &core.PDFParseSpec{
+			RawText:  rawText,
+			Provider: provider,
+			Model:    model,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}, core.PendingJobOptions{}); err != nil {
+		t.Fatalf("SubmitPDFParse failed: %v", err)
 	}
 }
 
@@ -115,40 +167,28 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 	ctx := context.Background()
 
 	t.Run("empty branch overrides populate ProviderUsed and ModelUsed from resolved telemetry", func(t *testing.T) {
-		store, err := memory.NewSeeded(ctx, "user-tailor-tel-1")
+		st, err := memory.NewSeeded(ctx, "user-tailor-tel-1")
 		if err != nil {
 			t.Fatalf("NewSeeded failed: %v", err)
 		}
 
-		branch := &core.Branch{
+		br := &core.Branch{
 			ID:            "branch-empty-overrides",
 			UserID:        "user-tailor-tel-1",
 			Name:          "Backend Staff",
 			TemplateSetID: core.TemplateStandardCleanID,
 		}
-		if err := store.CreateBranch(ctx, branch); err != nil {
+		if err := st.Branches().CreateBranch(ctx, br); err != nil {
 			t.Fatalf("CreateBranch failed: %v", err)
 		}
 
-		rec, err := store.ReserveQuota(ctx, "user-tailor-tel-1", core.OperationResumeTailoring, 2000, 50, 100000)
+		rec, err := st.Quotas().ReserveQuota(ctx, "user-tailor-tel-1", core.OperationResumeTailoring, 2000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota failed: %v", err)
 		}
 
-		now := time.Now()
-		ver := &core.BranchVersion{
-			ID:                "ver-tel-1",
-			BranchID:          branch.ID,
-			UserID:            "user-tailor-tel-1",
-			MainRevisionUsed:  1,
-			TemplateSetIDUsed: core.TemplateStandardCleanID,
-			ReservationID:     rec.ID,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-		}
-		if _, err := store.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingVersion failed: %v", err)
-		}
+		const verID = "ver-tel-1"
+		submitTelemetryTailorJob(ctx, t, st, "user-tailor-tel-1", br.ID, verID, rec.ID, core.TemplateStandardCleanID, "", "")
 
 		wantTel := core.LLMTelemetry{
 			Provider:   "openai",
@@ -171,11 +211,12 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			Concurrency:  1,
 			PollInterval: 10 * time.Millisecond,
 			MaxAttempts:  1,
-			Branches:     store,
-			Profiles:     store,
-			Presets:      store,
-			Templates:    store,
-			Quotas:       store,
+			Jobs:         st.Jobs(),
+			Branches:     st.Branches(),
+			Profiles:     st.Profiles(),
+			Presets:      st.Presets(),
+			Templates:    st.Templates(),
+			Quotas:       st.Quotas(),
 			Generator:    gen,
 			Validator:    provenance.New(),
 			Renderer:     renderer.New(),
@@ -184,7 +225,7 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 		defer pool.Stop()
 		pool.Notify()
 
-		gotVer := waitForVersionTerminal(ctx, t, store, branch.ID, ver.ID)
+		gotVer := waitForVersionTerminal(ctx, t, st.Branches(), br.ID, verID)
 		if gotVer.Status != core.VersionStatusCompleted {
 			t.Fatalf("expected Completed, got %s (%s)", gotVer.Status, gotVer.ErrorMessage)
 		}
@@ -192,13 +233,13 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			t.Errorf("ProviderUsed/ModelUsed = (%q, %q), want (%q, %q)", gotVer.ProviderUsed, gotVer.ModelUsed, "openai", "gpt-4o")
 		}
 
-		gotRec := waitForUsageSettled(ctx, t, store, "user-tailor-tel-1", rec.ID)
+		gotRec := waitForUsageSettled(ctx, t, st.Quotas(), "user-tailor-tel-1", rec.ID)
 		if gotRec.Status != core.ReservationStatusCommitted {
 			t.Fatalf("expected Committed, got %s", gotRec.Status)
 		}
 		assertTelemetryFields(t, gotRec, wantTel, 500)
 
-		quota, err := store.Quota(ctx, "user-tailor-tel-1")
+		quota, err := st.Quotas().Quota(ctx, "user-tailor-tel-1")
 		if err != nil {
 			t.Fatalf("Quota failed: %v", err)
 		}
@@ -208,12 +249,12 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 	})
 
 	t.Run("telemetry overrides stale branch values and legacy Usage backfills via EffectiveTelemetry", func(t *testing.T) {
-		store, err := memory.NewSeeded(ctx, "user-tailor-tel-2")
+		st, err := memory.NewSeeded(ctx, "user-tailor-tel-2")
 		if err != nil {
 			t.Fatalf("NewSeeded failed: %v", err)
 		}
 
-		branch := &core.Branch{
+		br := &core.Branch{
 			ID:               "branch-override-precedence",
 			UserID:           "user-tailor-tel-2",
 			Name:             "Platform Engineer",
@@ -221,31 +262,17 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			ProviderOverride: "compat",
 			ModelOverride:    "alias-default",
 		}
-		if err := store.CreateBranch(ctx, branch); err != nil {
+		if err := st.Branches().CreateBranch(ctx, br); err != nil {
 			t.Fatalf("CreateBranch failed: %v", err)
 		}
 
-		rec, err := store.ReserveQuota(ctx, "user-tailor-tel-2", core.OperationResumeTailoring, 2000, 50, 100000)
+		rec, err := st.Quotas().ReserveQuota(ctx, "user-tailor-tel-2", core.OperationResumeTailoring, 2000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota failed: %v", err)
 		}
 
-		now := time.Now()
-		ver := &core.BranchVersion{
-			ID:                "ver-tel-2",
-			BranchID:          branch.ID,
-			UserID:            "user-tailor-tel-2",
-			MainRevisionUsed:  1,
-			TemplateSetIDUsed: core.TemplateStandardCleanID,
-			ProviderUsed:      branch.ProviderOverride,
-			ModelUsed:         branch.ModelOverride,
-			ReservationID:     rec.ID,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-		}
-		if _, err := store.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingVersion failed: %v", err)
-		}
+		const verID = "ver-tel-2"
+		submitTelemetryTailorJob(ctx, t, st, "user-tailor-tel-2", br.ID, verID, rec.ID, core.TemplateStandardCleanID, br.ProviderOverride, br.ModelOverride)
 
 		gen := &callbackLLM{
 			fn: func(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
@@ -267,11 +294,12 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			Concurrency:  1,
 			PollInterval: 10 * time.Millisecond,
 			MaxAttempts:  1,
-			Branches:     store,
-			Profiles:     store,
-			Presets:      store,
-			Templates:    store,
-			Quotas:       store,
+			Jobs:         st.Jobs(),
+			Branches:     st.Branches(),
+			Profiles:     st.Profiles(),
+			Presets:      st.Presets(),
+			Templates:    st.Templates(),
+			Quotas:       st.Quotas(),
 			Generator:    gen,
 			Validator:    provenance.New(),
 			Renderer:     renderer.New(),
@@ -280,12 +308,12 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 		defer pool.Stop()
 		pool.Notify()
 
-		gotVer := waitForVersionTerminal(ctx, t, store, branch.ID, ver.ID)
+		gotVer := waitForVersionTerminal(ctx, t, st.Branches(), br.ID, verID)
 		if gotVer.ProviderUsed != "openaicompat" || gotVer.ModelUsed != "llama-3.3-70b" {
 			t.Errorf("ProviderUsed/ModelUsed = (%q, %q), want (%q, %q)", gotVer.ProviderUsed, gotVer.ModelUsed, "openaicompat", "llama-3.3-70b")
 		}
 
-		gotRec := waitForUsageSettled(ctx, t, store, "user-tailor-tel-2", rec.ID)
+		gotRec := waitForUsageSettled(ctx, t, st.Quotas(), "user-tailor-tel-2", rec.ID)
 		assertTelemetryFields(t, gotRec, core.LLMTelemetry{
 			Provider:   "openaicompat",
 			Model:      "llama-3.3-70b",
@@ -296,12 +324,12 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 	})
 
 	t.Run("empty telemetry falls back to branch overrides and default tailoring tokens", func(t *testing.T) {
-		store, err := memory.NewSeeded(ctx, "user-tailor-tel-3")
+		st, err := memory.NewSeeded(ctx, "user-tailor-tel-3")
 		if err != nil {
 			t.Fatalf("NewSeeded failed: %v", err)
 		}
 
-		branch := &core.Branch{
+		br := &core.Branch{
 			ID:               "branch-fallback-overrides",
 			UserID:           "user-tailor-tel-3",
 			Name:             "Fallback Test",
@@ -309,39 +337,28 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			ProviderOverride: "anthropic",
 			ModelOverride:    "claude-sonnet-4-5",
 		}
-		if err := store.CreateBranch(ctx, branch); err != nil {
+		if err := st.Branches().CreateBranch(ctx, br); err != nil {
 			t.Fatalf("CreateBranch failed: %v", err)
 		}
 
-		rec, err := store.ReserveQuota(ctx, "user-tailor-tel-3", core.OperationResumeTailoring, 2000, 50, 100000)
+		rec, err := st.Quotas().ReserveQuota(ctx, "user-tailor-tel-3", core.OperationResumeTailoring, 2000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota failed: %v", err)
 		}
 
-		now := time.Now()
-		ver := &core.BranchVersion{
-			ID:                "ver-tel-3",
-			BranchID:          branch.ID,
-			UserID:            "user-tailor-tel-3",
-			MainRevisionUsed:  1,
-			TemplateSetIDUsed: core.TemplateStandardCleanID,
-			ReservationID:     rec.ID,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-		}
-		if _, err := store.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingVersion failed: %v", err)
-		}
+		const verID = "ver-tel-3"
+		submitTelemetryTailorJob(ctx, t, st, "user-tailor-tel-3", br.ID, verID, rec.ID, core.TemplateStandardCleanID, "", "")
 
 		pool := worker.New(worker.Config{
 			Concurrency:  1,
 			PollInterval: 10 * time.Millisecond,
 			MaxAttempts:  1,
-			Branches:     store,
-			Profiles:     store,
-			Presets:      store,
-			Templates:    store,
-			Quotas:       store,
+			Jobs:         st.Jobs(),
+			Branches:     st.Branches(),
+			Profiles:     st.Profiles(),
+			Presets:      st.Presets(),
+			Templates:    st.Templates(),
+			Quotas:       st.Quotas(),
 			Generator:    &callbackLLM{},
 			Validator:    provenance.New(),
 			Renderer:     renderer.New(),
@@ -350,12 +367,12 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 		defer pool.Stop()
 		pool.Notify()
 
-		gotVer := waitForVersionTerminal(ctx, t, store, branch.ID, ver.ID)
+		gotVer := waitForVersionTerminal(ctx, t, st.Branches(), br.ID, verID)
 		if gotVer.ProviderUsed != "anthropic" || gotVer.ModelUsed != "claude-sonnet-4-5" {
 			t.Errorf("ProviderUsed/ModelUsed = (%q, %q), want (%q, %q)", gotVer.ProviderUsed, gotVer.ModelUsed, "anthropic", "claude-sonnet-4-5")
 		}
 
-		gotRec := waitForUsageSettled(ctx, t, store, "user-tailor-tel-3", rec.ID)
+		gotRec := waitForUsageSettled(ctx, t, st.Quotas(), "user-tailor-tel-3", rec.ID)
 		if gotRec.Status != core.ReservationStatusCommitted || gotRec.TotalTokens != 2000 {
 			t.Errorf("expected Committed with 2000 fallback tokens, got status=%s total=%d", gotRec.Status, gotRec.TotalTokens)
 		}
@@ -414,37 +431,25 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 	for i, tc := range errorCases {
 		t.Run(tc.name, func(t *testing.T) {
 			userID := fmt.Sprintf("user-tailor-err-%d", i)
-			store, err := memory.NewSeeded(ctx, userID)
+			st, err := memory.NewSeeded(ctx, userID)
 			if err != nil {
 				t.Fatalf("NewSeeded failed: %v", err)
 			}
-			branch := &core.Branch{
+			br := &core.Branch{
 				ID:            fmt.Sprintf("branch-err-%d", i),
 				UserID:        userID,
 				Name:          "Err Branch",
 				TemplateSetID: core.TemplateStandardCleanID,
 			}
-			if err := store.CreateBranch(ctx, branch); err != nil {
+			if err := st.Branches().CreateBranch(ctx, br); err != nil {
 				t.Fatalf("CreateBranch failed: %v", err)
 			}
-			rec, err := store.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
+			rec, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
 			if err != nil {
 				t.Fatalf("ReserveQuota failed: %v", err)
 			}
-			now := time.Now()
-			ver := &core.BranchVersion{
-				ID:                fmt.Sprintf("ver-err-%d", i),
-				BranchID:          branch.ID,
-				UserID:            userID,
-				MainRevisionUsed:  1,
-				TemplateSetIDUsed: core.TemplateStandardCleanID,
-				ReservationID:     rec.ID,
-				CreatedAt:         now,
-				UpdatedAt:         now,
-			}
-			if _, err := store.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{}); err != nil {
-				t.Fatalf("SubmitPendingVersion failed: %v", err)
-			}
+			verID := fmt.Sprintf("ver-err-%d", i)
+			submitTelemetryTailorJob(ctx, t, st, userID, br.ID, verID, rec.ID, core.TemplateStandardCleanID, "", "")
 
 			gen := &mockLLM{
 				failErr: core.AttachLLMTelemetry(tc.baseErr, tc.telemetry),
@@ -453,11 +458,12 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 				Concurrency:  1,
 				PollInterval: 10 * time.Millisecond,
 				MaxAttempts:  1,
-				Branches:     store,
-				Profiles:     store,
-				Presets:      store,
-				Templates:    store,
-				Quotas:       store,
+				Jobs:         st.Jobs(),
+				Branches:     st.Branches(),
+				Profiles:     st.Profiles(),
+				Presets:      st.Presets(),
+				Templates:    st.Templates(),
+				Quotas:       st.Quotas(),
 				Generator:    gen,
 				Validator:    provenance.New(),
 				Renderer:     renderer.New(),
@@ -466,7 +472,7 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			defer pool.Stop()
 			pool.Notify()
 
-			gotVer := waitForVersionTerminal(ctx, t, store, branch.ID, ver.ID)
+			gotVer := waitForVersionTerminal(ctx, t, st.Branches(), br.ID, verID)
 			if gotVer.Status != core.VersionStatusFailed {
 				t.Fatalf("expected Failed, got %s", gotVer.Status)
 			}
@@ -474,13 +480,13 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 				t.Errorf("ErrorMessage = %q, want substring %q", gotVer.ErrorMessage, tc.wantErr)
 			}
 
-			gotRec := waitForUsageSettled(ctx, t, store, userID, rec.ID)
+			gotRec := waitForUsageSettled(ctx, t, st.Quotas(), userID, rec.ID)
 			if gotRec.Status != core.ReservationStatusReleased {
 				t.Fatalf("expected Released, got %s", gotRec.Status)
 			}
 			assertTelemetryFields(t, gotRec, tc.telemetry, tc.wantTotal)
 
-			quota, err := store.Quota(ctx, userID)
+			quota, err := st.Quotas().Quota(ctx, userID)
 			if err != nil {
 				t.Fatalf("Quota failed: %v", err)
 			}
@@ -492,37 +498,25 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 
 	t.Run("post-LLM provenance validation error commits consumed quota with telemetry without refunding", func(t *testing.T) {
 		userID := "user-tailor-val-err"
-		store, err := memory.NewSeeded(ctx, userID)
+		st, err := memory.NewSeeded(ctx, userID)
 		if err != nil {
 			t.Fatalf("NewSeeded failed: %v", err)
 		}
-		branch := &core.Branch{
+		br := &core.Branch{
 			ID:            "branch-val-err",
 			UserID:        userID,
 			Name:          "Val Err Branch",
 			TemplateSetID: core.TemplateStandardCleanID,
 		}
-		if err := store.CreateBranch(ctx, branch); err != nil {
+		if err := st.Branches().CreateBranch(ctx, br); err != nil {
 			t.Fatalf("CreateBranch failed: %v", err)
 		}
-		rec, err := store.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
+		rec, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota failed: %v", err)
 		}
-		now := time.Now()
-		ver := &core.BranchVersion{
-			ID:                "ver-val-err",
-			BranchID:          branch.ID,
-			UserID:            userID,
-			MainRevisionUsed:  1,
-			TemplateSetIDUsed: core.TemplateStandardCleanID,
-			ReservationID:     rec.ID,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-		}
-		if _, err := store.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingVersion failed: %v", err)
-		}
+		const verID = "ver-val-err"
+		submitTelemetryTailorJob(ctx, t, st, userID, br.ID, verID, rec.ID, core.TemplateStandardCleanID, "", "")
 
 		wantTel := core.LLMTelemetry{
 			Provider:   "openai",
@@ -535,11 +529,12 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			Concurrency:  1,
 			PollInterval: 10 * time.Millisecond,
 			MaxAttempts:  1,
-			Branches:     store,
-			Profiles:     store,
-			Presets:      store,
-			Templates:    store,
-			Quotas:       store,
+			Jobs:         st.Jobs(),
+			Branches:     st.Branches(),
+			Profiles:     st.Profiles(),
+			Presets:      st.Presets(),
+			Templates:    st.Templates(),
+			Quotas:       st.Quotas(),
 			Generator:    &mockLLM{telemetry: wantTel},
 			Validator:    &failingValidator{err: errors.New("hallucinated claim")},
 			Renderer:     renderer.New(),
@@ -548,7 +543,7 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 		defer pool.Stop()
 		pool.Notify()
 
-		gotVer := waitForVersionTerminal(ctx, t, store, branch.ID, ver.ID)
+		gotVer := waitForVersionTerminal(ctx, t, st.Branches(), br.ID, verID)
 		if gotVer.Status != core.VersionStatusFailed {
 			t.Fatalf("expected Failed, got %s", gotVer.Status)
 		}
@@ -556,13 +551,13 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			t.Errorf("expected raw validation error redacted from ErrorMessage, got %q", gotVer.ErrorMessage)
 		}
 
-		gotRec := waitForUsageSettled(ctx, t, store, userID, rec.ID)
+		gotRec := waitForUsageSettled(ctx, t, st.Quotas(), userID, rec.ID)
 		if gotRec.Status != core.ReservationStatusCommitted {
 			t.Fatalf("expected Committed after successful LLM generation, got %s", gotRec.Status)
 		}
 		assertTelemetryFields(t, gotRec, wantTel, 300)
 
-		quota, err := store.Quota(ctx, userID)
+		quota, err := st.Quotas().Quota(ctx, userID)
 		if err != nil {
 			t.Fatalf("Quota failed: %v", err)
 		}
@@ -571,39 +566,27 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("post-LLM CompleteVersion persistence failure commits consumed quota with fallback tokens and telemetry", func(t *testing.T) {
+	t.Run("post-LLM CompleteBranchTailor persistence failure commits consumed quota with fallback tokens and telemetry", func(t *testing.T) {
 		userID := "user-tailor-persist-err"
-		store, err := memory.NewSeeded(ctx, userID)
+		st, err := memory.NewSeeded(ctx, userID)
 		if err != nil {
 			t.Fatalf("NewSeeded failed: %v", err)
 		}
-		branch := &core.Branch{
+		br := &core.Branch{
 			ID:            "branch-persist-err",
 			UserID:        userID,
 			Name:          "Persist Err Branch",
 			TemplateSetID: core.TemplateStandardCleanID,
 		}
-		if err := store.CreateBranch(ctx, branch); err != nil {
+		if err := st.Branches().CreateBranch(ctx, br); err != nil {
 			t.Fatalf("CreateBranch failed: %v", err)
 		}
-		rec, err := store.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
+		rec, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota failed: %v", err)
 		}
-		now := time.Now()
-		ver := &core.BranchVersion{
-			ID:                "ver-persist-err",
-			BranchID:          branch.ID,
-			UserID:            userID,
-			MainRevisionUsed:  1,
-			TemplateSetIDUsed: core.TemplateStandardCleanID,
-			ReservationID:     rec.ID,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-		}
-		if _, err := store.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingVersion failed: %v", err)
-		}
+		const verID = "ver-persist-err"
+		submitTelemetryTailorJob(ctx, t, st, userID, br.ID, verID, rec.ID, core.TemplateStandardCleanID, "", "")
 
 		wantTel := core.LLMTelemetry{
 			Provider:   "gemini",
@@ -615,11 +598,12 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			Concurrency:  1,
 			PollInterval: 10 * time.Millisecond,
 			MaxAttempts:  1,
-			Branches:     &failingCompleteBranchStore{BranchStore: store, completeErr: errors.New("disk full")},
-			Profiles:     store,
-			Presets:      store,
-			Templates:    store,
-			Quotas:       store,
+			Jobs:         &failingCompleteBranchStore{JobStore: st.Jobs(), completeErr: errors.New("disk full")},
+			Branches:     st.Branches(),
+			Profiles:     st.Profiles(),
+			Presets:      st.Presets(),
+			Templates:    st.Templates(),
+			Quotas:       st.Quotas(),
 			Generator:    &mockLLM{telemetry: wantTel},
 			Validator:    provenance.New(),
 			Renderer:     renderer.New(),
@@ -628,62 +612,51 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 		defer pool.Stop()
 		pool.Notify()
 
-		gotVer := waitForVersionTerminal(ctx, t, store, branch.ID, ver.ID)
+		gotVer := waitForVersionTerminal(ctx, t, st.Branches(), br.ID, verID)
 		if gotVer.Status != core.VersionStatusFailed {
 			t.Fatalf("expected Failed, got %s", gotVer.Status)
 		}
 
-		gotRec := waitForUsageSettled(ctx, t, store, userID, rec.ID)
+		gotRec := waitForUsageSettled(ctx, t, st.Quotas(), userID, rec.ID)
 		if gotRec.Status != core.ReservationStatusCommitted {
 			t.Fatalf("expected Committed after successful LLM generation, got %s", gotRec.Status)
 		}
-		// Consumed LLM generation succeeded before CompleteVersion failed, so fallback tokens and telemetry are committed.
+		// Consumed LLM generation succeeded before CompleteBranchTailor failed, so fallback tokens and telemetry are committed.
 		assertTelemetryFields(t, gotRec, wantTel, 2000)
 	})
 
 	t.Run("pre-LLM load error releases quota with zero telemetry", func(t *testing.T) {
 		userID := "user-tailor-pre-err"
-		store, err := memory.NewSeeded(ctx, userID)
+		st, err := memory.NewSeeded(ctx, userID)
 		if err != nil {
 			t.Fatalf("NewSeeded failed: %v", err)
 		}
-		branch := &core.Branch{
+		br := &core.Branch{
 			ID:            "branch-pre-err",
 			UserID:        userID,
 			Name:          "Pre Err Branch",
 			TemplateSetID: "missing-template-set-id",
 		}
-		if err := store.CreateBranch(ctx, branch); err != nil {
+		if err := st.Branches().CreateBranch(ctx, br); err != nil {
 			t.Fatalf("CreateBranch failed: %v", err)
 		}
-		rec, err := store.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
+		rec, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota failed: %v", err)
 		}
-		now := time.Now()
-		ver := &core.BranchVersion{
-			ID:                "ver-pre-err",
-			BranchID:          branch.ID,
-			UserID:            userID,
-			MainRevisionUsed:  1,
-			TemplateSetIDUsed: "missing-template-set-id",
-			ReservationID:     rec.ID,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-		}
-		if _, err := store.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingVersion failed: %v", err)
-		}
+		const verID = "ver-pre-err"
+		submitTelemetryTailorJob(ctx, t, st, userID, br.ID, verID, rec.ID, "missing-template-set-id", "", "")
 
 		pool := worker.New(worker.Config{
 			Concurrency:  1,
 			PollInterval: 10 * time.Millisecond,
 			MaxAttempts:  1,
-			Branches:     store,
-			Profiles:     store,
-			Presets:      store,
-			Templates:    store,
-			Quotas:       store,
+			Jobs:         st.Jobs(),
+			Branches:     st.Branches(),
+			Profiles:     st.Profiles(),
+			Presets:      st.Presets(),
+			Templates:    st.Templates(),
+			Quotas:       st.Quotas(),
 			Generator:    &mockLLM{},
 			Validator:    provenance.New(),
 			Renderer:     renderer.New(),
@@ -692,12 +665,12 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 		defer pool.Stop()
 		pool.Notify()
 
-		gotVer := waitForVersionTerminal(ctx, t, store, branch.ID, ver.ID)
+		gotVer := waitForVersionTerminal(ctx, t, st.Branches(), br.ID, verID)
 		if gotVer.Status != core.VersionStatusFailed {
 			t.Fatalf("expected Failed, got %s", gotVer.Status)
 		}
 
-		gotRec := waitForUsageSettled(ctx, t, store, userID, rec.ID)
+		gotRec := waitForUsageSettled(ctx, t, st.Quotas(), userID, rec.ID)
 		if gotRec.Status != core.ReservationStatusReleased {
 			t.Fatalf("expected Released, got %s", gotRec.Status)
 		}
@@ -709,27 +682,15 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("success commits full telemetry preserving actual metadata tokens", func(t *testing.T) {
-		store := memory.New()
+		st := memory.New()
 		userID := "user-pdf-tel-ok"
-		rec, err := store.ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
+		rec, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota failed: %v", err)
 		}
 
-		now := time.Now()
-		jobID := "pdf-tel-ok"
-		if err := store.SubmitPendingJob(ctx, &core.PDFParseJob{
-			ID:            jobID,
-			UserID:        userID,
-			RawText:       "Ada Lovelace resume",
-			Provider:      "gemini",
-			Model:         "gemini-2.5-flash",
-			ReservationID: rec.ID,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingJob failed: %v", err)
-		}
+		const jobID = "pdf-tel-ok"
+		submitTelemetryPDFJob(ctx, t, st, userID, jobID, "Ada Lovelace resume", "gemini", "gemini-2.5-flash", rec.ID)
 
 		wantTel := core.LLMTelemetry{
 			Provider:   "gemini",
@@ -747,8 +708,8 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			Concurrency:     1,
 			PollInterval:    10 * time.Millisecond,
 			MaxAttempts:     1,
-			PDFJobs:         store,
-			Quotas:          store,
+			Jobs:            st.Jobs(),
+			Quotas:          st.Quotas(),
 			ResumeExtractor: ext,
 			LLMTimeout:      5 * time.Second,
 		})
@@ -756,18 +717,18 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 		defer pool.Stop()
 		pool.Notify()
 
-		gotJob := waitForPDFJobTerminal(ctx, t, store, userID, jobID)
-		if gotJob.Status != core.PDFParseJobStatusCompleted {
+		gotJob := waitForPDFJobTerminal(ctx, t, st.Jobs(), userID, jobID)
+		if gotJob.Status != core.JobStatusCompleted {
 			t.Fatalf("expected Completed, got %s (%s)", gotJob.Status, gotJob.ErrorMessage)
 		}
 
-		gotRec := waitForUsageSettled(ctx, t, store, userID, rec.ID)
+		gotRec := waitForUsageSettled(ctx, t, st.Quotas(), userID, rec.ID)
 		if gotRec.Status != core.ReservationStatusCommitted {
 			t.Fatalf("expected Committed, got %s", gotRec.Status)
 		}
 		assertTelemetryFields(t, gotRec, wantTel, 300)
 
-		quota, err := store.Quota(ctx, userID)
+		quota, err := st.Quotas().Quota(ctx, userID)
 		if err != nil {
 			t.Fatalf("Quota failed: %v", err)
 		}
@@ -777,25 +738,15 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 	})
 
 	t.Run("success with zero tokens applies defaultPDFExtractionTokens fallback", func(t *testing.T) {
-		store := memory.New()
+		st := memory.New()
 		userID := "user-pdf-tel-fb"
-		rec, err := store.ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
+		rec, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota failed: %v", err)
 		}
 
-		now := time.Now()
-		jobID := "pdf-tel-fb"
-		if err := store.SubmitPendingJob(ctx, &core.PDFParseJob{
-			ID:            jobID,
-			UserID:        userID,
-			RawText:       "Alan Turing resume",
-			ReservationID: rec.ID,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingJob failed: %v", err)
-		}
+		const jobID = "pdf-tel-fb"
+		submitTelemetryPDFJob(ctx, t, st, userID, jobID, "Alan Turing resume", "", "", rec.ID)
 
 		wantTel := core.LLMTelemetry{
 			Provider:   "ollama",
@@ -812,8 +763,8 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			Concurrency:     1,
 			PollInterval:    10 * time.Millisecond,
 			MaxAttempts:     1,
-			PDFJobs:         store,
-			Quotas:          store,
+			Jobs:            st.Jobs(),
+			Quotas:          st.Quotas(),
 			ResumeExtractor: ext,
 			LLMTimeout:      5 * time.Second,
 		})
@@ -821,12 +772,12 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 		defer pool.Stop()
 		pool.Notify()
 
-		gotJob := waitForPDFJobTerminal(ctx, t, store, userID, jobID)
-		if gotJob.Status != core.PDFParseJobStatusCompleted {
+		gotJob := waitForPDFJobTerminal(ctx, t, st.Jobs(), userID, jobID)
+		if gotJob.Status != core.JobStatusCompleted {
 			t.Fatalf("expected Completed, got %s", gotJob.Status)
 		}
 
-		gotRec := waitForUsageSettled(ctx, t, store, userID, rec.ID)
+		gotRec := waitForUsageSettled(ctx, t, st.Quotas(), userID, rec.ID)
 		if gotRec.Status != core.ReservationStatusCommitted {
 			t.Fatalf("expected Committed, got %s", gotRec.Status)
 		}
@@ -883,25 +834,15 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 
 	for i, tc := range errCases {
 		t.Run(tc.name, func(t *testing.T) {
-			store := memory.New()
+			st := memory.New()
 			userID := fmt.Sprintf("user-pdf-err-%d", i)
-			rec, err := store.ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
+			rec, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
 			if err != nil {
 				t.Fatalf("ReserveQuota failed: %v", err)
 			}
 
-			now := time.Now()
 			jobID := fmt.Sprintf("pdf-err-%d", i)
-			if err := store.SubmitPendingJob(ctx, &core.PDFParseJob{
-				ID:            jobID,
-				UserID:        userID,
-				RawText:       "resume",
-				ReservationID: rec.ID,
-				CreatedAt:     now,
-				UpdatedAt:     now,
-			}, core.PendingJobOptions{}); err != nil {
-				t.Fatalf("SubmitPendingJob failed: %v", err)
-			}
+			submitTelemetryPDFJob(ctx, t, st, userID, jobID, "resume", "", "", rec.ID)
 
 			ext := &mockResumeExtractor{
 				failErr: core.AttachLLMTelemetry(tc.err, tc.telemetry),
@@ -910,8 +851,8 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 				Concurrency:     1,
 				PollInterval:    10 * time.Millisecond,
 				MaxAttempts:     1,
-				PDFJobs:         store,
-				Quotas:          store,
+				Jobs:            st.Jobs(),
+				Quotas:          st.Quotas(),
 				ResumeExtractor: ext,
 				LLMTimeout:      5 * time.Second,
 			})
@@ -919,18 +860,18 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			defer pool.Stop()
 			pool.Notify()
 
-			gotJob := waitForPDFJobTerminal(ctx, t, store, userID, jobID)
-			if gotJob.Status != core.PDFParseJobStatusFailed {
+			gotJob := waitForPDFJobTerminal(ctx, t, st.Jobs(), userID, jobID)
+			if gotJob.Status != core.JobStatusFailed {
 				t.Fatalf("expected Failed, got %s", gotJob.Status)
 			}
 
-			gotRec := waitForUsageSettled(ctx, t, store, userID, rec.ID)
+			gotRec := waitForUsageSettled(ctx, t, st.Quotas(), userID, rec.ID)
 			if gotRec.Status != core.ReservationStatusReleased {
 				t.Fatalf("expected Released, got %s", gotRec.Status)
 			}
 			assertTelemetryFields(t, gotRec, tc.telemetry, tc.wantTotal)
 
-			quota, err := store.Quota(ctx, userID)
+			quota, err := st.Quotas().Quota(ctx, userID)
 			if err != nil {
 				t.Fatalf("Quota failed: %v", err)
 			}
@@ -941,25 +882,15 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 	}
 
 	t.Run("persistence failure commits consumed quota with telemetry without refunding", func(t *testing.T) {
-		store := memory.New()
+		st := memory.New()
 		userID := "user-pdf-persist-err"
-		rec, err := store.ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
+		rec, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota failed: %v", err)
 		}
 
-		now := time.Now()
-		jobID := "pdf-persist-err"
-		if err := store.SubmitPendingJob(ctx, &core.PDFParseJob{
-			ID:            jobID,
-			UserID:        userID,
-			RawText:       "Grace Hopper resume",
-			ReservationID: rec.ID,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingJob failed: %v", err)
-		}
+		const jobID = "pdf-persist-err"
+		submitTelemetryPDFJob(ctx, t, st, userID, jobID, "Grace Hopper resume", "", "", rec.ID)
 
 		wantTel := core.LLMTelemetry{
 			Provider:   "openai",
@@ -977,8 +908,8 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			Concurrency:     1,
 			PollInterval:    10 * time.Millisecond,
 			MaxAttempts:     1,
-			PDFJobs:         &failingCompletePDFStore{PDFJobStore: store, completeErr: errors.New("write failed")},
-			Quotas:          store,
+			Jobs:            &failingCompletePDFStore{JobStore: st.Jobs(), completeErr: errors.New("write failed")},
+			Quotas:          st.Quotas(),
 			ResumeExtractor: ext,
 			LLMTimeout:      5 * time.Second,
 		})
@@ -986,12 +917,12 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 		defer pool.Stop()
 		pool.Notify()
 
-		gotJob := waitForPDFJobTerminal(ctx, t, store, userID, jobID)
-		if gotJob.Status != core.PDFParseJobStatusFailed {
+		gotJob := waitForPDFJobTerminal(ctx, t, st.Jobs(), userID, jobID)
+		if gotJob.Status != core.JobStatusFailed {
 			t.Fatalf("expected Failed, got %s", gotJob.Status)
 		}
 
-		gotRec := waitForUsageSettled(ctx, t, store, userID, rec.ID)
+		gotRec := waitForUsageSettled(ctx, t, st.Quotas(), userID, rec.ID)
 		if gotRec.Status != core.ReservationStatusCommitted {
 			t.Fatalf("expected Committed after successful LLM extraction, got %s", gotRec.Status)
 		}
@@ -1001,10 +932,10 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 
 func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 	ctx := context.Background()
-	store := memory.New()
+	st := memory.New()
 
 	const tmplID = "tmpl-race-minimal"
-	if err := store.CreateTemplate(ctx, &core.TemplateSet{
+	if err := st.Templates().CreateTemplate(ctx, &core.TemplateSet{
 		ID:               tmplID,
 		UserID:           core.SystemUserID,
 		Name:             "Minimal Race Template",
@@ -1075,12 +1006,12 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 		MaxConcurrentPerTenant: 2,
 		PollInterval:           10 * time.Millisecond,
 		MaxAttempts:            1,
-		Branches:               store,
-		Profiles:               store,
-		Presets:                store,
-		Templates:              store,
-		PDFJobs:                store,
-		Quotas:                 store,
+		Jobs:                   st.Jobs(),
+		Branches:               st.Branches(),
+		Profiles:               st.Profiles(),
+		Presets:                st.Presets(),
+		Templates:              st.Templates(),
+		Quotas:                 st.Quotas(),
 		ResumeExtractor:        ext,
 		Generator:              gen,
 		Validator:              provenance.New(),
@@ -1100,10 +1031,9 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 	}
 	expected := make(map[string]expectedTenantTotals, tenantCount)
 
-	now := time.Now()
 	for i := 0; i < tenantCount; i++ {
 		userID := fmt.Sprintf("race-tenant-%d", i)
-		if err := store.UpsertProfile(ctx, &core.Profile{
+		if err := st.Profiles().UpsertProfile(ctx, &core.Profile{
 			ID:       "profile-" + userID,
 			UserID:   userID,
 			FullName: "Candidate " + userID,
@@ -1117,26 +1047,15 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 			Name:          "ok-tailor",
 			TemplateSetID: tmplID,
 		}
-		if err := store.CreateBranch(ctx, okBranch); err != nil {
+		if err := st.Branches().CreateBranch(ctx, okBranch); err != nil {
 			t.Fatalf("CreateBranch ok failed: %v", err)
 		}
-		recGenOK, err := store.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
+		recGenOK, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota gen ok failed: %v", err)
 		}
-		okVer := &core.BranchVersion{
-			ID:                fmt.Sprintf("ver-ok-%d", i),
-			BranchID:          okBranch.ID,
-			UserID:            userID,
-			MainRevisionUsed:  1,
-			TemplateSetIDUsed: tmplID,
-			ReservationID:     recGenOK.ID,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-		}
-		if _, err := store.SubmitPendingVersion(ctx, okVer, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingVersion ok failed: %v", err)
-		}
+		okVerID := fmt.Sprintf("ver-ok-%d", i)
+		submitTelemetryTailorJob(ctx, t, st, userID, okBranch.ID, okVerID, recGenOK.ID, tmplID, "", "")
 
 		failBranch := &core.Branch{
 			ID:            fmt.Sprintf("branch-fail-%d", i),
@@ -1144,26 +1063,15 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 			Name:          "fail-429",
 			TemplateSetID: tmplID,
 		}
-		if err := store.CreateBranch(ctx, failBranch); err != nil {
+		if err := st.Branches().CreateBranch(ctx, failBranch); err != nil {
 			t.Fatalf("CreateBranch fail failed: %v", err)
 		}
-		recGenFail, err := store.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
+		recGenFail, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 100000)
 		if err != nil {
 			t.Fatalf("ReserveQuota gen fail failed: %v", err)
 		}
-		failVer := &core.BranchVersion{
-			ID:                fmt.Sprintf("ver-fail-%d", i),
-			BranchID:          failBranch.ID,
-			UserID:            userID,
-			MainRevisionUsed:  1,
-			TemplateSetIDUsed: tmplID,
-			ReservationID:     recGenFail.ID,
-			CreatedAt:         now,
-			UpdatedAt:         now,
-		}
-		if _, err := store.SubmitPendingVersion(ctx, failVer, core.PendingJobOptions{}); err != nil {
-			t.Fatalf("SubmitPendingVersion fail failed: %v", err)
-		}
+		failVerID := fmt.Sprintf("ver-fail-%d", i)
+		submitTelemetryTailorJob(ctx, t, st, userID, failBranch.ID, failVerID, recGenFail.ID, tmplID, "", "")
 
 		resIDs := []string{recGenOK.ID, recGenFail.ID}
 		pdfJobs := []struct {
@@ -1176,20 +1084,11 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 		}
 		for _, pj := range pdfJobs {
 			jobID := fmt.Sprintf("pdf-%s-%d", pj.suffix, i)
-			recPDF, err := store.ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
+			recPDF, err := st.Quotas().ReserveQuota(ctx, userID, core.OperationPDFParse, 1000, 50, 100000)
 			if err != nil {
 				t.Fatalf("ReserveQuota %s failed: %v", jobID, err)
 			}
-			if err := store.SubmitPendingJob(ctx, &core.PDFParseJob{
-				ID:            jobID,
-				UserID:        userID,
-				RawText:       pj.raw,
-				ReservationID: recPDF.ID,
-				CreatedAt:     now,
-				UpdatedAt:     now,
-			}, core.PendingJobOptions{}); err != nil {
-				t.Fatalf("SubmitPendingJob %s failed: %v", jobID, err)
-			}
+			submitTelemetryPDFJob(ctx, t, st, userID, jobID, pj.raw, "", "", recPDF.ID)
 			resIDs = append(resIDs, recPDF.ID)
 		}
 
@@ -1197,7 +1096,7 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 			commits:        3, // tailor ok (250) + pdf ok (150) + pdf zero (1000)
 			releases:       2, // tailor 429 + pdf timeout
 			tokens:         250 + 150 + 1000,
-			versionID:      okVer.ID,
+			versionID:      okVerID,
 			branchID:       okBranch.ID,
 			reservationIDs: resIDs,
 		}
@@ -1206,14 +1105,14 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 
 	for userID, want := range expected {
 		for _, resID := range want.reservationIDs {
-			waitForUsageSettled(ctx, t, store, userID, resID)
+			waitForUsageSettled(ctx, t, st.Quotas(), userID, resID)
 		}
 	}
 
 	pool.Stop()
 
 	for userID, want := range expected {
-		ver, err := store.Version(ctx, want.branchID, want.versionID)
+		ver, err := st.Branches().Version(ctx, want.branchID, want.versionID)
 		if err != nil {
 			t.Fatalf("Version(%s) failed: %v", want.versionID, err)
 		}
@@ -1224,7 +1123,7 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 			t.Errorf("tenant %s version ProviderUsed/ModelUsed = (%q, %q), want (openai, gpt-4o)", userID, ver.ProviderUsed, ver.ModelUsed)
 		}
 
-		records, err := store.ListUsageRecords(ctx, userID, 20)
+		records, err := st.Quotas().ListUsageRecords(ctx, userID, 20)
 		if err != nil {
 			t.Fatalf("ListUsageRecords(%s) failed: %v", userID, err)
 		}
@@ -1255,7 +1154,7 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 				userID, gotCommits, gotReleases, gotTokens, want.commits, want.releases, want.tokens)
 		}
 
-		quota, err := store.Quota(ctx, userID)
+		quota, err := st.Quotas().Quota(ctx, userID)
 		if err != nil {
 			t.Fatalf("Quota(%s) failed: %v", userID, err)
 		}

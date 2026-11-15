@@ -4,8 +4,10 @@ Pure Go domain core for **Resumeee** (`github.com/resumeee-app/resumeee-core`), 
 
 ## Packages
 
-- `/` (`package core`) — Core entities, value objects, sentinel errors, normalization helpers, and store contracts (`Store`, `StoreBundle`, `ProfileStore`, `CareerStore`, `BranchStore`, `PresetStore`, `TemplateStore`, `PDFJobStore`, `QuotaStore`, `UserStore`).
-- `seed/` — Database-agnostic seed data, lazy tenant provisioning, and embedded built-in resume `.tmpl` templates (`DefaultData`, `DefaultDataStores`, `EnsureTenantProvisioned`, `EnsureTenantProvisionedStores`, `DefaultTemplateSets`, `DefaultPresets`).
+- `/` (`package core`) — Core domain entities (`Profile`, `Branch`, `BranchVersion`, `Job`, `Preset`, `TemplateSet`, `TenantQuota`, `User`), value objects, sentinel errors, identity contracts, and normalization helpers.
+- `store/` — Centralized persistence domain rules, validation, state transitions, quota accounting, and unified `core.Job` queue orchestration (`Store`) built over a pure persistence SPI (`Backend`, `ReadTx`, `Tx`).
+- `storetest/` — Backend-agnostic compliance test suite (`RunAll`) verifying that any `store.Backend` enforces all persistence invariants, concurrency guarantees, and queue semantics.
+- `seed/` — Database-agnostic seed data, lazy tenant provisioning, and embedded built-in resume `.tmpl` templates (`DefaultData`, `DefaultDataStores`, `EnsureTenantProvisioned`, `EnsureTenantProvisionedStores`, `DefaultTemplateSets`, `DefaultPresets`, `DefaultGlobalSkills`).
 - `provenance/` — Anti-hallucination provenance validator verifying all tailored bullets and skills cite verified Main Profile entities (`Validator`, `Validate`, `ValidateStrict`).
 - `sanitizer/` — Deterministic PII obfuscation and deobfuscation across LLM prompt/response boundaries (`Session`, `NewSession`, `NewSessionFromSnapshot`, `NewSessionFromRequest`).
 - `pdf/` — PDF binary extraction into plain resume text (`Extractor`).
@@ -19,7 +21,7 @@ Pure Go domain core for **Resumeee** (`github.com/resumeee-app/resumeee-core`), 
   - `llm/anthropic/` — Anthropic Messages API client implementing `llm.Client`.
   - `llm/ollama/` — Local Ollama API client implementing `llm.Client`.
   - `llm/openaicompat/` — OpenAI-compatible Chat Completions client implementing `llm.Client`.
-- `memory/` — Thread-safe in-memory `core.Store` and consumer store implementation (`New`, `NewSeeded`).
+- `memory/` — Thread-safe in-memory `store.Backend` and convenience `*store.Store` constructors (`NewBackend`, `New`, `NewWithClock`, `NewSeeded`).
 
 ## Quality Gates
 

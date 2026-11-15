@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/branch"
 )
 
 // Default pool sizing, polling, retry, lease, and shutdown bounds applied when Config omits explicit values.
@@ -50,43 +49,36 @@ var ErrPoolClosed = errors.New("worker pool closed")
 type Config struct {
 	Concurrency            int
 	MaxConcurrentPerTenant int
-	// SeparateQueues indicates that Branches and PDFJobs use distinct non-shared stores.
-	// When false (default), ClaimJobRequest.OtherActiveByTenant is left nil so shared stores
-	// compute cross-queue active leases directly from persisted state across all pools.
-	// When true and both Branches and PDFJobs are configured, local sibling active counts
-	// are passed via OtherActiveByTenant to enforce MaxConcurrentPerTenant across separate stores.
-	SeparateQueues     bool
-	PollInterval       time.Duration
-	SweepInterval      time.Duration
-	LeaseDuration      time.Duration
-	LeaseRenewInterval time.Duration
-	MaxAttempts        int
-	RetryBaseDelay     time.Duration
-	MaxRetryDelay      time.Duration
-	ShutdownTimeout    time.Duration
-	CleanupTimeout     time.Duration
-	WorkerID           string
-	Clock              func() time.Time
-	Branches           BranchStore
-	Profiles           ProfileReader
-	Presets            PresetReader
-	Templates          TemplateReader
-	PDFJobs            PDFJobStore
-	Quotas             QuotaCommitter
-	ResumeExtractor    ResumeExtractor
-	LLMTimeout         time.Duration
-	Generator          Generator
-	Validator          ProvenanceValidator
-	Renderer           TemplateRenderer
-	Logger             *slog.Logger
+	PollInterval           time.Duration
+	SweepInterval          time.Duration
+	LeaseDuration          time.Duration
+	LeaseRenewInterval     time.Duration
+	MaxAttempts            int
+	RetryBaseDelay         time.Duration
+	MaxRetryDelay          time.Duration
+	ShutdownTimeout        time.Duration
+	CleanupTimeout         time.Duration
+	WorkerID               string
+	Clock                  func() time.Time
+	Jobs                   JobStore
+	Branches               BranchReader
+	Profiles               ProfileReader
+	Presets                PresetReader
+	Templates              TemplateReader
+	Quotas                 QuotaCommitter
+	ResumeExtractor        ResumeExtractor
+	LLMTimeout             time.Duration
+	Generator              Generator
+	Validator              ProvenanceValidator
+	Renderer               TemplateRenderer
+	Logger                 *slog.Logger
 }
 
-// Pool claims persisted pending BranchVersion and PDFParseJob records directly from stores,
+// Pool claims persisted pending core.Job records directly from a JobStore,
 // enforcing global and per-tenant concurrency limits, lease heartbeats, bounded retries, and periodic sweeps.
 type Pool struct {
 	concurrency            int
 	maxConcurrentPerTenant int
-	separateQueues         bool
 	pollInterval           time.Duration
 	sweepInterval          time.Duration
 	leaseDuration          time.Duration
@@ -113,12 +105,10 @@ type Pool struct {
 	claimMu       sync.Mutex
 	preferPDFNext bool
 
-	slotMu         sync.Mutex
-	activeCount    int
-	activeVersions map[string]int
-	activePDFJobs  map[string]int
-	lastServedSeq  map[string]uint64
-	dispatchSeq    uint64
+	slotMu        sync.Mutex
+	activeCount   int
+	lastServedSeq map[string]uint64
+	dispatchSeq   uint64
 
 	wakeupCh    chan struct{}
 	slotFreedCh chan struct{}
@@ -126,11 +116,11 @@ type Pool struct {
 	jobWG       sync.WaitGroup
 	logger      *slog.Logger
 
-	branches        BranchStore
+	jobs            JobStore
+	branches        BranchReader
 	profiles        ProfileReader
 	presets         PresetReader
 	templates       TemplateReader
-	pdfJobs         PDFJobStore
 	quotas          QuotaCommitter
 	resumeExtractor ResumeExtractor
 	llmTimeout      time.Duration
@@ -200,7 +190,6 @@ func New(cfg Config) *Pool {
 	return &Pool{
 		concurrency:            concurrency,
 		maxConcurrentPerTenant: maxConcurrent,
-		separateQueues:         cfg.SeparateQueues,
 		pollInterval:           pollInterval,
 		sweepInterval:          sweepInterval,
 		leaseDuration:          leaseDuration,
@@ -214,17 +203,15 @@ func New(cfg Config) *Pool {
 		clock:                  clock,
 		retryTimers:            make(map[uint64]*time.Timer),
 		stoppedCh:              make(chan struct{}),
-		activeVersions:         make(map[string]int),
-		activePDFJobs:          make(map[string]int),
 		lastServedSeq:          make(map[string]uint64),
 		wakeupCh:               make(chan struct{}, 1),
 		slotFreedCh:            make(chan struct{}, 1),
 		logger:                 cfg.Logger,
+		jobs:                   cfg.Jobs,
 		branches:               cfg.Branches,
 		profiles:               cfg.Profiles,
 		presets:                cfg.Presets,
 		templates:              cfg.Templates,
-		pdfJobs:                cfg.PDFJobs,
 		quotas:                 cfg.Quotas,
 		resumeExtractor:        cfg.ResumeExtractor,
 		llmTimeout:             cfg.LLMTimeout,
@@ -295,24 +282,6 @@ func (p *Pool) Notify() {
 	case p.wakeupCh <- struct{}{}:
 	default:
 	}
-}
-
-// Enqueue wakes the direct-store dispatcher via Notify while leaving job state solely in persistent stores.
-func (p *Pool) Enqueue(_ core.GenerationJob) error {
-	if p == nil {
-		return ErrPoolClosed
-	}
-	p.Notify()
-	return nil
-}
-
-// EnqueuePDFJob wakes the direct-store dispatcher via Notify while leaving PDF job state solely in persistent stores.
-func (p *Pool) EnqueuePDFJob(_ core.PDFParseJobTask) error {
-	if p == nil {
-		return ErrPoolClosed
-	}
-	p.Notify()
-	return nil
 }
 
 // Stop gracefully stops claiming new work and waits up to Config.ShutdownTimeout for active jobs to complete.
@@ -400,36 +369,19 @@ func (p *Pool) StopWithContext(ctx context.Context) error {
 	return stopErr
 }
 
-// RecoverStaleJobs fails interrupted processing jobs and expired pending jobs across branch versions and
-// PDF jobs, releasing all returned quota reservations via bounded detached cleanup contexts.
+// RecoverStaleJobs fails interrupted processing jobs across the unified queue,
+// releasing all returned quota reservations via bounded detached cleanup contexts.
 func (p *Pool) RecoverStaleJobs(ctx context.Context, reason string) error {
-	if p == nil {
+	if p == nil || p.jobs == nil {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	var (
-		errs     []error
-		released []core.ReleasedReservation
-	)
-	if p.branches != nil {
-		rel, err := p.branches.RecoverInterruptedVersions(ctx, reason)
-		released = append(released, rel...)
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if p.pdfJobs != nil {
-		rel, err := p.pdfJobs.RecoverInterruptedJobs(ctx, reason)
-		released = append(released, rel...)
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
+	released, err := p.jobs.RecoverInterrupted(ctx, reason)
 	p.releaseReservationsDetached(released)
-	return errors.Join(errs...)
+	return err
 }
 
 // isShuttingDown reports whether the pool is stopping or its job execution context has been cancelled.
@@ -478,12 +430,15 @@ func (p *Pool) hasCapacity() bool {
 	return ok
 }
 
-// tryClaimAndLaunch serializes store claims across BranchVersion and PDFParseJob queues, updates active
-// slot and fair-share accounting before spawning, and alternates preferred store order each cycle.
+// tryClaimAndLaunch serializes store claims across the unified job queue, updates active
+// slot and fair-share accounting before spawning, and alternates preferred job kind each cycle.
 func (p *Pool) tryClaimAndLaunch() bool {
 	p.claimMu.Lock()
 	defer p.claimMu.Unlock()
 
+	if p.jobs == nil {
+		return false
+	}
 	if p.claimCtx != nil && p.claimCtx.Err() != nil {
 		return false
 	}
@@ -493,77 +448,26 @@ func (p *Pool) tryClaimAndLaunch() bool {
 		p.slotMu.Unlock()
 		return false
 	}
-	var activeVersionsSnap, activePDFSnap map[string]int
-	if p.separateQueues && p.branches != nil && p.pdfJobs != nil {
-		activeVersionsSnap = copyIntMap(p.activeVersions)
-		activePDFSnap = copyIntMap(p.activePDFJobs)
-	}
 	seqSnap := copySeqMap(p.lastServedSeq)
 	p.slotMu.Unlock()
 
-	preferPDF := p.preferPDFNext
+	preferredKind := core.JobKindBranchTailor
+	if p.preferPDFNext {
+		preferredKind = core.JobKindPDFParse
+	}
 	p.preferPDFNext = !p.preferPDFNext
 
-	if preferPDF {
-		if p.tryLaunchPDF(activeVersionsSnap, seqSnap) {
-			return true
-		}
-		return p.tryLaunchVersion(activePDFSnap, seqSnap)
-	}
-	if p.tryLaunchVersion(activePDFSnap, seqSnap) {
-		return true
-	}
-	return p.tryLaunchPDF(activeVersionsSnap, seqSnap)
-}
-
-// tryLaunchVersion attempts to claim one BranchVersion and launch its execution goroutine.
-func (p *Pool) tryLaunchVersion(otherActivePDF map[string]int, seqSnap map[string]uint64) bool {
-	if p.branches == nil {
-		return false
-	}
-	req := core.ClaimJobRequest{
+	job, err := p.jobs.ClaimNext(p.claimCtx, core.ClaimJobRequest{
 		WorkerID:               p.workerID,
 		Now:                    p.now(),
 		LeaseDuration:          p.leaseDuration,
 		MaxConcurrentPerTenant: p.maxConcurrentPerTenant,
-		OtherActiveByTenant:    otherActivePDF,
 		LastServedSeq:          seqSnap,
-	}
-	ver, err := p.branches.ClaimNextVersion(p.claimCtx, req)
+		PreferredKind:          preferredKind,
+	})
 	if err != nil {
 		if p.logger != nil && p.claimCtx.Err() == nil {
-			p.logger.Warn("failed to claim pending branch version", "worker_id", p.workerID, "err", err)
-		}
-		return false
-	}
-	if ver == nil {
-		return false
-	}
-
-	tenantID := ver.UserID
-	p.acquireSlot(tenantID, false)
-	p.jobWG.Add(1)
-	go p.runClaimedVersion(ver, tenantID)
-	return true
-}
-
-// tryLaunchPDF attempts to claim one PDFParseJob and launch its execution goroutine.
-func (p *Pool) tryLaunchPDF(otherActiveVersions map[string]int, seqSnap map[string]uint64) bool {
-	if p.pdfJobs == nil {
-		return false
-	}
-	req := core.ClaimJobRequest{
-		WorkerID:               p.workerID,
-		Now:                    p.now(),
-		LeaseDuration:          p.leaseDuration,
-		MaxConcurrentPerTenant: p.maxConcurrentPerTenant,
-		OtherActiveByTenant:    otherActiveVersions,
-		LastServedSeq:          seqSnap,
-	}
-	job, err := p.pdfJobs.ClaimNextJob(p.claimCtx, req)
-	if err != nil {
-		if p.logger != nil && p.claimCtx.Err() == nil {
-			p.logger.Warn("failed to claim pending pdf parse job", "worker_id", p.workerID, "err", err)
+			p.logger.Warn("failed to claim pending job", "worker_id", p.workerID, "err", err)
 		}
 		return false
 	}
@@ -571,43 +475,26 @@ func (p *Pool) tryLaunchPDF(otherActiveVersions map[string]int, seqSnap map[stri
 		return false
 	}
 
-	tenantID := job.UserID
-	p.acquireSlot(tenantID, true)
+	p.acquireSlot(job.UserID)
 	p.jobWG.Add(1)
-	go p.runClaimedPDFJob(job, tenantID)
+	go p.runClaimedJob(job)
 	return true
 }
 
-// acquireSlot increments active global/per-tenant counts and records fair-share sequence order before spawning.
-func (p *Pool) acquireSlot(tenantID string, isPDF bool) {
+// acquireSlot increments active global counts and records fair-share sequence order before spawning.
+func (p *Pool) acquireSlot(tenantID string) {
 	p.slotMu.Lock()
 	p.activeCount++
-	if isPDF {
-		p.activePDFJobs[tenantID]++
-	} else {
-		p.activeVersions[tenantID]++
-	}
 	p.dispatchSeq++
 	p.lastServedSeq[tenantID] = p.dispatchSeq
 	p.slotMu.Unlock()
 }
 
-// releaseSlot decrements active global/per-tenant counts and notifies the dispatcher that capacity freed.
-func (p *Pool) releaseSlot(tenantID string, isPDF bool) {
+// releaseSlot decrements the active global count and notifies the dispatcher that capacity freed.
+func (p *Pool) releaseSlot() {
 	p.slotMu.Lock()
 	if p.activeCount > 0 {
 		p.activeCount--
-	}
-	if isPDF {
-		p.activePDFJobs[tenantID]--
-		if p.activePDFJobs[tenantID] <= 0 {
-			delete(p.activePDFJobs, tenantID)
-		}
-	} else {
-		p.activeVersions[tenantID]--
-		if p.activeVersions[tenantID] <= 0 {
-			delete(p.activeVersions, tenantID)
-		}
 	}
 	p.slotMu.Unlock()
 
@@ -617,40 +504,19 @@ func (p *Pool) releaseSlot(tenantID string, isPDF bool) {
 	}
 }
 
-// runClaimedVersion executes a claimed BranchVersion under panic recovery and WaitGroup/slot accounting.
-func (p *Pool) runClaimedVersion(ver *core.BranchVersion, tenantID string) {
+// runClaimedJob dispatches a claimed core.Job by kind under panic recovery and WaitGroup/slot accounting.
+func (p *Pool) runClaimedJob(job *core.Job) {
 	defer p.jobWG.Done()
-	defer p.releaseSlot(tenantID, false)
-	p.safeProcessVersion(ver)
-}
+	defer p.releaseSlot()
 
-// runClaimedPDFJob executes a claimed PDFParseJob under panic recovery and WaitGroup/slot accounting.
-func (p *Pool) runClaimedPDFJob(job *core.PDFParseJob, tenantID string) {
-	defer p.jobWG.Done()
-	defer p.releaseSlot(tenantID, true)
-	p.safeProcessPDFJob(job)
-}
-
-// safeProcessVersion runs a claimed generation version with panic recovery so worker slots and quotas never leak.
-func (p *Pool) safeProcessVersion(ver *core.BranchVersion) {
-	defer func() {
-		if r := recover(); r != nil {
-			versionID := ""
-			if ver != nil {
-				versionID = ver.ID
-			}
-			if p.logger != nil {
-				p.logger.Error("panic recovered during job execution",
-					"version_id", versionID,
-					"worker_id", p.workerID,
-					"panic", r,
-				)
-			}
-			p.failClaimedJob(p.versionJobDescriptor(ver, ""), "An unexpected internal error occurred during resume generation.", true, core.LLMTelemetry{})
-		}
-	}()
-
-	p.processClaimedVersion(ver)
+	switch job.Kind {
+	case core.JobKindBranchTailor:
+		p.safeProcessBranchJob(job)
+	case core.JobKindPDFParse:
+		p.safeProcessPDFJob(job)
+	default:
+		p.failClaimedJob(p.jobDescriptor(job, ""), "Unsupported job kind.", true, core.LLMTelemetry{})
+	}
 }
 
 // sweepLoop periodically expires TTL-elapsed pending jobs and stale processing leases, refunding quotas.
@@ -670,45 +536,28 @@ func (p *Pool) sweepLoop(ctx context.Context) {
 	}
 }
 
-// runSweep executes one TTL and lease expiration sweep across branch versions and PDF jobs.
+// runSweep executes one TTL and lease expiration sweep across the unified job queue.
 func (p *Pool) runSweep(ctx context.Context) {
+	if p.jobs == nil {
+		return
+	}
 	now := p.now()
 	var released []core.ReleasedReservation
 
-	if p.branches != nil {
-		if rel, err := p.branches.ExpirePendingVersions(ctx, now, core.ErrJobExpired.Error()); err != nil {
-			if p.logger != nil && ctx.Err() == nil {
-				p.logger.Warn("failed to expire pending branch versions", "err", err)
-			}
-		} else {
-			released = append(released, rel...)
+	if rel, err := p.jobs.ExpirePending(ctx, now, core.ErrJobExpired.Error()); err != nil {
+		if p.logger != nil && ctx.Err() == nil {
+			p.logger.Warn("failed to expire pending jobs", "err", err)
 		}
-
-		if rel, err := p.branches.FailExpiredVersionLeases(ctx, now, core.ErrLeaseExpired.Error()); err != nil {
-			if p.logger != nil && ctx.Err() == nil {
-				p.logger.Warn("failed to expire stale branch version leases", "err", err)
-			}
-		} else {
-			released = append(released, rel...)
-		}
+	} else {
+		released = append(released, rel...)
 	}
 
-	if p.pdfJobs != nil {
-		if rel, err := p.pdfJobs.ExpirePendingJobs(ctx, now, core.ErrJobExpired.Error()); err != nil {
-			if p.logger != nil && ctx.Err() == nil {
-				p.logger.Warn("failed to expire pending pdf parse jobs", "err", err)
-			}
-		} else {
-			released = append(released, rel...)
+	if rel, err := p.jobs.FailExpiredLeases(ctx, now, core.ErrLeaseExpired.Error()); err != nil {
+		if p.logger != nil && ctx.Err() == nil {
+			p.logger.Warn("failed to expire stale job leases", "err", err)
 		}
-
-		if rel, err := p.pdfJobs.FailExpiredJobLeases(ctx, now, core.ErrLeaseExpired.Error()); err != nil {
-			if p.logger != nil && ctx.Err() == nil {
-				p.logger.Warn("failed to expire stale pdf job leases", "err", err)
-			}
-		} else {
-			released = append(released, rel...)
-		}
+	} else {
+		released = append(released, rel...)
 	}
 
 	if len(released) > 0 {
@@ -778,15 +627,6 @@ func (p *Pool) releaseReservationsDetached(released []core.ReleasedReservation) 
 	}
 }
 
-// copyIntMap returns a non-nil shallow copy of a string-to-int map.
-func copyIntMap(src map[string]int) map[string]int {
-	dst := make(map[string]int, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
-}
-
 // copySeqMap returns a non-nil shallow copy of a string-to-uint64 sequence map.
 func copySeqMap(src map[string]uint64) map[string]uint64 {
 	dst := make(map[string]uint64, len(src))
@@ -796,9 +636,5 @@ func copySeqMap(src map[string]uint64) map[string]uint64 {
 	return dst
 }
 
-// Compile-time assertions verifying Pool satisfies notification and legacy enqueuing contracts.
-var (
-	_ core.JobNotifier    = (*Pool)(nil)
-	_ branch.JobEnqueuer  = (*Pool)(nil)
-	_ core.PDFJobEnqueuer = (*Pool)(nil)
-)
+// Compile-time assertion verifying Pool satisfies JobNotifier.
+var _ core.JobNotifier = (*Pool)(nil)

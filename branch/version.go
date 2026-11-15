@@ -146,6 +146,9 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 	if b.UserID != userID {
 		return nil, core.ErrNotFound
 	}
+	if s.jobs == nil {
+		return nil, fmt.Errorf("%w: job store is required", core.ErrValidation)
+	}
 
 	var reservationID string
 	if s.quotas != nil {
@@ -169,11 +172,27 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 	}
 	expiresAt := now.Add(ttl)
 
+	jobID := "job-" + uuid.New().String()
+	verID := "ver-" + uuid.New().String()
+	job := &core.Job{
+		ID:            jobID,
+		Kind:          core.JobKindBranchTailor,
+		UserID:        userID,
+		Status:        core.JobStatusPending,
+		ReservationID: reservationID,
+		ExpiresAt:     &expiresAt,
+		Tailor: &core.BranchTailorSpec{
+			BranchID:  b.ID,
+			VersionID: verID,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
 	ver := &core.BranchVersion{
-		ID:                "ver-" + uuid.New().String(),
+		ID:                verID,
 		UserID:            userID,
 		BranchID:          b.ID,
-		ResumeID:          b.ID,
+		JobID:             jobID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  mainRevision,
 		TemplateSetIDUsed: b.TemplateSetID,
@@ -181,13 +200,11 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 		ModelUsed:         b.ModelOverride,
 		SourceType:        core.SourceTypeLLMGeneration,
 		ParentVersionID:   b.ActiveVersionID,
-		ReservationID:     reservationID,
-		ExpiresAt:         &expiresAt,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
 
-	superseded, err := s.branches.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{
+	superseded, err := s.jobs.SubmitBranchTailor(ctx, job, ver, core.PendingJobOptions{
 		MaxPendingPerTenant: maxPending,
 		TTL:                 ttl,
 		Now:                 now,
@@ -198,12 +215,7 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 	}
 	s.releaseReservationsWithDetachedContext(superseded)
 
-	s.notifyJob(core.GenerationJob{
-		UserID:        userID,
-		BranchID:      b.ID,
-		VersionID:     ver.ID,
-		ReservationID: reservationID,
-	})
+	s.notifyJob()
 
 	return ver, nil
 }
@@ -213,6 +225,9 @@ func (s *Service) CancelVersion(ctx context.Context, userID, branchID, versionID
 	if err := requireUserID(userID); err != nil {
 		return nil, err
 	}
+	if s.jobs == nil {
+		return nil, fmt.Errorf("%w: job store is required", core.ErrValidation)
+	}
 	br, err := s.branches.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
@@ -220,12 +235,12 @@ func (s *Service) CancelVersion(ctx context.Context, userID, branchID, versionID
 	if br.UserID != userID {
 		return nil, core.ErrNotFound
 	}
-	cancelled, err := s.branches.CancelVersion(ctx, userID, branchID, versionID, "cancelled by user")
+	cancelled, cancelledJob, err := s.jobs.CancelBranchVersion(ctx, userID, branchID, versionID, "cancelled by user")
 	if err != nil {
 		return nil, err
 	}
-	if cancelled != nil && cancelled.ReservationID != "" {
-		s.releaseReservationWithDetachedContext(cancelled.ReservationID, "cancelled by user")
+	if cancelledJob != nil && cancelledJob.ReservationID != "" {
+		s.releaseReservationWithDetachedContext(cancelledJob.ReservationID, "cancelled by user")
 	}
 	return cancelled, nil
 }
@@ -294,10 +309,7 @@ func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 		CreatedAt:         s.now(),
 	}
 
-	if err := s.branches.CreateVersion(ctx, newVer); err != nil {
-		return nil, err
-	}
-	if err := s.branches.CompleteVersion(ctx, newVer); err != nil {
+	if err := s.branches.SaveCompletedVersion(ctx, newVer); err != nil {
 		return nil, err
 	}
 	s.supersedePendingVersions(ctx, branchID, "superseded by manual edit")
@@ -357,11 +369,8 @@ func (s *Service) renderDefaultBranchVersion(ctx context.Context, userID string,
 		CompletedAt:       &now,
 	}
 
-	if err := s.branches.CreateVersion(ctx, ver); err != nil {
-		return nil, fmt.Errorf("creating default branch version: %w", err)
-	}
-	if err := s.branches.CompleteVersion(ctx, ver); err != nil {
-		return nil, fmt.Errorf("completing default branch version: %w", err)
+	if err := s.branches.SaveCompletedVersion(ctx, ver); err != nil {
+		return nil, fmt.Errorf("saving default branch version: %w", err)
 	}
 
 	branch.ActiveVersionID = &ver.ID

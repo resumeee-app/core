@@ -1,9 +1,6 @@
 package core
 
-import (
-	"context"
-	"time"
-)
+import "time"
 
 // UserRole represents tenant authorization privileges.
 type UserRole string
@@ -30,10 +27,4 @@ type User struct {
 	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// UserStore defines persistence operations for tenant user accounts.
-type UserStore interface {
-	User(ctx context.Context, id string) (*User, error)
-	UpsertUser(ctx context.Context, user *User) error
 }

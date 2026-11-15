@@ -13,8 +13,3 @@
 // Persistence adapters, LLM providers, worker pools, and HTTP handlers depend on these domain
 // types without coupling core packages to external storage, transport, or SDK implementations.
 package core
-
-// Normalizable represents any domain entity that requires normalization or alias synchronization prior to persistence.
-type Normalizable interface {
-	Normalize() error
-}

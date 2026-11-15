@@ -13,18 +13,21 @@ type Store interface {
 	CreateBranch(ctx context.Context, branch *core.Branch) error
 	UpdateBranch(ctx context.Context, branch *core.Branch) error
 	DeleteBranch(ctx context.Context, userID, id string) error
-	CreateVersion(ctx context.Context, version *core.BranchVersion) error
-	SubmitPendingVersion(ctx context.Context, version *core.BranchVersion, opts core.PendingJobOptions) ([]core.ReleasedReservation, error)
-	SupersedePendingVersions(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error)
-	AbortBranchVersions(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error)
-	CancelVersion(ctx context.Context, userID, branchID, versionID, reason string) (*core.BranchVersion, error)
 	Version(ctx context.Context, branchID, versionID string) (*core.BranchVersion, error)
 	VersionByNumber(ctx context.Context, branchID string, versionNumber int) (*core.BranchVersion, error)
 	VersionsByIDs(ctx context.Context, versionIDs []string) ([]core.BranchVersion, error)
 	ListVersions(ctx context.Context, branchID string) ([]core.BranchVersion, error)
-	UpdateVersionStatus(ctx context.Context, versionID string, status core.VersionStatus, errMsg string) error
-	CompleteVersion(ctx context.Context, version *core.BranchVersion) error
-	UpdateVersionATSScore(ctx context.Context, versionID string, atsScore *core.ATSScore) error
+	SaveCompletedVersion(ctx context.Context, version *core.BranchVersion) error
+	SetVersionGapReport(ctx context.Context, versionID string, report *core.GapReport) error
+	SetVersionATSScore(ctx context.Context, versionID string, atsScore *core.ATSScore) error
+}
+
+// JobStore defines unified background queue operations required by the branch service.
+type JobStore interface {
+	SubmitBranchTailor(ctx context.Context, job *core.Job, version *core.BranchVersion, opts core.PendingJobOptions) ([]core.ReleasedReservation, error)
+	SupersedeBranchTailor(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error)
+	AbortBranchJobs(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error)
+	CancelBranchVersion(ctx context.Context, userID, branchID, versionID, reason string) (*core.BranchVersion, *core.Job, error)
 }
 
 // ProfileReader retrieves candidate profile roots and snapshots.
@@ -48,11 +51,6 @@ type QuotaManager interface {
 	ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error)
 	CommitUsage(ctx context.Context, reservationID string, telemetry core.LLMTelemetry) error
 	ReleaseQuota(ctx context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error
-}
-
-// JobEnqueuer submits asynchronous resume generation jobs to the worker pool.
-type JobEnqueuer interface {
-	Enqueue(job core.GenerationJob) error
 }
 
 // Generator executes AI-backed resume tailoring, gap analysis, and ATS simulations.

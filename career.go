@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"time"
 )
 
@@ -197,51 +196,4 @@ func (f Fact) EffectiveShortID() string {
 		return f.ShortID
 	}
 	return ShortenID(f.ID)
-}
-
-// CareerStore defines persistence operations for Tier-1 career entities (skills, experiences,
-// projects, education, certifications, and facts).
-type CareerStore interface {
-	// Skills
-	ListSkills(ctx context.Context, userID string) ([]Skill, error)
-	ListGlobalSkills(ctx context.Context) ([]Skill, error)
-	Skill(ctx context.Context, userID, id string) (*Skill, error)
-	CreateSkill(ctx context.Context, skill *Skill) error
-	UpdateSkill(ctx context.Context, skill *Skill) error
-	DeleteSkill(ctx context.Context, userID, id string) error
-
-	// Work Experience
-	ListExperiences(ctx context.Context, userID string) ([]WorkExperience, error)
-	Experience(ctx context.Context, userID, id string) (*WorkExperience, error)
-	CreateExperience(ctx context.Context, exp *WorkExperience) error
-	UpdateExperience(ctx context.Context, exp *WorkExperience) error
-	DeleteExperience(ctx context.Context, userID, id string) error
-
-	// Projects
-	ListProjects(ctx context.Context, userID string) ([]Project, error)
-	Project(ctx context.Context, userID, id string) (*Project, error)
-	CreateProject(ctx context.Context, proj *Project) error
-	UpdateProject(ctx context.Context, proj *Project) error
-	DeleteProject(ctx context.Context, userID, id string) error
-
-	// Education
-	ListEducation(ctx context.Context, userID string) ([]Education, error)
-	Education(ctx context.Context, userID, id string) (*Education, error)
-	CreateEducation(ctx context.Context, edu *Education) error
-	UpdateEducation(ctx context.Context, edu *Education) error
-	DeleteEducation(ctx context.Context, userID, id string) error
-
-	// Certifications
-	ListCertifications(ctx context.Context, userID string) ([]Certification, error)
-	Certification(ctx context.Context, userID, id string) (*Certification, error)
-	CreateCertification(ctx context.Context, cert *Certification) error
-	UpdateCertification(ctx context.Context, cert *Certification) error
-	DeleteCertification(ctx context.Context, userID, id string) error
-
-	// Facts
-	ListFactsByOwner(ctx context.Context, userID, ownerType, ownerID string) ([]Fact, error)
-	Fact(ctx context.Context, userID, id string) (*Fact, error)
-	CreateFact(ctx context.Context, fact *Fact) error
-	UpdateFact(ctx context.Context, fact *Fact) error
-	DeleteFact(ctx context.Context, userID, id string) error
 }

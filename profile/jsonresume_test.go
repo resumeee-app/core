@@ -13,7 +13,7 @@ import (
 	"github.com/resumeee-app/resumeee-core/profile"
 )
 
-func setupTestService(t *testing.T) (*profile.Service, core.ProfileStore, core.BranchStore) {
+func setupTestService(t *testing.T) (*profile.Service, *fakeProfileStore, *fakeProfileStore) {
 	t.Helper()
 	store := newFakeProfileStore()
 	svc := profile.New(store, store, store)

@@ -224,6 +224,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 
 	pool := worker.New(worker.Config{
 		Concurrency: 1,
+		Jobs:        env.jobRepo,
 		Branches:    env.branchRepo,
 		Profiles:    env.profileRepo,
 		Presets:     env.presetRepo,
@@ -242,14 +243,22 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 		ID:                "ver-sanitizer-test",
 		UserID:            env.defaultUser,
 		BranchID:          env.branchID,
-		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  2,
 		TemplateSetIDUsed: "builtin-standard-clean",
 		SourceType:        core.SourceTypeLLMGeneration,
-		ExpiresAt:         &expiresAt,
 	}
-	if err := env.branchRepo.CreateVersion(ctx, &ver); err != nil {
-		t.Fatalf("failed to create version: %v", err)
+	job := core.Job{
+		ID:        "job-sanitizer-test",
+		Kind:      core.JobKindBranchTailor,
+		UserID:    env.defaultUser,
+		ExpiresAt: &expiresAt,
+		Tailor: &core.BranchTailorSpec{
+			BranchID:  env.branchID,
+			VersionID: ver.ID,
+		},
+	}
+	if _, err := env.jobRepo.SubmitBranchTailor(ctx, &job, &ver, core.PendingJobOptions{}); err != nil {
+		t.Fatalf("failed to submit pending version: %v", err)
 	}
 	pool.Notify()
 
@@ -393,7 +402,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 }
 
 // awaitCompletedVersion polls store until versionID reaches a terminal completed status or fails the test.
-func awaitCompletedVersion(ctx context.Context, t *testing.T, store core.BranchStore, branchID, versionID string) *core.BranchVersion {
+func awaitCompletedVersion(ctx context.Context, t *testing.T, store worker.BranchReader, branchID, versionID string) *core.BranchVersion {
 	t.Helper()
 	for range 50 {
 		time.Sleep(20 * time.Millisecond)
@@ -483,6 +492,7 @@ func runSanitizerPipelineVersion(ctx context.Context, t *testing.T, env *testWor
 	pool := worker.New(worker.Config{
 		Concurrency:  1,
 		PollInterval: 10 * time.Millisecond,
+		Jobs:         env.jobRepo,
 		Branches:     env.branchRepo,
 		Profiles:     env.profileRepo,
 		Presets:      env.presetRepo,
@@ -500,14 +510,22 @@ func runSanitizerPipelineVersion(ctx context.Context, t *testing.T, env *testWor
 		ID:                versionID,
 		BranchID:          env.branchID,
 		UserID:            env.defaultUser,
-		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  2,
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 		SourceType:        core.SourceTypeLLMGeneration,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
-	if _, err := env.branchRepo.SubmitPendingVersion(ctx, &ver, core.PendingJobOptions{}); err != nil {
+	job := core.Job{
+		ID:     "job-" + versionID,
+		Kind:   core.JobKindBranchTailor,
+		UserID: env.defaultUser,
+		Tailor: &core.BranchTailorSpec{
+			BranchID:  env.branchID,
+			VersionID: ver.ID,
+		},
+	}
+	if _, err := env.jobRepo.SubmitBranchTailor(ctx, &job, &ver, core.PendingJobOptions{}); err != nil {
 		t.Fatalf("failed to submit pending version: %v", err)
 	}
 	pool.Notify()

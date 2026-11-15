@@ -255,6 +255,58 @@ func TestService_LiveRequestsUseCompactJSON(t *testing.T) {
 	}
 }
 
+func TestParseTailoredGenerationResponse_AcceptsSchemaPermittedDateFormats(t *testing.T) {
+	// The tailoring schema permits "YYYY-MM or YYYY" dates and "Expected YYYY" education end dates,
+	// so a provider response using them must decode instead of failing the entire generation.
+	raw := `{
+		"tailored_content": {
+			"experiences": [{"source_entity_id": "exp-1", "company": "Acme", "role_title": "SRE", "start_date": "2019", "end_date": "2021-06", "bullets": []}],
+			"projects": [{"source_entity_id": "proj-1", "name": "Infra", "start_date": "2020", "end_date": "2021", "bullets": []}],
+			"education": [{"source_entity_id": "edu-1", "institution": "State U", "degree": "BSc", "field": "CS", "start_date": "2022", "end_date": "Expected 2026"}],
+			"certifications": [{"source_entity_id": "cert-1", "name": "CKA", "issuer": "CNCF", "date": "2021"}]
+		},
+		"gap_report": {}
+	}`
+
+	resp, err := parseTailoredGenerationResponse(raw, core.TokenUsage{})
+	if err != nil {
+		t.Fatalf("expected schema-permitted dates to decode, got %v", err)
+	}
+
+	content := resp.TailoredContent
+	if len(content.Experiences) != 1 || len(content.Projects) != 1 || len(content.Education) != 1 || len(content.Certifications) != 1 {
+		t.Fatalf("expected one entry per section, got %+v", content)
+	}
+	assertDateString(t, "experience start", &content.Experiences[0].StartDate, "2019-01-01")
+	assertDateString(t, "experience end", content.Experiences[0].EndDate, "2021-06-01")
+	assertDateString(t, "project start", content.Projects[0].StartDate, "2020-01-01")
+	assertDateString(t, "project end", content.Projects[0].EndDate, "2021-01-01")
+	assertDateString(t, "education start", content.Education[0].StartDate, "2022-01-01")
+	assertDateString(t, "education end", content.Education[0].EndDate, "2026-01-01")
+	assertDateString(t, "certification date", content.Certifications[0].Date, "2021-01-01")
+}
+
+func TestParseTailoredGenerationResponse_RejectsUnparseableDate(t *testing.T) {
+	raw := `{"tailored_content": {"certifications": [{"source_entity_id": "cert-1", "name": "CKA", "issuer": "CNCF", "date": "sometime"}]}, "gap_report": {}}`
+
+	_, err := parseTailoredGenerationResponse(raw, core.TokenUsage{})
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("expected ErrInvalidResponse for unparseable date, got %v", err)
+	}
+}
+
+// assertDateString verifies that got is non-nil and formats as want.
+func assertDateString(t *testing.T, label string, got *core.Date, want string) {
+	t.Helper()
+	if got == nil {
+		t.Errorf("%s: expected %s, got nil", label, want)
+		return
+	}
+	if got.String() != want {
+		t.Errorf("%s: expected %s, got %s", label, want, got.String())
+	}
+}
+
 func TestService_GenerateTailoredResume_Telemetry(t *testing.T) {
 	bodyWithHallucinatedUsage := copySampleResponse()
 	bodyWithHallucinatedUsage.Usage = core.TokenUsage{PromptTokens: 999, CompletionTokens: 888, TotalTokens: 1887}

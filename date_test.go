@@ -39,6 +39,17 @@ func TestDate_ParseDate(t *testing.T) {
 		{"full ISO date", "2024-05-18", 2024, time.May, 18, false},
 		{"rfc3339 timestamp", "2024-05-18T14:30:00Z", 2024, time.May, 18, false},
 		{"year-month", "2024-05", 2024, time.May, 1, false},
+		{"year only", "2021", 2021, time.January, 1, false},
+		{"year only with surrounding whitespace", "  2021 ", 2021, time.January, 1, false},
+		{"expected year", "Expected 2026", 2026, time.January, 1, false},
+		{"expected year lowercase", "expected 2026", 2026, time.January, 1, false},
+		{"expected year-month", "Expected 2026-05", 2026, time.May, 1, false},
+		{"expected full date with tab", "EXPECTED\t2026-05-20", 2026, time.May, 20, false},
+		{"expected without date", "Expected", 0, 0, 0, false},
+		{"expected prefix without word boundary", "Expected2026", 0, 0, 0, true},
+		{"expected with unparseable remainder", "Expected soon", 0, 0, 0, true},
+		{"two-digit year", "21", 0, 0, 0, true},
+		{"five-digit year", "20210", 0, 0, 0, true},
 		{"empty string", "", 0, 0, 0, false},
 		{"whitespace only", "   ", 0, 0, 0, false},
 		{"invalid format", "invalid-date", 0, 0, 0, true},
@@ -114,6 +125,18 @@ func TestDate_JSONSerialization(t *testing.T) {
 	}
 	if decodedRFC.Start.String() != "2020-06-15" {
 		t.Errorf("expected Start '2020-06-15', got %q", decodedRFC.Start.String())
+	}
+
+	// Unmarshal year-only and "Expected" qualified dates emitted by LLM schemas
+	var decodedYear Sample
+	if err := json.Unmarshal([]byte(`{"start":"2021","end":"Expected 2026"}`), &decodedYear); err != nil {
+		t.Fatalf("Unmarshal with year-only dates failed: %v", err)
+	}
+	if decodedYear.Start.String() != "2021-01-01" {
+		t.Errorf("expected Start '2021-01-01', got %q", decodedYear.Start.String())
+	}
+	if decodedYear.End == nil || decodedYear.End.String() != "2026-01-01" {
+		t.Errorf("expected End '2026-01-01', got %v", decodedYear.End)
 	}
 }
 

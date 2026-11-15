@@ -52,11 +52,17 @@ func FromTime(t time.Time) Date {
 	}
 }
 
+// expectedDatePrefix marks anticipated completion dates (e.g. "Expected 2026") that LLM
+// tailoring and extraction schemas explicitly permit for education end dates.
+const expectedDatePrefix = "expected"
+
 // ParseDate parses a string representation into a Date.
 //
 // Supported formats include ISO-8601 calendar date ("2006-01-02"), RFC3339 timestamps,
-// and year-month strings ("2006-01", defaulting day to 1). Empty or whitespace-only
-// strings return a zero Date with nil error.
+// year-month strings ("2006-01", defaulting day to 1), and year-only strings ("2006",
+// defaulting to January 1). A leading case-insensitive "Expected" qualifier is ignored so
+// anticipated dates such as "Expected 2026" parse as their underlying date. Empty or
+// whitespace-only strings return a zero Date with nil error.
 //
 // Parameters:
 //   - s: Date string to parse.
@@ -65,7 +71,7 @@ func FromTime(t time.Time) Date {
 //   - Date: Parsed Date instance normalized to UTC midnight.
 //   - error: Non-nil if the string cannot be parsed into a recognized date layout.
 func ParseDate(s string) (Date, error) {
-	trimmed := strings.TrimSpace(s)
+	trimmed := stripExpectedPrefix(strings.TrimSpace(s))
 	if trimmed == "" || trimmed == "null" || strings.EqualFold(trimmed, "present") {
 		return Date{}, nil
 	}
@@ -77,6 +83,8 @@ func ParseDate(s string) (Date, error) {
 		"2006-01",
 		"2006/01/02",
 		"2006/01",
+		// Year-only dates are emitted by LLM schemas that allow "YYYY" precision.
+		"2006",
 	}
 
 	for _, layout := range layouts {
@@ -88,6 +96,20 @@ func ParseDate(s string) (Date, error) {
 	}
 
 	return Date{}, fmt.Errorf("%w: invalid date string %q", ErrValidation, s)
+}
+
+// stripExpectedPrefix removes a leading case-insensitive expectedDatePrefix qualifier
+// (followed by whitespace or end of string) and returns the trimmed remainder.
+func stripExpectedPrefix(s string) string {
+	if len(s) < len(expectedDatePrefix) || !strings.EqualFold(s[:len(expectedDatePrefix)], expectedDatePrefix) {
+		return s
+	}
+	rest := s[len(expectedDatePrefix):]
+	// Require a word boundary so arbitrary strings that merely start with "expected" are not rewritten.
+	if rest != "" && rest[0] != ' ' && rest[0] != '\t' {
+		return s
+	}
+	return strings.TrimSpace(rest)
 }
 
 // DatePtr returns a pointer to the provided Date value.

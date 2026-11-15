@@ -1,11 +1,12 @@
-// Package worker provides an in-memory concurrent worker pool and execution pipeline
-// for asynchronous resume generation and background batch synchronization.
+// Package worker provides a direct-store claiming worker pool and execution pipelines
+// for asynchronous resume generation and PDF resume extraction.
 //
 // Key components include:
-//   - Pool: Concurrent worker pool managing worker goroutines and channel queues
+//   - Pool: Concurrent worker pool managing direct-store claiming, lease heartbeats,
+//     bounded retries, TTL/lease expiration sweeps, and graceful shutdown
 //   - Pipeline: Multi-stage resume generation pipeline coordinating prompt construction,
-//     LLM invocation, anti-hallucination validation, and version persistence
-//   - PDFParsePipeline: Asynchronous background worker for processing uploaded PDF resumes
+//     LLM invocation, anti-hallucination validation, template rendering, and version persistence
+//   - PDFParsePipeline: Asynchronous background worker for extracting structured resumes from PDF text
 package worker
 
 import (
@@ -13,32 +14,55 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/branch"
 )
 
-// Default pool sizing limits applied when Config omits explicit values.
+// Default pool sizing, polling, retry, lease, and shutdown bounds applied when Config omits explicit values.
 const (
-	// defaultConcurrency sets the worker goroutine count when Config.Concurrency is zero or negative.
+	// defaultConcurrency sets the maximum simultaneous in-flight jobs when Config.Concurrency is zero or negative.
 	defaultConcurrency = 4
-	// defaultQueueSize sets the buffered job capacity when Config.QueueSize is zero or negative.
-	defaultQueueSize = 100
 	// defaultMaxConcurrentPerTenant caps simultaneous in-flight jobs per tenant when unset.
 	defaultMaxConcurrentPerTenant = 2
+	// defaultPollInterval controls fallback store polling cadence when Config.PollInterval is unset.
+	defaultPollInterval = 1 * time.Second
+	// defaultSweepInterval controls periodic TTL and stale lease sweeps when Config.SweepInterval is unset.
+	defaultSweepInterval = 15 * time.Second
+	// defaultMaxAttempts sets total execution attempts for transient failures when Config.MaxAttempts is unset.
+	defaultMaxAttempts = 3
+	// defaultRetryBaseDelay sets initial exponential backoff before retrying a transient failure.
+	defaultRetryBaseDelay = 250 * time.Millisecond
+	// defaultMaxRetryDelay caps exponential backoff between transient retry attempts.
+	defaultMaxRetryDelay = 5 * time.Second
+	// defaultShutdownTimeout bounds how long Stop waits for in-flight jobs to drain cleanly.
+	defaultShutdownTimeout = 30 * time.Second
+	// defaultCleanupTimeout bounds detached failure-persistence and quota-refund contexts.
+	defaultCleanupTimeout = 10 * time.Second
 )
 
-// ErrPoolClosed indicates the pool is stopped and cannot accept new jobs.
+// ErrPoolClosed indicates the worker pool is nil or no longer accepting work.
 var ErrPoolClosed = errors.New("worker pool closed")
 
-// Config specifies construction parameters for a worker Pool.
+// Config specifies construction parameters and dependencies for a direct-store claiming worker Pool.
 type Config struct {
 	Concurrency            int
-	QueueSize              int
 	MaxConcurrentPerTenant int
+	PollInterval           time.Duration
+	SweepInterval          time.Duration
+	LeaseDuration          time.Duration
+	LeaseRenewInterval     time.Duration
+	MaxAttempts            int
+	RetryBaseDelay         time.Duration
+	MaxRetryDelay          time.Duration
+	ShutdownTimeout        time.Duration
+	CleanupTimeout         time.Duration
+	WorkerID               string
+	Clock                  func() time.Time
 	Branches               BranchStore
 	Profiles               ProfileReader
 	Presets                PresetReader
@@ -53,35 +77,49 @@ type Config struct {
 	Logger                 *slog.Logger
 }
 
-// pendingJob represents either a resume generation task or a PDF parse task queued per tenant.
-type pendingJob struct {
-	isPDF    bool
-	genJob   core.GenerationJob
-	pdfJob   core.PDFParseJobTask
-	tenantID string
-}
-
-// Pool implements an in-memory concurrent worker pool processing GenerationJobs and PDFParseJobTasks
-// with fair-share per-tenant round-robin scheduling and per-tenant concurrency throttling.
+// Pool claims persisted pending BranchVersion and PDFParseJob records directly from stores,
+// enforcing global and per-tenant concurrency limits, lease heartbeats, bounded retries, and periodic sweeps.
 type Pool struct {
 	concurrency            int
-	queueSize              int
 	maxConcurrentPerTenant int
+	pollInterval           time.Duration
+	sweepInterval          time.Duration
+	leaseDuration          time.Duration
+	leaseRenewInterval     time.Duration
+	maxAttempts            int
+	retryBaseDelay         time.Duration
+	maxRetryDelay          time.Duration
+	shutdownTimeout        time.Duration
+	cleanupTimeout         time.Duration
+	workerID               string
+	clock                  func() time.Time
 
-	mu               sync.Mutex
-	cond             *sync.Cond
-	closed           bool
-	started          bool
-	totalQueued      int
-	tenantQueues     map[string][]pendingJob
-	tenantOrder      []string
-	rrCursor         int
-	activeTenantJobs map[string]int
+	mu          sync.Mutex
+	started     bool
+	stopping    bool
+	claimCtx    context.Context
+	claimCancel context.CancelFunc
+	jobCtx      context.Context
+	jobCancel   context.CancelFunc
+	timerSeq    uint64
+	retryTimers map[uint64]*time.Timer
+	stoppedCh   chan struct{}
 
-	wg     sync.WaitGroup
-	ctx    context.Context
-	cancel context.CancelFunc
-	logger *slog.Logger
+	claimMu       sync.Mutex
+	preferPDFNext bool
+
+	slotMu         sync.Mutex
+	activeCount    int
+	activeVersions map[string]int
+	activePDFJobs  map[string]int
+	lastServedSeq  map[string]uint64
+	dispatchSeq    uint64
+
+	wakeupCh    chan struct{}
+	slotFreedCh chan struct{}
+	loopWG      sync.WaitGroup
+	jobWG       sync.WaitGroup
+	logger      *slog.Logger
 
 	branches        BranchStore
 	profiles        ProfileReader
@@ -96,37 +134,85 @@ type Pool struct {
 	renderer        TemplateRenderer
 }
 
-// normalizeTenantID returns userID trimmed of whitespace, defaulting empty IDs to "default".
-func normalizeTenantID(userID string) string {
-	trimmed := strings.TrimSpace(userID)
-	if trimmed == "" {
-		return "default"
-	}
-	return trimmed
-}
-
-// New constructs a worker Pool with fair-share per-tenant scheduling.
+// New constructs a direct-store claiming worker Pool configured with cfg.
 func New(cfg Config) *Pool {
 	concurrency := cfg.Concurrency
 	if concurrency <= 0 {
 		concurrency = defaultConcurrency
 	}
-	queueSize := cfg.QueueSize
-	if queueSize <= 0 {
-		queueSize = defaultQueueSize
-	}
 	maxConcurrent := cfg.MaxConcurrentPerTenant
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrentPerTenant
 	}
+	pollInterval := cfg.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = defaultPollInterval
+	}
+	sweepInterval := cfg.SweepInterval
+	if sweepInterval <= 0 {
+		sweepInterval = defaultSweepInterval
+	}
+	leaseDuration := cfg.LeaseDuration
+	if leaseDuration <= 0 {
+		leaseDuration = core.DefaultLeaseDuration
+	}
+	leaseRenewInterval := cfg.LeaseRenewInterval
+	if leaseRenewInterval <= 0 {
+		leaseRenewInterval = leaseDuration / 3
+		if leaseRenewInterval <= 0 {
+			leaseRenewInterval = time.Millisecond
+		}
+	}
+	maxAttempts := cfg.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+	retryBaseDelay := cfg.RetryBaseDelay
+	if retryBaseDelay <= 0 {
+		retryBaseDelay = defaultRetryBaseDelay
+	}
+	maxRetryDelay := cfg.MaxRetryDelay
+	if maxRetryDelay <= 0 {
+		maxRetryDelay = defaultMaxRetryDelay
+	}
+	shutdownTimeout := cfg.ShutdownTimeout
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = defaultShutdownTimeout
+	}
+	cleanupTimeout := cfg.CleanupTimeout
+	if cleanupTimeout <= 0 {
+		cleanupTimeout = defaultCleanupTimeout
+	}
+	workerID := cfg.WorkerID
+	if workerID == "" {
+		workerID = "worker-" + uuid.NewString()[:8]
+	}
+	clock := cfg.Clock
+	if clock == nil {
+		clock = time.Now
+	}
 
-	p := &Pool{
+	return &Pool{
 		concurrency:            concurrency,
-		queueSize:              queueSize,
 		maxConcurrentPerTenant: maxConcurrent,
-		tenantQueues:           make(map[string][]pendingJob),
-		tenantOrder:            make([]string, 0),
-		activeTenantJobs:       make(map[string]int),
+		pollInterval:           pollInterval,
+		sweepInterval:          sweepInterval,
+		leaseDuration:          leaseDuration,
+		leaseRenewInterval:     leaseRenewInterval,
+		maxAttempts:            maxAttempts,
+		retryBaseDelay:         retryBaseDelay,
+		maxRetryDelay:          maxRetryDelay,
+		shutdownTimeout:        shutdownTimeout,
+		cleanupTimeout:         cleanupTimeout,
+		workerID:               workerID,
+		clock:                  clock,
+		retryTimers:            make(map[uint64]*time.Timer),
+		stoppedCh:              make(chan struct{}),
+		activeVersions:         make(map[string]int),
+		activePDFJobs:          make(map[string]int),
+		lastServedSeq:          make(map[string]uint64),
+		wakeupCh:               make(chan struct{}, 1),
+		slotFreedCh:            make(chan struct{}, 1),
 		logger:                 cfg.Logger,
 		branches:               cfg.Branches,
 		profiles:               cfg.Profiles,
@@ -140,276 +226,567 @@ func New(cfg Config) *Pool {
 		validator:              cfg.Validator,
 		renderer:               cfg.Renderer,
 	}
-	p.cond = sync.NewCond(&p.mu)
-	return p
 }
 
-// Start launches worker goroutines to process incoming generation and PDF parsing jobs.
+// now returns the current UTC timestamp from the pool's configured clock.
+func (p *Pool) now() time.Time {
+	if p.clock != nil {
+		return p.clock().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// cleanupDuration returns the bounded timeout used for detached cleanup and quota-refund operations.
+func (p *Pool) cleanupDuration() time.Duration {
+	if p.cleanupTimeout > 0 {
+		return p.cleanupTimeout
+	}
+	return defaultCleanupTimeout
+}
+
+// Start launches the dispatcher and periodic expiration/lease sweep loops.
+// Calling Start multiple times or after Stop is a safe no-op.
 func (p *Pool) Start(ctx context.Context) {
+	if p == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	p.mu.Lock()
-	if p.started || p.closed {
+	if p.started || p.stopping {
 		p.mu.Unlock()
 		return
 	}
 	p.started = true
-	p.ctx, p.cancel = context.WithCancel(ctx)
+	p.claimCtx, p.claimCancel = context.WithCancel(ctx)
+	p.jobCtx, p.jobCancel = context.WithCancel(ctx)
+	claimCtx := p.claimCtx
 	p.mu.Unlock()
 
-	go func() {
-		<-p.ctx.Done()
-		p.mu.Lock()
-		p.cond.Broadcast()
-		p.mu.Unlock()
-	}()
-
-	for i := 0; i < p.concurrency; i++ {
-		p.wg.Add(1)
-		go p.workerLoop(p.ctx)
-	}
+	p.loopWG.Add(2)
+	go p.dispatchLoop(claimCtx)
+	go p.sweepLoop(claimCtx)
 
 	if p.logger != nil {
 		p.logger.Info("worker pool started",
+			"worker_id", p.workerID,
 			"concurrency", p.concurrency,
-			"queue_size", p.queueSize,
 			"max_concurrent_per_tenant", p.maxConcurrentPerTenant,
+			"poll_interval", p.pollInterval,
+			"sweep_interval", p.sweepInterval,
 		)
 	}
 }
 
-// Enqueue submits a generation job to the pool, returning core.ErrQueueFull if saturated.
-func (p *Pool) Enqueue(job core.GenerationJob) error {
-	tenantID := normalizeTenantID(job.UserID)
-	item := pendingJob{
-		isPDF:    false,
-		genJob:   job,
-		tenantID: tenantID,
+// Notify signals the dispatcher loop without blocking that persisted pending work may be ready to claim.
+func (p *Pool) Notify() {
+	if p == nil || p.wakeupCh == nil {
+		return
 	}
-	return p.enqueuePendingJob(
-		tenantID,
-		item,
-		"job enqueued",
-		"worker queue saturated",
-		slog.String("version_id", job.VersionID),
-		slog.String("branch_id", job.BranchID),
-		slog.String("tenant_id", tenantID),
-	)
+	select {
+	case p.wakeupCh <- struct{}{}:
+	default:
+	}
 }
 
-// EnqueuePDFJob submits an asynchronous PDF parse task to the pool, returning core.ErrQueueFull if saturated.
-func (p *Pool) EnqueuePDFJob(task core.PDFParseJobTask) error {
-	tenantID := normalizeTenantID(task.UserID)
-	item := pendingJob{
-		isPDF:    true,
-		pdfJob:   task,
-		tenantID: tenantID,
+// Enqueue wakes the direct-store dispatcher via Notify while leaving job state solely in persistent stores.
+func (p *Pool) Enqueue(_ core.GenerationJob) error {
+	if p == nil {
+		return ErrPoolClosed
 	}
-	return p.enqueuePendingJob(
-		tenantID,
-		item,
-		"pdf job enqueued",
-		"pdf worker queue saturated",
-		slog.String("job_id", task.JobID),
-		slog.String("tenant_id", tenantID),
-	)
-}
-
-// attrsToAny converts typed slog attributes into an untyped slice for structured logger methods.
-func attrsToAny(attrs []slog.Attr) []any {
-	args := make([]any, len(attrs))
-	for i, a := range attrs {
-		args[i] = a
-	}
-	return args
-}
-
-// enqueuePendingJob appends item to tenantID's FIFO queue while enforcing total queue capacity.
-func (p *Pool) enqueuePendingJob(tenantID string, item pendingJob, debugMsg, warnMsg string, logAttrs ...slog.Attr) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.closed {
-		return core.ErrQueueFull
-	}
-	if p.totalQueued >= p.queueSize {
-		if p.logger != nil {
-			p.logger.Warn(warnMsg, attrsToAny(logAttrs)...)
-		}
-		return core.ErrQueueFull
-	}
-
-	q, exists := p.tenantQueues[tenantID]
-	p.tenantQueues[tenantID] = append(q, item)
-	if !exists || len(q) == 0 {
-		p.ensureTenantRegisteredLocked(tenantID)
-	}
-	p.totalQueued++
-	p.cond.Signal()
-
-	if p.logger != nil {
-		p.logger.Debug(debugMsg, attrsToAny(logAttrs)...)
-	}
+	p.Notify()
 	return nil
 }
 
-// ensureTenantRegisteredLocked appends tenantID to round-robin order if not already present.
-func (p *Pool) ensureTenantRegisteredLocked(tenantID string) {
-	for _, t := range p.tenantOrder {
-		if t == tenantID {
-			return
-		}
+// EnqueuePDFJob wakes the direct-store dispatcher via Notify while leaving PDF job state solely in persistent stores.
+func (p *Pool) EnqueuePDFJob(_ core.PDFParseJobTask) error {
+	if p == nil {
+		return ErrPoolClosed
 	}
-	p.tenantOrder = append(p.tenantOrder, tenantID)
+	p.Notify()
+	return nil
 }
 
-// Stop gracefully shuts down the worker pool, draining all pending jobs and waiting for workers to terminate.
+// Stop gracefully stops claiming new work and waits up to Config.ShutdownTimeout for active jobs to complete.
 func (p *Pool) Stop() {
-	p.mu.Lock()
-	if !p.started || p.closed {
-		p.mu.Unlock()
+	if p == nil {
 		return
 	}
-	p.closed = true
-	p.cond.Broadcast()
-	p.mu.Unlock()
-
-	p.wg.Wait()
-
-	if p.cancel != nil {
-		p.cancel()
+	if p.shutdownTimeout > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), p.shutdownTimeout)
+		defer cancel()
+		_ = p.StopWithContext(ctx)
+		return
 	}
-	if p.logger != nil {
-		p.logger.Info("worker pool stopped cleanly")
-	}
+	_ = p.StopWithContext(context.Background())
 }
 
-// RecoverStaleJobs recovers interrupted jobs left in pending or processing states by failing them with reason.
+// StopWithContext halts new claims, stops pending retry timers, waits for dispatcher/sweep loops, and
+// drains in-flight jobs up to ctx.Done(). If ctx expires early, active jobs are cancelled and refunded.
+func (p *Pool) StopWithContext(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	p.mu.Lock()
+	if !p.started {
+		p.stopping = true
+		p.mu.Unlock()
+		return nil
+	}
+	alreadyStopping := p.stopping
+	p.stopping = true
+	claimCancel := p.claimCancel
+	jobCancel := p.jobCancel
+	p.mu.Unlock()
+
+	if alreadyStopping {
+		select {
+		case <-p.stoppedCh:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	if claimCancel != nil {
+		claimCancel()
+	}
+	p.stopRetryTimers()
+	p.loopWG.Wait()
+
+	jobsDone := make(chan struct{})
+	go func() {
+		p.jobWG.Wait()
+		close(jobsDone)
+	}()
+
+	var stopErr error
+	select {
+	case <-jobsDone:
+	case <-ctx.Done():
+		stopErr = ctx.Err()
+		if jobCancel != nil {
+			jobCancel()
+		}
+		// Allow cancelled jobs enough time to finish detached failure persistence and quota refunds.
+		timer := time.NewTimer(p.cleanupDuration() + time.Second)
+		select {
+		case <-jobsDone:
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+
+	if jobCancel != nil {
+		jobCancel()
+	}
+	close(p.stoppedCh)
+
+	if p.logger != nil {
+		p.logger.Info("worker pool stopped", "worker_id", p.workerID, "err", stopErr)
+	}
+	return stopErr
+}
+
+// RecoverStaleJobs fails interrupted processing jobs and expired pending jobs across branch versions and
+// PDF jobs, releasing all returned quota reservations via bounded detached cleanup contexts.
 func (p *Pool) RecoverStaleJobs(ctx context.Context, reason string) error {
-	var errs []error
+	if p == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var (
+		errs     []error
+		released []core.ReleasedReservation
+	)
 	if p.branches != nil {
-		if err := p.branches.FailInterruptedVersions(ctx, reason); err != nil {
+		rel, err := p.branches.RecoverInterruptedVersions(ctx, reason)
+		released = append(released, rel...)
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 	if p.pdfJobs != nil {
-		if err := p.pdfJobs.FailInterruptedJobs(ctx, reason); err != nil {
+		rel, err := p.pdfJobs.RecoverInterruptedJobs(ctx, reason)
+		released = append(released, rel...)
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
+	p.releaseReservationsDetached(released)
 	return errors.Join(errs...)
 }
 
-// workerLoop pulls eligible jobs from the round-robin queue until Stop drains the pool or ctx cancels.
-func (p *Pool) workerLoop(ctx context.Context) {
-	defer p.wg.Done()
+// isShuttingDown reports whether the pool is stopping or its job execution context has been cancelled.
+func (p *Pool) isShuttingDown() bool {
+	p.mu.Lock()
+	stopping := p.stopping
+	jobCtx := p.jobCtx
+	p.mu.Unlock()
+	return stopping || (jobCtx != nil && jobCtx.Err() != nil)
+}
+
+// dispatchLoop wakes on start, Notify signals, freed worker slots, retry timers, and fallback PollInterval
+// ticks to claim persisted work while concurrency capacity remains.
+func (p *Pool) dispatchLoop(ctx context.Context) {
+	defer p.loopWG.Done()
+
+	ticker := time.NewTicker(p.pollInterval)
+	defer ticker.Stop()
 
 	for {
-		job, ok := p.nextJob()
-		if !ok {
+		p.drainClaimable(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.wakeupCh:
+		case <-p.slotFreedCh:
+		case <-ticker.C:
+		}
+	}
+}
+
+// drainClaimable claims and spawns eligible pending jobs until global concurrency saturates or no jobs qualify.
+func (p *Pool) drainClaimable(ctx context.Context) {
+	for ctx.Err() == nil && p.hasCapacity() {
+		if !p.tryClaimAndLaunch() {
 			return
 		}
-		p.runJob(ctx, job)
 	}
 }
 
-// nextJob blocks until an eligible job can be dispatched under per-tenant concurrency limits.
-func (p *Pool) nextJob() (pendingJob, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	for {
-		// When closed, drain all queued jobs across all tenants before terminating workers.
-		if p.closed && p.totalQueued == 0 {
-			return pendingJob{}, false
-		}
-		// When not closed, terminate immediately if context was cancelled.
-		if !p.closed && p.ctx != nil && p.ctx.Err() != nil {
-			return pendingJob{}, false
-		}
-
-		if job, ok := p.popEligibleJobLocked(); ok {
-			return job, true
-		}
-		p.cond.Wait()
-	}
+// hasCapacity reports whether active in-flight workers are below configured global concurrency.
+func (p *Pool) hasCapacity() bool {
+	p.slotMu.Lock()
+	ok := p.activeCount < p.concurrency
+	p.slotMu.Unlock()
+	return ok
 }
 
-// popEligibleJobLocked scans tenants round-robin starting at rrCursor and pops one runnable job.
-func (p *Pool) popEligibleJobLocked() (pendingJob, bool) {
-	n := len(p.tenantOrder)
-	if n == 0 {
-		return pendingJob{}, false
+// tryClaimAndLaunch serializes store claims across BranchVersion and PDFParseJob queues, updates active
+// slot and fair-share accounting before spawning, and alternates preferred store order each cycle.
+func (p *Pool) tryClaimAndLaunch() bool {
+	p.claimMu.Lock()
+	defer p.claimMu.Unlock()
+
+	if p.claimCtx != nil && p.claimCtx.Err() != nil {
+		return false
 	}
 
-	for i := 0; i < n; i++ {
-		idx := (p.rrCursor + i) % n
-		tenantID := p.tenantOrder[idx]
-		queue := p.tenantQueues[tenantID]
-		if len(queue) == 0 || p.activeTenantJobs[tenantID] >= p.maxConcurrentPerTenant {
-			continue
-		}
-
-		job := queue[0]
-		queue[0] = pendingJob{} // Clear slice element so queued payloads can be garbage collected.
-		p.tenantQueues[tenantID] = queue[1:]
-		p.totalQueued--
-		p.activeTenantJobs[tenantID]++
-
-		if len(p.tenantQueues[tenantID]) == 0 {
-			delete(p.tenantQueues, tenantID)
-			p.tenantOrder = append(p.tenantOrder[:idx], p.tenantOrder[idx+1:]...)
-			if len(p.tenantOrder) > 0 {
-				p.rrCursor = idx % len(p.tenantOrder)
-			} else {
-				p.rrCursor = 0
-			}
-		} else {
-			p.rrCursor = (idx + 1) % len(p.tenantOrder)
-		}
-		return job, true
+	p.slotMu.Lock()
+	if p.activeCount >= p.concurrency {
+		p.slotMu.Unlock()
+		return false
 	}
+	activeVersionsSnap := copyIntMap(p.activeVersions)
+	activePDFSnap := copyIntMap(p.activePDFJobs)
+	seqSnap := copySeqMap(p.lastServedSeq)
+	p.slotMu.Unlock()
 
-	return pendingJob{}, false
+	preferPDF := p.preferPDFNext
+	p.preferPDFNext = !p.preferPDFNext
+
+	if preferPDF {
+		if p.tryLaunchPDF(activeVersionsSnap, seqSnap) {
+			return true
+		}
+		return p.tryLaunchVersion(activePDFSnap, seqSnap)
+	}
+	if p.tryLaunchVersion(activePDFSnap, seqSnap) {
+		return true
+	}
+	return p.tryLaunchPDF(activeVersionsSnap, seqSnap)
 }
 
-// runJob executes item and decrements active tenant accounting upon completion.
-func (p *Pool) runJob(ctx context.Context, item pendingJob) {
-	defer func() {
-		p.mu.Lock()
-		p.activeTenantJobs[item.tenantID]--
-		if p.activeTenantJobs[item.tenantID] <= 0 {
-			delete(p.activeTenantJobs, item.tenantID)
+// tryLaunchVersion attempts to claim one BranchVersion and launch its execution goroutine.
+func (p *Pool) tryLaunchVersion(otherActivePDF map[string]int, seqSnap map[string]uint64) bool {
+	if p.branches == nil {
+		return false
+	}
+	req := core.ClaimJobRequest{
+		WorkerID:               p.workerID,
+		Now:                    p.now(),
+		LeaseDuration:          p.leaseDuration,
+		MaxConcurrentPerTenant: p.maxConcurrentPerTenant,
+		OtherActiveByTenant:    otherActivePDF,
+		LastServedSeq:          seqSnap,
+	}
+	ver, err := p.branches.ClaimNextVersion(p.claimCtx, req)
+	if err != nil {
+		if p.logger != nil && p.claimCtx.Err() == nil {
+			p.logger.Warn("failed to claim pending branch version", "worker_id", p.workerID, "err", err)
 		}
-		p.cond.Broadcast()
-		p.mu.Unlock()
-	}()
+		return false
+	}
+	if ver == nil {
+		return false
+	}
 
-	if item.isPDF {
-		p.safeProcessPDFJob(ctx, item.pdfJob)
+	tenantID := ver.UserID
+	p.acquireSlot(tenantID, false)
+	p.jobWG.Add(1)
+	go p.runClaimedVersion(ver, tenantID)
+	return true
+}
+
+// tryLaunchPDF attempts to claim one PDFParseJob and launch its execution goroutine.
+func (p *Pool) tryLaunchPDF(otherActiveVersions map[string]int, seqSnap map[string]uint64) bool {
+	if p.pdfJobs == nil {
+		return false
+	}
+	req := core.ClaimJobRequest{
+		WorkerID:               p.workerID,
+		Now:                    p.now(),
+		LeaseDuration:          p.leaseDuration,
+		MaxConcurrentPerTenant: p.maxConcurrentPerTenant,
+		OtherActiveByTenant:    otherActiveVersions,
+		LastServedSeq:          seqSnap,
+	}
+	job, err := p.pdfJobs.ClaimNextJob(p.claimCtx, req)
+	if err != nil {
+		if p.logger != nil && p.claimCtx.Err() == nil {
+			p.logger.Warn("failed to claim pending pdf parse job", "worker_id", p.workerID, "err", err)
+		}
+		return false
+	}
+	if job == nil {
+		return false
+	}
+
+	tenantID := job.UserID
+	p.acquireSlot(tenantID, true)
+	p.jobWG.Add(1)
+	go p.runClaimedPDFJob(job, tenantID)
+	return true
+}
+
+// acquireSlot increments active global/per-tenant counts and records fair-share sequence order before spawning.
+func (p *Pool) acquireSlot(tenantID string, isPDF bool) {
+	p.slotMu.Lock()
+	p.activeCount++
+	if isPDF {
+		p.activePDFJobs[tenantID]++
 	} else {
-		p.safeProcessJob(ctx, item.genJob)
+		p.activeVersions[tenantID]++
+	}
+	p.dispatchSeq++
+	p.lastServedSeq[tenantID] = p.dispatchSeq
+	p.slotMu.Unlock()
+}
+
+// releaseSlot decrements active global/per-tenant counts and notifies the dispatcher that capacity freed.
+func (p *Pool) releaseSlot(tenantID string, isPDF bool) {
+	p.slotMu.Lock()
+	if p.activeCount > 0 {
+		p.activeCount--
+	}
+	if isPDF {
+		p.activePDFJobs[tenantID]--
+		if p.activePDFJobs[tenantID] <= 0 {
+			delete(p.activePDFJobs, tenantID)
+		}
+	} else {
+		p.activeVersions[tenantID]--
+		if p.activeVersions[tenantID] <= 0 {
+			delete(p.activeVersions, tenantID)
+		}
+	}
+	p.slotMu.Unlock()
+
+	select {
+	case p.slotFreedCh <- struct{}{}:
+	default:
 	}
 }
 
-// safeProcessJob executes a generation job with panic recovery so worker goroutines never terminate unhandled.
-func (p *Pool) safeProcessJob(ctx context.Context, job core.GenerationJob) {
+// runClaimedVersion executes a claimed BranchVersion under panic recovery and WaitGroup/slot accounting.
+func (p *Pool) runClaimedVersion(ver *core.BranchVersion, tenantID string) {
+	defer p.jobWG.Done()
+	defer p.releaseSlot(tenantID, false)
+	p.safeProcessVersion(ver)
+}
+
+// runClaimedPDFJob executes a claimed PDFParseJob under panic recovery and WaitGroup/slot accounting.
+func (p *Pool) runClaimedPDFJob(job *core.PDFParseJob, tenantID string) {
+	defer p.jobWG.Done()
+	defer p.releaseSlot(tenantID, true)
+	p.safeProcessPDFJob(job)
+}
+
+// safeProcessVersion runs a claimed generation version with panic recovery so worker slots and quotas never leak.
+func (p *Pool) safeProcessVersion(ver *core.BranchVersion) {
 	defer func() {
 		if r := recover(); r != nil {
 			errStr := fmt.Sprintf("panic recovered in worker: %v", r)
 			if p.logger != nil {
 				p.logger.Error("panic recovered during job execution",
-					"version_id", job.VersionID,
+					"version_id", ver.ID,
+					"worker_id", p.workerID,
 					"panic", r,
 				)
 			}
-			p.failJob(ctx, job.VersionID, errStr)
+			p.failAndRefundVersion(ver, errStr)
 		}
 	}()
 
-	p.processJob(ctx, job)
+	p.processClaimedVersion(ver)
 }
 
-// Compile-time assertions verifying Pool satisfies branch and PDF job enqueuing contracts.
+// sweepLoop periodically expires TTL-elapsed pending jobs and stale processing leases, refunding quotas.
+func (p *Pool) sweepLoop(ctx context.Context) {
+	defer p.loopWG.Done()
+
+	ticker := time.NewTicker(p.sweepInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.runSweep(ctx)
+		}
+	}
+}
+
+// runSweep executes one TTL and lease expiration sweep across branch versions and PDF jobs.
+func (p *Pool) runSweep(ctx context.Context) {
+	now := p.now()
+	var released []core.ReleasedReservation
+
+	if p.branches != nil {
+		if rel, err := p.branches.ExpirePendingVersions(ctx, now, core.ErrJobExpired.Error()); err != nil {
+			if p.logger != nil && ctx.Err() == nil {
+				p.logger.Warn("failed to expire pending branch versions", "err", err)
+			}
+		} else {
+			released = append(released, rel...)
+		}
+
+		if rel, err := p.branches.FailExpiredVersionLeases(ctx, now, core.ErrLeaseExpired.Error()); err != nil {
+			if p.logger != nil && ctx.Err() == nil {
+				p.logger.Warn("failed to expire stale branch version leases", "err", err)
+			}
+		} else {
+			released = append(released, rel...)
+		}
+	}
+
+	if p.pdfJobs != nil {
+		if rel, err := p.pdfJobs.ExpirePendingJobs(ctx, now, core.ErrJobExpired.Error()); err != nil {
+			if p.logger != nil && ctx.Err() == nil {
+				p.logger.Warn("failed to expire pending pdf parse jobs", "err", err)
+			}
+		} else {
+			released = append(released, rel...)
+		}
+
+		if rel, err := p.pdfJobs.FailExpiredJobLeases(ctx, now, core.ErrLeaseExpired.Error()); err != nil {
+			if p.logger != nil && ctx.Err() == nil {
+				p.logger.Warn("failed to expire stale pdf job leases", "err", err)
+			}
+		} else {
+			released = append(released, rel...)
+		}
+	}
+
+	if len(released) > 0 {
+		p.releaseReservationsDetached(released)
+		p.Notify()
+	}
+}
+
+// scheduleRetryTimer registers a tracked wakeup timer to notify the dispatcher once retry backoff elapses.
+func (p *Pool) scheduleRetryTimer(delay time.Duration) {
+	if delay <= 0 {
+		p.Notify()
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.started || p.stopping || (p.claimCtx != nil && p.claimCtx.Err() != nil) {
+		return
+	}
+	if p.retryTimers == nil {
+		p.retryTimers = make(map[uint64]*time.Timer)
+	}
+	p.timerSeq++
+	id := p.timerSeq
+	timer := time.AfterFunc(delay, func() {
+		p.mu.Lock()
+		delete(p.retryTimers, id)
+		p.mu.Unlock()
+		p.Notify()
+	})
+	p.retryTimers[id] = timer
+}
+
+// stopRetryTimers cancels and clears all pending retry wakeup timers during shutdown.
+func (p *Pool) stopRetryTimers() {
+	p.mu.Lock()
+	for id, t := range p.retryTimers {
+		t.Stop()
+		delete(p.retryTimers, id)
+	}
+	p.mu.Unlock()
+}
+
+// releaseReservationDetached refunds a single quota reservation using a bounded detached context.
+func (p *Pool) releaseReservationDetached(reservationID, reason string) {
+	if p.quotas == nil || reservationID == "" {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), p.cleanupDuration())
+	defer cancel()
+	if err := p.quotas.ReleaseQuota(cleanupCtx, reservationID, reason); err != nil && p.logger != nil {
+		p.logger.Warn("failed to release quota reservation", "reservation_id", reservationID, "reason", reason, "err", err)
+	}
+}
+
+// releaseReservationsDetached refunds all quota reservations returned by sweep or crash-recovery calls.
+func (p *Pool) releaseReservationsDetached(released []core.ReleasedReservation) {
+	if p.quotas == nil || len(released) == 0 {
+		return
+	}
+	for _, res := range released {
+		if res.ReservationID == "" {
+			continue
+		}
+		p.releaseReservationDetached(res.ReservationID, res.Reason)
+	}
+}
+
+// copyIntMap returns a non-nil shallow copy of a string-to-int map.
+func copyIntMap(src map[string]int) map[string]int {
+	dst := make(map[string]int, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// copySeqMap returns a non-nil shallow copy of a string-to-uint64 sequence map.
+func copySeqMap(src map[string]uint64) map[string]uint64 {
+	dst := make(map[string]uint64, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// Compile-time assertions verifying Pool satisfies notification and legacy enqueuing contracts.
 var (
+	_ core.JobNotifier    = (*Pool)(nil)
 	_ branch.JobEnqueuer  = (*Pool)(nil)
 	_ core.PDFJobEnqueuer = (*Pool)(nil)
 )

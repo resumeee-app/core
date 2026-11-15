@@ -763,3 +763,98 @@ func TestNormalizePromptWorkflow(t *testing.T) {
 		})
 	}
 }
+
+type fakeTimeoutNetError struct {
+	msg     string
+	timeout bool
+}
+
+func (e fakeTimeoutNetError) Error() string   { return e.msg }
+func (e fakeTimeoutNetError) Timeout() bool   { return e.timeout }
+func (e fakeTimeoutNetError) Temporary() bool { return e.timeout }
+
+func TestClassifyError(t *testing.T) {
+	cases := []struct {
+		name          string
+		err           error
+		wantClass     core.ErrorClass
+		wantRetryable bool
+	}{
+		{name: "nil error", err: nil, wantClass: "", wantRetryable: false},
+		{name: "permanent marker", err: fmt.Errorf("wrap: %w", core.ErrPermanentFailure), wantClass: core.ErrorClassPermanent, wantRetryable: false},
+		{name: "upstream quota marker", err: fmt.Errorf("billing: %w", core.ErrUpstreamQuota), wantClass: core.ErrorClassUpstreamQuota, wantRetryable: false},
+		{name: "validation error", err: fmt.Errorf("bad schema: %w", core.ErrValidation), wantClass: core.ErrorClassPermanent, wantRetryable: false},
+		{name: "unauthorized error", err: core.ErrUnauthorized, wantClass: core.ErrorClassPermanent, wantRetryable: false},
+		{name: "job expired", err: core.ErrJobExpired, wantClass: core.ErrorClassPermanent, wantRetryable: false},
+		{name: "job cancelled", err: core.ErrJobCancelled, wantClass: core.ErrorClassPermanent, wantRetryable: false},
+		{name: "context canceled", err: context.Canceled, wantClass: core.ErrorClassPermanent, wantRetryable: false},
+		{name: "unrecognized error defaults permanent", err: errors.New("unexpected failure"), wantClass: core.ErrorClassPermanent, wantRetryable: false},
+		{name: "transient marker", err: fmt.Errorf("429: %w", core.ErrTransientFailure), wantClass: core.ErrorClassTransient, wantRetryable: true},
+		{name: "context deadline exceeded", err: fmt.Errorf("call timed out: %w", context.DeadlineExceeded), wantClass: core.ErrorClassTransient, wantRetryable: true},
+		{name: "net timeout error", err: fakeTimeoutNetError{msg: "i/o timeout", timeout: true}, wantClass: core.ErrorClassTransient, wantRetryable: true},
+		{name: "non-timeout net error is permanent", err: fakeTimeoutNetError{msg: "conn refused", timeout: false}, wantClass: core.ErrorClassPermanent, wantRetryable: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := core.ClassifyError(tc.err); got != tc.wantClass {
+				t.Errorf("ClassifyError(%v) = %q, want %q", tc.err, got, tc.wantClass)
+			}
+			if got := core.IsRetryableError(tc.err); got != tc.wantRetryable {
+				t.Errorf("IsRetryableError(%v) = %v, want %v", tc.err, got, tc.wantRetryable)
+			}
+		})
+	}
+}
+
+func TestSentinelsAndStatusHelpers(t *testing.T) {
+	if !errors.Is(core.ErrPendingLimitExceeded, core.ErrQueueFull) {
+		t.Errorf("expected ErrPendingLimitExceeded to match ErrQueueFull")
+	}
+	if !errors.Is(core.ErrUpstreamQuota, core.ErrPermanentFailure) {
+		t.Errorf("expected ErrUpstreamQuota to match ErrPermanentFailure")
+	}
+	if !errors.Is(core.ErrJobExpired, core.ErrPermanentFailure) {
+		t.Errorf("expected ErrJobExpired to match ErrPermanentFailure")
+	}
+	if !errors.Is(core.ErrJobCancelled, core.ErrPermanentFailure) {
+		t.Errorf("expected ErrJobCancelled to match ErrPermanentFailure")
+	}
+
+	versionCases := []struct {
+		status        core.VersionStatus
+		wantTerminal  bool
+		wantCompleted bool
+	}{
+		{core.VersionStatusPending, false, false},
+		{core.VersionStatusProcessing, false, false},
+		{core.VersionStatusCompleted, true, true},
+		{core.VersionStatusCompletedWithWarnings, true, true},
+		{core.VersionStatusFailed, true, false},
+		{core.VersionStatusCancelled, true, false},
+	}
+	for _, tc := range versionCases {
+		if got := tc.status.IsTerminal(); got != tc.wantTerminal {
+			t.Errorf("VersionStatus(%q).IsTerminal() = %v, want %v", tc.status, got, tc.wantTerminal)
+		}
+		if got := tc.status.IsCompleted(); got != tc.wantCompleted {
+			t.Errorf("VersionStatus(%q).IsCompleted() = %v, want %v", tc.status, got, tc.wantCompleted)
+		}
+	}
+
+	pdfCases := []struct {
+		status       core.PDFParseJobStatus
+		wantTerminal bool
+	}{
+		{core.PDFParseJobStatusPending, false},
+		{core.PDFParseJobStatusProcessing, false},
+		{core.PDFParseJobStatusCompleted, true},
+		{core.PDFParseJobStatusFailed, true},
+		{core.PDFParseJobStatusCancelled, true},
+	}
+	for _, tc := range pdfCases {
+		if got := tc.status.IsTerminal(); got != tc.wantTerminal {
+			t.Errorf("PDFParseJobStatus(%q).IsTerminal() = %v, want %v", tc.status, got, tc.wantTerminal)
+		}
+	}
+}

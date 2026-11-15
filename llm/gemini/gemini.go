@@ -440,18 +440,7 @@ func mapCleanError(statusCode int, cleanMsg string) error {
 	if cleanMsg == "" {
 		cleanMsg = fmt.Sprintf("gemini api returned status %d", statusCode)
 	}
-	switch {
-	case statusCode == http.StatusBadRequest:
-		return fmt.Errorf("%w: %s", llm.ErrBadRequest, cleanMsg)
-	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
-		return fmt.Errorf("%w: status %d: %s", llm.ErrUnauthorized, statusCode, cleanMsg)
-	case statusCode == http.StatusTooManyRequests:
-		return fmt.Errorf("%w: status 429: %s", llm.ErrRateLimited, cleanMsg)
-	case statusCode >= http.StatusInternalServerError:
-		return fmt.Errorf("%w: status %d: %s", llm.ErrUpstream, statusCode, cleanMsg)
-	default:
-		return fmt.Errorf("gemini api returned status %d: %s", statusCode, cleanMsg)
-	}
+	return llm.MapHTTPStatusError("gemini", statusCode, cleanMsg)
 }
 
 // _ enforces at compile time that Client implements llm.Client.

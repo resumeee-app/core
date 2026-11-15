@@ -28,7 +28,7 @@ func (s *Store) Quota(_ context.Context, userID string) (*core.TenantQuota, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now().UTC()
+	now := s.now()
 	quota := s.getOrCreateQuotaLocked(userID, 0, 0, now)
 	return clone(quota), nil
 }
@@ -49,7 +49,7 @@ func (s *Store) ReserveQuota(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now().UTC()
+	now := s.now()
 	quota := s.getOrCreateQuotaLocked(userID, dailyLimit, monthlyLimit, now)
 	if quota.DailyRequestsUsed+1 > quota.DailyRequestLimit {
 		return nil, core.ErrQuotaExceeded
@@ -63,12 +63,14 @@ func (s *Store) ReserveQuota(
 	quota.UpdatedAt = now
 
 	record := &core.LLMUsageRecord{
-		ID:              core.GenerateID("usage"),
-		UserID:          userID,
-		Operation:       op,
-		EstimatedTokens: estimatedTokens,
-		Status:          core.ReservationStatusPending,
-		CreatedAt:       now,
+		ID:                 core.GenerateID("usage"),
+		UserID:             userID,
+		Operation:          op,
+		EstimatedTokens:    estimatedTokens,
+		Status:             core.ReservationStatusPending,
+		DailyWindowStart:   quota.DailyWindowStart,
+		MonthlyWindowStart: quota.MonthlyWindowStart,
+		CreatedAt:          now,
 	}
 	s.usageRecords[record.ID] = record
 
@@ -92,10 +94,13 @@ func (s *Store) CommitUsage(_ context.Context, reservationID string, usage core.
 		return nil
 	}
 
-	now := time.Now().UTC()
+	now := s.now()
 	if quota, ok := s.quotas[record.UserID]; ok {
-		delta := usage.TotalTokens - record.EstimatedTokens
-		quota.AdjustMonthlyTokens(delta)
+		quota.ResetWindowsIfExpired(now)
+		if !record.MonthlyWindowStart.IsZero() && quota.MonthlyWindowStart.Equal(record.MonthlyWindowStart) {
+			delta := usage.TotalTokens - record.EstimatedTokens
+			quota.AdjustMonthlyTokens(delta)
+		}
 		quota.UpdatedAt = now
 	}
 
@@ -124,9 +129,19 @@ func (s *Store) ReleaseQuota(_ context.Context, reservationID string, errMsg str
 		return nil
 	}
 
+	now := s.now()
 	if quota, ok := s.quotas[record.UserID]; ok {
-		quota.ReleaseReservation(record.EstimatedTokens)
-		quota.UpdatedAt = time.Now().UTC()
+		quota.ResetWindowsIfExpired(now)
+		if !record.DailyWindowStart.IsZero() && quota.DailyWindowStart.Equal(record.DailyWindowStart) {
+			quota.DailyRequestsUsed--
+			if quota.DailyRequestsUsed < 0 {
+				quota.DailyRequestsUsed = 0
+			}
+		}
+		if !record.MonthlyWindowStart.IsZero() && quota.MonthlyWindowStart.Equal(record.MonthlyWindowStart) {
+			quota.AdjustMonthlyTokens(-record.EstimatedTokens)
+		}
+		quota.UpdatedAt = now
 	}
 
 	record.Status = core.ReservationStatusReleased

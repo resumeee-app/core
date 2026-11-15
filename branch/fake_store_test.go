@@ -168,33 +168,506 @@ func (s *fakeBranchStore) DeleteBranch(_ context.Context, userID, id string) err
 	return nil
 }
 
+func cloneTimePtr(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	cp := *t
+	return &cp
+}
+
+func cloneStringPtr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	cp := *s
+	return &cp
+}
+
+func cloneVersion(v *core.BranchVersion) *core.BranchVersion {
+	if v == nil {
+		return nil
+	}
+	cp := *v
+	cp.StrategyIDUsed = cloneStringPtr(v.StrategyIDUsed)
+	cp.ParentVersionID = cloneStringPtr(v.ParentVersionID)
+	cp.ClaimedAt = cloneTimePtr(v.ClaimedAt)
+	cp.LeaseExpiresAt = cloneTimePtr(v.LeaseExpiresAt)
+	cp.NextRetryAt = cloneTimePtr(v.NextRetryAt)
+	cp.ExpiresAt = cloneTimePtr(v.ExpiresAt)
+	cp.CompletedAt = cloneTimePtr(v.CompletedAt)
+	if v.ValidationWarnings != nil {
+		cp.ValidationWarnings = append([]string(nil), v.ValidationWarnings...)
+	}
+	if v.GapReport != nil {
+		gr := *v.GapReport
+		cp.GapReport = &gr
+	}
+	if v.ATSScore != nil {
+		as := *v.ATSScore
+		cp.ATSScore = &as
+	}
+	if v.TailoredContent != nil {
+		tc := *v.TailoredContent
+		cp.TailoredContent = &tc
+	}
+	return &cp
+}
+
+func resolveFakeVersionBranchID(v *core.BranchVersion) string {
+	parentID := v.BranchID
+	if parentID == "" {
+		parentID = v.ResumeID
+	}
+	v.BranchID = parentID
+	v.ResumeID = parentID
+	return parentID
+}
+
+func effectiveNow(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now().UTC()
+	}
+	return t.UTC()
+}
+
+func (s *fakeBranchStore) nextVersionNumberLocked(branchID string) int {
+	maxNum := 0
+	for _, v := range s.versions {
+		if (v.BranchID == branchID || v.ResumeID == branchID) && v.VersionNumber > maxNum {
+			maxNum = v.VersionNumber
+		}
+	}
+	return maxNum + 1
+}
+
+func (s *fakeBranchStore) cancelVersionLocked(v *core.BranchVersion, reason string, now time.Time) {
+	v.Status = core.VersionStatusCancelled
+	v.ErrorMessage = reason
+	v.UpdatedAt = now
+	completedAt := now
+	v.CompletedAt = &completedAt
+	v.ClaimedBy = ""
+	v.ClaimedAt = nil
+	v.LeaseExpiresAt = nil
+	v.NextRetryAt = nil
+}
+
+func (s *fakeBranchStore) failVersionLocked(v *core.BranchVersion, reason string, now time.Time) {
+	v.Status = core.VersionStatusFailed
+	v.ErrorMessage = reason
+	v.UpdatedAt = now
+	completedAt := now
+	v.CompletedAt = &completedAt
+	v.ClaimedBy = ""
+	v.LeaseExpiresAt = nil
+	v.NextRetryAt = nil
+}
+
 func (s *fakeBranchStore) CreateVersion(_ context.Context, version *core.BranchVersion) error {
+	if version == nil {
+		return fmt.Errorf("%w: version cannot be nil", core.ErrValidation)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	parentID := version.BranchID
-	if parentID == "" {
-		parentID = version.ResumeID
+	parentID := resolveFakeVersionBranchID(version)
+	if version.UserID == "" && parentID != "" {
+		if br, ok := s.branches[parentID]; ok && br.UserID != "" {
+			version.UserID = br.UserID
+		}
 	}
-	version.BranchID = parentID
-	version.ResumeID = parentID
+	if version.ID == "" {
+		version.ID = "ver-" + uuid.New().String()
+	}
+	if version.VersionNumber <= 0 {
+		version.VersionNumber = s.nextVersionNumberLocked(parentID)
+	}
+	if version.Status == "" {
+		version.Status = core.VersionStatusPending
+	}
+	now := time.Now().UTC()
+	if version.CreatedAt.IsZero() {
+		version.CreatedAt = now
+	}
+	if version.UpdatedAt.IsZero() {
+		version.UpdatedAt = now
+	}
+
+	s.versions[version.ID] = cloneVersion(version)
+	return nil
+}
+
+func (s *fakeBranchStore) SubmitPendingVersion(_ context.Context, version *core.BranchVersion, opts core.PendingJobOptions) ([]core.ReleasedReservation, error) {
+	if version == nil {
+		return nil, fmt.Errorf("%w: version cannot be nil", core.ErrValidation)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	parentID := resolveFakeVersionBranchID(version)
+	if parentID == "" {
+		return nil, fmt.Errorf("%w: branch_id is required", core.ErrValidation)
+	}
+	br, ok := s.branches[parentID]
+	if !ok {
+		return nil, core.ErrNotFound
+	}
+	if version.UserID == "" {
+		version.UserID = br.UserID
+	}
+	if br.UserID != "" && version.UserID != br.UserID {
+		return nil, core.ErrNotFound
+	}
+
+	for _, v := range s.versions {
+		if (v.BranchID == parentID || v.ResumeID == parentID) && v.Status == core.VersionStatusProcessing {
+			return nil, fmt.Errorf("%w: branch %s already has a generation in progress", core.ErrConflict, parentID)
+		}
+	}
+
+	tenantPending := 0
+	globalPending := 0
+	for _, v := range s.versions {
+		if v.Status != core.VersionStatusPending || v.BranchID == parentID {
+			continue
+		}
+		globalPending++
+		if v.UserID == version.UserID {
+			tenantPending++
+		}
+	}
+	if opts.MaxPendingPerTenant > 0 && tenantPending >= opts.MaxPendingPerTenant {
+		return nil, fmt.Errorf("%w: tenant %s reached pending limit (%d)", core.ErrPendingLimitExceeded, version.UserID, opts.MaxPendingPerTenant)
+	}
+	if opts.MaxGlobalPending > 0 && globalPending >= opts.MaxGlobalPending {
+		return nil, fmt.Errorf("%w: global pending limit reached (%d)", core.ErrPendingLimitExceeded, opts.MaxGlobalPending)
+	}
+
+	now := effectiveNow(opts.Now)
+	var superseded []core.ReleasedReservation
+	for _, v := range s.versions {
+		if (v.BranchID == parentID || v.ResumeID == parentID) && v.Status == core.VersionStatusPending {
+			s.cancelVersionLocked(v, "superseded by newer generation", now)
+			if v.ReservationID != "" {
+				superseded = append(superseded, core.ReleasedReservation{
+					JobID:         v.ID,
+					UserID:        v.UserID,
+					ReservationID: v.ReservationID,
+					Reason:        "superseded by newer generation",
+				})
+			}
+		}
+	}
 
 	if version.ID == "" {
 		version.ID = "ver-" + uuid.New().String()
 	}
 	if version.VersionNumber <= 0 {
-		maxNum := 0
-		for _, v := range s.versions {
-			if v.BranchID == version.BranchID && v.VersionNumber > maxNum {
-				maxNum = v.VersionNumber
-			}
+		version.VersionNumber = s.nextVersionNumberLocked(parentID)
+	}
+	version.Status = core.VersionStatusPending
+	if version.CreatedAt.IsZero() {
+		version.CreatedAt = now
+	}
+	version.UpdatedAt = now
+	if version.ExpiresAt == nil {
+		ttl := opts.TTL
+		if ttl <= 0 {
+			ttl = core.DefaultJobTTL
 		}
-		version.VersionNumber = maxNum + 1
+		exp := now.Add(ttl)
+		version.ExpiresAt = &exp
 	}
 
-	cp := *version
-	s.versions[version.ID] = &cp
+	s.versions[version.ID] = cloneVersion(version)
+	return superseded, nil
+}
+
+func (s *fakeBranchStore) SupersedePendingVersions(_ context.Context, branchID, reason string) ([]core.ReleasedReservation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if reason == "" {
+		reason = "superseded"
+	}
+	now := time.Now().UTC()
+	var released []core.ReleasedReservation
+	for _, v := range s.versions {
+		if (v.BranchID == branchID || v.ResumeID == branchID) && v.Status == core.VersionStatusPending {
+			s.cancelVersionLocked(v, reason, now)
+			if v.ReservationID != "" {
+				released = append(released, core.ReleasedReservation{
+					JobID:         v.ID,
+					UserID:        v.UserID,
+					ReservationID: v.ReservationID,
+					Reason:        reason,
+				})
+			}
+		}
+	}
+	return released, nil
+}
+
+func (s *fakeBranchStore) AbortBranchVersions(_ context.Context, branchID, reason string) ([]core.ReleasedReservation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if reason == "" {
+		reason = "branch deleted"
+	}
+	now := time.Now().UTC()
+	var released []core.ReleasedReservation
+	for _, v := range s.versions {
+		if (v.BranchID == branchID || v.ResumeID == branchID) && (v.Status == core.VersionStatusPending || v.Status == core.VersionStatusProcessing) {
+			s.cancelVersionLocked(v, reason, now)
+			if v.ReservationID != "" {
+				released = append(released, core.ReleasedReservation{
+					JobID:         v.ID,
+					UserID:        v.UserID,
+					ReservationID: v.ReservationID,
+					Reason:        reason,
+				})
+			}
+		}
+	}
+	return released, nil
+}
+
+func (s *fakeBranchStore) CancelVersion(_ context.Context, userID, branchID, versionID, reason string) (*core.BranchVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if branchID != "" {
+		br, ok := s.branches[branchID]
+		if !ok || (userID != "" && br.UserID != userID) {
+			return nil, core.ErrNotFound
+		}
+	}
+	v, ok := s.versions[versionID]
+	if !ok {
+		return nil, core.ErrNotFound
+	}
+	if branchID != "" && v.BranchID != branchID && v.ResumeID != branchID {
+		return nil, core.ErrNotFound
+	}
+	if userID != "" {
+		if v.UserID != "" && v.UserID != userID {
+			return nil, core.ErrNotFound
+		}
+		if br, ok := s.branches[v.BranchID]; ok && br.UserID != userID {
+			return nil, core.ErrNotFound
+		}
+	}
+	if v.Status != core.VersionStatusPending {
+		return nil, fmt.Errorf("%w: version %s in status %s cannot be cancelled", core.ErrConflict, versionID, v.Status)
+	}
+	if reason == "" {
+		reason = "cancelled by user"
+	}
+	s.cancelVersionLocked(v, reason, time.Now().UTC())
+	return cloneVersion(v), nil
+}
+
+func (s *fakeBranchStore) ClaimNextVersion(_ context.Context, req core.ClaimJobRequest) (*core.BranchVersion, error) {
+	if req.WorkerID == "" {
+		return nil, fmt.Errorf("%w: worker_id is required", core.ErrValidation)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := effectiveNow(req.Now)
+	leaseDur := req.LeaseDuration
+	if leaseDur <= 0 {
+		leaseDur = core.DefaultLeaseDuration
+	}
+
+	activeByTenant := make(map[string]int)
+	for _, v := range s.versions {
+		if v.Status == core.VersionStatusProcessing {
+			activeByTenant[v.UserID]++
+		}
+	}
+
+	var candidates []*core.BranchVersion
+	for _, v := range s.versions {
+		if v.Status != core.VersionStatusPending {
+			continue
+		}
+		if v.ExpiresAt != nil && !v.ExpiresAt.After(now) {
+			continue
+		}
+		if v.NextRetryAt != nil && v.NextRetryAt.After(now) {
+			continue
+		}
+		if req.MaxConcurrentPerTenant > 0 {
+			active := activeByTenant[v.UserID] + req.OtherActiveByTenant[v.UserID]
+			if active >= req.MaxConcurrentPerTenant {
+				continue
+			}
+		}
+		candidates = append(candidates, v)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		seqI := req.LastServedSeq[candidates[i].UserID]
+		seqJ := req.LastServedSeq[candidates[j].UserID]
+		if seqI != seqJ {
+			return seqI < seqJ
+		}
+		if !candidates[i].CreatedAt.Equal(candidates[j].CreatedAt) {
+			return candidates[i].CreatedAt.Before(candidates[j].CreatedAt)
+		}
+		return candidates[i].ID < candidates[j].ID
+	})
+
+	chosen := candidates[0]
+	chosen.Status = core.VersionStatusProcessing
+	chosen.ClaimedBy = req.WorkerID
+	claimedAt := now
+	chosen.ClaimedAt = &claimedAt
+	leaseExp := now.Add(leaseDur)
+	chosen.LeaseExpiresAt = &leaseExp
+	chosen.AttemptCount++
+	chosen.NextRetryAt = nil
+	chosen.UpdatedAt = now
+	return cloneVersion(chosen), nil
+}
+
+func (s *fakeBranchStore) RenewVersionLease(_ context.Context, versionID, claimedBy string, leaseExpiresAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	v, ok := s.versions[versionID]
+	if !ok {
+		return core.ErrNotFound
+	}
+	if v.Status != core.VersionStatusProcessing || v.ClaimedBy != claimedBy {
+		return fmt.Errorf("%w: version %s is not actively claimed by %s", core.ErrLeaseExpired, versionID, claimedBy)
+	}
+	exp := leaseExpiresAt.UTC()
+	v.LeaseExpiresAt = &exp
+	v.UpdatedAt = time.Now().UTC()
 	return nil
+}
+
+func (s *fakeBranchStore) RequeueVersionForRetry(_ context.Context, versionID, claimedBy string, nextRetryAt time.Time, errMsg string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	v, ok := s.versions[versionID]
+	if !ok {
+		return core.ErrNotFound
+	}
+	if v.Status != core.VersionStatusProcessing || v.ClaimedBy != claimedBy {
+		return fmt.Errorf("%w: version %s is not actively claimed by %s", core.ErrLeaseExpired, versionID, claimedBy)
+	}
+	v.Status = core.VersionStatusPending
+	v.ErrorMessage = errMsg
+	nra := nextRetryAt.UTC()
+	v.NextRetryAt = &nra
+	v.ClaimedBy = ""
+	v.ClaimedAt = nil
+	v.LeaseExpiresAt = nil
+	v.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+func (s *fakeBranchStore) FailClaimedVersion(_ context.Context, versionID, claimedBy, errMsg string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	v, ok := s.versions[versionID]
+	if !ok {
+		return core.ErrNotFound
+	}
+	if v.Status != core.VersionStatusProcessing || v.ClaimedBy != claimedBy {
+		return fmt.Errorf("%w: version %s is not actively claimed by %s", core.ErrLeaseExpired, versionID, claimedBy)
+	}
+	s.failVersionLocked(v, errMsg, time.Now().UTC())
+	return nil
+}
+
+func (s *fakeBranchStore) ExpirePendingVersions(_ context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now = effectiveNow(now)
+	if reason == "" {
+		reason = core.ErrJobExpired.Error()
+	}
+	var released []core.ReleasedReservation
+	for _, v := range s.versions {
+		if v.Status == core.VersionStatusPending && v.ExpiresAt != nil && !v.ExpiresAt.After(now) {
+			s.failVersionLocked(v, reason, now)
+			if v.ReservationID != "" {
+				released = append(released, core.ReleasedReservation{
+					JobID:         v.ID,
+					UserID:        v.UserID,
+					ReservationID: v.ReservationID,
+					Reason:        reason,
+				})
+			}
+		}
+	}
+	return released, nil
+}
+
+func (s *fakeBranchStore) FailExpiredVersionLeases(_ context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now = effectiveNow(now)
+	if reason == "" {
+		reason = core.ErrLeaseExpired.Error()
+	}
+	var released []core.ReleasedReservation
+	for _, v := range s.versions {
+		if v.Status == core.VersionStatusProcessing && v.LeaseExpiresAt != nil && !v.LeaseExpiresAt.After(now) {
+			s.failVersionLocked(v, reason, now)
+			if v.ReservationID != "" {
+				released = append(released, core.ReleasedReservation{
+					JobID:         v.ID,
+					UserID:        v.UserID,
+					ReservationID: v.ReservationID,
+					Reason:        reason,
+				})
+			}
+		}
+	}
+	return released, nil
+}
+
+func (s *fakeBranchStore) RecoverInterruptedVersions(_ context.Context, reason string) ([]core.ReleasedReservation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	if reason == "" {
+		reason = "interrupted by server restart"
+	}
+	var released []core.ReleasedReservation
+	for _, v := range s.versions {
+		expiredPending := v.Status == core.VersionStatusPending && v.ExpiresAt != nil && !v.ExpiresAt.After(now)
+		if v.Status == core.VersionStatusProcessing || expiredPending {
+			s.failVersionLocked(v, reason, now)
+			if v.ReservationID != "" {
+				released = append(released, core.ReleasedReservation{
+					JobID:         v.ID,
+					UserID:        v.UserID,
+					ReservationID: v.ReservationID,
+					Reason:        reason,
+				})
+			}
+		}
+	}
+	return released, nil
 }
 
 func (s *fakeBranchStore) Version(_ context.Context, branchID, versionID string) (*core.BranchVersion, error) {
@@ -205,8 +678,7 @@ func (s *fakeBranchStore) Version(_ context.Context, branchID, versionID string)
 	if !ok || (branchID != "" && v.BranchID != branchID) {
 		return nil, fmt.Errorf("%w: version %s", core.ErrNotFound, versionID)
 	}
-	cp := *v
-	return &cp, nil
+	return cloneVersion(v), nil
 }
 
 func (s *fakeBranchStore) VersionByNumber(_ context.Context, branchID string, versionNumber int) (*core.BranchVersion, error) {
@@ -215,8 +687,7 @@ func (s *fakeBranchStore) VersionByNumber(_ context.Context, branchID string, ve
 
 	for _, v := range s.versions {
 		if v.BranchID == branchID && v.VersionNumber == versionNumber {
-			cp := *v
-			return &cp, nil
+			return cloneVersion(v), nil
 		}
 	}
 	return nil, core.ErrNotFound
@@ -234,7 +705,7 @@ func (s *fakeBranchStore) VersionsByIDs(_ context.Context, versionIDs []string) 
 	var res []core.BranchVersion
 	for _, v := range s.versions {
 		if idMap[v.ID] {
-			res = append(res, *v)
+			res = append(res, *cloneVersion(v))
 		}
 	}
 	return res, nil
@@ -247,7 +718,7 @@ func (s *fakeBranchStore) ListVersions(_ context.Context, branchID string) ([]co
 	var res []core.BranchVersion
 	for _, v := range s.versions {
 		if v.BranchID == branchID {
-			res = append(res, *v)
+			res = append(res, *cloneVersion(v))
 		}
 	}
 	sort.Slice(res, func(i, j int) bool {
@@ -264,44 +735,83 @@ func (s *fakeBranchStore) UpdateVersionStatus(_ context.Context, versionID strin
 	if !ok {
 		return core.ErrNotFound
 	}
+	if v.Status.IsTerminal() {
+		return fmt.Errorf("%w: version %s is already in terminal state %s", core.ErrConflict, versionID, v.Status)
+	}
+	now := time.Now().UTC()
 	v.Status = status
 	v.ErrorMessage = errMsg
+	v.UpdatedAt = now
+	if status.IsTerminal() {
+		v.CompletedAt = &now
+		v.ClaimedBy = ""
+		v.LeaseExpiresAt = nil
+		v.NextRetryAt = nil
+	}
 	return nil
 }
 
 func (s *fakeBranchStore) CompleteVersion(_ context.Context, version *core.BranchVersion) error {
+	if version == nil {
+		return fmt.Errorf("%w: version cannot be nil", core.ErrValidation)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	parentID := version.BranchID
-	if parentID == "" {
-		parentID = version.ResumeID
+	existing, ok := s.versions[version.ID]
+	if !ok {
+		return core.ErrNotFound
 	}
-	version.BranchID = parentID
-	version.ResumeID = parentID
-	version.Status = core.VersionStatusCompleted
+	if existing.Status == core.VersionStatusFailed || existing.Status == core.VersionStatusCancelled {
+		return fmt.Errorf("%w: cannot complete version %s in terminal status %s", core.ErrConflict, version.ID, existing.Status)
+	}
+	if version.ClaimedBy != "" {
+		if existing.Status != core.VersionStatusProcessing || existing.ClaimedBy != version.ClaimedBy {
+			return fmt.Errorf("%w: version %s lease is held by %q (status=%s), not %q", core.ErrLeaseExpired, version.ID, existing.ClaimedBy, existing.Status, version.ClaimedBy)
+		}
+	} else if existing.Status == core.VersionStatusProcessing && existing.ClaimedBy != "" {
+		return fmt.Errorf("%w: version %s is actively claimed by %q", core.ErrConflict, version.ID, existing.ClaimedBy)
+	}
+
+	parentID := resolveFakeVersionBranchID(version)
+	br, ok := s.branches[parentID]
+	if !ok {
+		return core.ErrNotFound
+	}
+
+	if version.VersionNumber <= 0 {
+		version.VersionNumber = existing.VersionNumber
+	}
+	if version.UserID == "" {
+		version.UserID = existing.UserID
+	}
+	if !version.Status.IsCompleted() {
+		version.Status = core.VersionStatusCompleted
+	}
 	now := time.Now().UTC()
 	version.CompletedAt = &now
-	cp := *version
-	s.versions[version.ID] = &cp
+	version.UpdatedAt = now
+	version.ClaimedBy = ""
+	version.LeaseExpiresAt = nil
+	version.NextRetryAt = nil
+	s.versions[version.ID] = cloneVersion(version)
 
-	if br, ok := s.branches[parentID]; ok {
-		br.ActiveVersionID = &version.ID
-		br.LastSyncedMainRevision = version.MainRevisionUsed
-		if version.GapReport != nil {
-			cpG := *version.GapReport
-			br.GapReport = &cpG
-		} else {
-			br.GapReport = nil
-		}
-		if version.ATSScore != nil {
-			cpA := *version.ATSScore
-			br.ATSScore = &cpA
-		} else {
-			br.ATSScore = nil
-		}
-		br.UpdatedAt = now
+	br.ActiveVersionID = &version.ID
+	br.LastSyncedMainRevision = version.MainRevisionUsed
+	if version.GapReport != nil {
+		cpG := *version.GapReport
+		br.GapReport = &cpG
+	} else {
+		br.GapReport = nil
 	}
+	if version.ATSScore != nil {
+		cpA := *version.ATSScore
+		br.ATSScore = &cpA
+	} else {
+		br.ATSScore = nil
+	}
+	br.UpdatedAt = now
 	return nil
 }
 
@@ -328,10 +838,10 @@ func (s *fakeBranchStore) FailInterruptedVersions(_ context.Context, reason stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now().UTC()
 	for _, v := range s.versions {
 		if v.Status == core.VersionStatusPending || v.Status == core.VersionStatusProcessing {
-			v.Status = core.VersionStatusFailed
-			v.ErrorMessage = reason
+			s.failVersionLocked(v, reason, now)
 		}
 	}
 	return nil

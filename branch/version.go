@@ -123,21 +123,41 @@ func (s *Service) resolveSyncTargets(ctx context.Context, userID string, branchI
 	return stale, nil
 }
 
-// enqueueBranchGeneration reserves quota, persists a pending version, and submits its worker job.
+// enqueueBranchGeneration reserves quota, atomically persists a pending version under admission caps,
+// releases any superseded or rejected reservations, and notifies background workers.
 func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b *core.Branch, mainRevision int64) (*core.BranchVersion, error) {
+	effectiveUserID := userID
+	if effectiveUserID == "" {
+		effectiveUserID = b.UserID
+	}
+
 	var reservationID string
 	if s.quotas != nil {
-		rec, qErr := s.quotas.ReserveQuota(ctx, userID, core.OperationResumeTailoring, defaultTailoringQuotaTokens, s.dailyRequestLimit, s.monthlyTokenLimit)
+		rec, qErr := s.quotas.ReserveQuota(ctx, effectiveUserID, core.OperationResumeTailoring, defaultTailoringQuotaTokens, s.dailyRequestLimit, s.monthlyTokenLimit)
 		if qErr != nil {
 			return nil, qErr
 		}
-		reservationID = rec.ID
+		if rec != nil {
+			reservationID = rec.ID
+		}
 	}
+
+	now := s.now()
+	ttl := s.jobTTL
+	if ttl <= 0 {
+		ttl = core.DefaultJobTTL
+	}
+	maxPending := s.maxPendingPerTenant
+	if maxPending <= 0 {
+		maxPending = core.DefaultMaxPendingPerTenant
+	}
+	expiresAt := now.Add(ttl)
 
 	ver := &core.BranchVersion{
 		ID:                "ver-" + uuid.New().String(),
-		UserID:            userID,
+		UserID:            effectiveUserID,
 		BranchID:          b.ID,
+		ResumeID:          b.ID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  mainRevision,
 		TemplateSetIDUsed: b.TemplateSetID,
@@ -145,35 +165,46 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 		ModelUsed:         b.ModelOverride,
 		SourceType:        core.SourceTypeLLMGeneration,
 		ParentVersionID:   b.ActiveVersionID,
+		ReservationID:     reservationID,
+		ExpiresAt:         &expiresAt,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 
-	if err := s.branches.CreateVersion(ctx, ver); err != nil {
-		if reservationID != "" && s.quotas != nil {
-			_ = s.quotas.ReleaseQuota(ctx, reservationID, err.Error())
-		}
+	superseded, err := s.branches.SubmitPendingVersion(ctx, ver, core.PendingJobOptions{
+		MaxPendingPerTenant: maxPending,
+		TTL:                 ttl,
+		Now:                 now,
+	})
+	if err != nil {
+		s.releaseReservationWithDetachedContext(reservationID, err.Error())
 		return nil, err
 	}
+	s.releaseReservationsWithDetachedContext(superseded)
 
-	if s.jobEnqueuer != nil {
-		job := core.GenerationJob{
-			UserID:        userID,
-			BranchID:      b.ID,
-			VersionID:     ver.ID,
-			ReservationID: reservationID,
-		}
-		if err := s.jobEnqueuer.Enqueue(job); err != nil {
-			if reservationID != "" && s.quotas != nil {
-				_ = s.quotas.ReleaseQuota(ctx, reservationID, "failed to enqueue generation job")
-			}
-			if errors.Is(err, core.ErrQueueFull) {
-				_ = s.branches.UpdateVersionStatus(ctx, ver.ID, core.VersionStatusFailed, "generation queue full")
-				return nil, core.ErrQueueFull
-			}
-			return nil, err
-		}
-	}
+	s.notifyJob(core.GenerationJob{
+		UserID:        effectiveUserID,
+		BranchID:      b.ID,
+		VersionID:     ver.ID,
+		ReservationID: reservationID,
+	})
 
 	return ver, nil
+}
+
+// CancelVersion cancels a queued pending branch version owned by userID and releases its reserved quota.
+func (s *Service) CancelVersion(ctx context.Context, userID, branchID, versionID string) (*core.BranchVersion, error) {
+	if _, err := s.branches.Branch(ctx, userID, branchID); err != nil {
+		return nil, err
+	}
+	cancelled, err := s.branches.CancelVersion(ctx, userID, branchID, versionID, "cancelled by user")
+	if err != nil {
+		return nil, err
+	}
+	if cancelled != nil && cancelled.ReservationID != "" {
+		s.releaseReservationWithDetachedContext(cancelled.ReservationID, "cancelled by user")
+	}
+	return cancelled, nil
 }
 
 // EditVersion applies provenance validation to manual edits, renders templates, and appends a new immutable version.
@@ -240,6 +271,7 @@ func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	if err := s.branches.CompleteVersion(ctx, newVer); err != nil {
 		return nil, err
 	}
+	s.supersedePendingVersions(ctx, branchID, "superseded by manual edit")
 	return newVer, nil
 }
 

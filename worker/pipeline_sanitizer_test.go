@@ -224,7 +224,6 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 
 	pool := worker.New(worker.Config{
 		Concurrency: 1,
-		QueueSize:   10,
 		Branches:    env.branchRepo,
 		Profiles:    env.profileRepo,
 		Presets:     env.presetRepo,
@@ -237,26 +236,22 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 	pool.Start(ctx)
 	defer pool.Stop()
 
-	// Create and enqueue version
+	// Create and submit version
+	expiresAt := time.Now().UTC().Add(core.DefaultJobTTL)
 	ver := core.BranchVersion{
 		ID:                "ver-sanitizer-test",
+		UserID:            env.defaultUser,
 		BranchID:          env.branchID,
 		Status:            core.VersionStatusPending,
 		MainRevisionUsed:  2,
 		TemplateSetIDUsed: "builtin-standard-clean",
 		SourceType:        core.SourceTypeLLMGeneration,
+		ExpiresAt:         &expiresAt,
 	}
 	if err := env.branchRepo.CreateVersion(ctx, &ver); err != nil {
 		t.Fatalf("failed to create version: %v", err)
 	}
-
-	if err := pool.Enqueue(core.GenerationJob{
-		UserID:    env.defaultUser,
-		BranchID:  env.branchID,
-		VersionID: ver.ID,
-	}); err != nil {
-		t.Fatalf("failed to enqueue job: %v", err)
-	}
+	pool.Notify()
 
 	// Await completion
 	var completedVer *core.BranchVersion

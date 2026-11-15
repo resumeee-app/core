@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -224,6 +225,55 @@ func (s *fakeProfileStore) CreateVersion(_ context.Context, version *core.Branch
 	defer s.mu.Unlock()
 	s.versions[version.ID] = version
 	return nil
+}
+
+func (s *fakeProfileStore) SubmitPendingVersion(_ context.Context, version *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
+	if version != nil && version.ID != "" {
+		s.mu.Lock()
+		s.versions[version.ID] = version
+		s.mu.Unlock()
+	}
+	return nil, nil
+}
+
+func (s *fakeProfileStore) SupersedePendingVersions(_ context.Context, _, _ string) ([]core.ReleasedReservation, error) {
+	return nil, nil
+}
+
+func (s *fakeProfileStore) AbortBranchVersions(_ context.Context, _, _ string) ([]core.ReleasedReservation, error) {
+	return nil, nil
+}
+
+func (s *fakeProfileStore) CancelVersion(_ context.Context, _, _, _, _ string) (*core.BranchVersion, error) {
+	return nil, core.ErrNotFound
+}
+
+func (s *fakeProfileStore) ClaimNextVersion(_ context.Context, _ core.ClaimJobRequest) (*core.BranchVersion, error) {
+	return nil, nil
+}
+
+func (s *fakeProfileStore) RenewVersionLease(_ context.Context, _, _ string, _ time.Time) error {
+	return nil
+}
+
+func (s *fakeProfileStore) RequeueVersionForRetry(_ context.Context, _, _ string, _ time.Time, _ string) error {
+	return nil
+}
+
+func (s *fakeProfileStore) FailClaimedVersion(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (s *fakeProfileStore) ExpirePendingVersions(_ context.Context, _ time.Time, _ string) ([]core.ReleasedReservation, error) {
+	return nil, nil
+}
+
+func (s *fakeProfileStore) FailExpiredVersionLeases(_ context.Context, _ time.Time, _ string) ([]core.ReleasedReservation, error) {
+	return nil, nil
+}
+
+func (s *fakeProfileStore) RecoverInterruptedVersions(_ context.Context, _ string) ([]core.ReleasedReservation, error) {
+	return nil, nil
 }
 
 func (s *fakeProfileStore) Version(_ context.Context, _, versionID string) (*core.BranchVersion, error) {

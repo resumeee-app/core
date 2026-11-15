@@ -30,26 +30,48 @@ const (
 	PlaceholderSocialSuffix = "]"
 )
 
+// formatIndexedPlaceholder builds a 1-based sentinel token from prefix and index, clamping
+// non-positive indices to 1 so emitted sentinels remain canonically 1-based.
+func formatIndexedPlaceholder(prefix string, index int) string {
+	if index < 1 {
+		index = 1
+	}
+	return prefix + strconv.Itoa(index) + PlaceholderSocialSuffix
+}
+
 // PlaceholderSocialURL returns the 1-based indexed sentinel placeholder for a social profile URL
-// (index >= 1, corresponding to the candidate's 1-based social profile position).
+// (index >= 1; non-positive indices clamp to 1).
 func PlaceholderSocialURL(index int) string {
-	return PlaceholderSocialURLPrefix + strconv.Itoa(index) + PlaceholderSocialSuffix
+	return formatIndexedPlaceholder(PlaceholderSocialURLPrefix, index)
 }
 
 // PlaceholderSocialHandle returns the 1-based indexed sentinel placeholder for a social profile
-// handle (index >= 1, corresponding to the candidate's 1-based social profile position).
+// handle (index >= 1; non-positive indices clamp to 1).
 func PlaceholderSocialHandle(index int) string {
-	return PlaceholderSocialHandlePrefix + strconv.Itoa(index) + PlaceholderSocialSuffix
+	return formatIndexedPlaceholder(PlaceholderSocialHandlePrefix, index)
 }
 
-// textRule pairs a compiled regex with its literal or capture-aware replacement.
+// textRule pairs a compiled regex with its literal sentinel replacement.
 type textRule struct {
 	// re holds the compiled regular expression matched during forward obfuscation.
 	re *regexp.Regexp
-	// replace holds the replacement string applied when re matches.
+	// replace holds the sentinel placeholder emitted for the matched PII token.
 	replace string
-	// literal reports whether replace is applied verbatim without RE2 $-expansion.
-	literal bool
+	// hasPrefixGroup reports whether re captures a leading delimiter in group 1 so only
+	// the phone span after capture group 1 is replaced.
+	hasPrefixGroup bool
+}
+
+// obfMatch captures a single forward match span against the immutable original input.
+type obfMatch struct {
+	// start is the inclusive byte index where the PII token begins.
+	start int
+	// end is the exclusive byte index where the PII token ends.
+	end int
+	// ruleIdx breaks same-start ties in favor of earlier (longer-source) rules.
+	ruleIdx int
+	// replace is the sentinel placeholder to emit for [start:end].
+	replace string
 }
 
 // Session manages deterministic PII masking and unmasking for a generation lifecycle.
@@ -68,7 +90,6 @@ type rawMapping struct {
 	replacement   string
 	wordBound     bool
 	customPattern string
-	customReplace string
 }
 
 // mappingBuilder accumulates forward and reverse PII replacement rules.
@@ -162,13 +183,12 @@ func (b *mappingBuilder) addPhoneRule(phone string) {
 		b.addPair(cleanPhone, PlaceholderPhone, true)
 		return
 	}
-	// Phone starts with a non-word rune (e.g. '+' or '('); capture the leading delimiter in ${1}
-	// so surrounding whitespace is preserved.
+	// Phone starts with a non-word rune (e.g. '+' or '('); capture the leading delimiter in
+	// group 1 so single-pass scanning preserves surrounding characters without re-scanning.
 	b.forward = append(b.forward, rawMapping{
 		source:        cleanPhone,
 		replacement:   PlaceholderPhone,
 		customPattern: fmt.Sprintf(`(?i)(^|[^\w+])%s\b`, regexp.QuoteMeta(cleanPhone)),
-		customReplace: fmt.Sprintf(`${1}%s`, PlaceholderPhone),
 	})
 	b.reverse = append(b.reverse, rawMapping{
 		source:      PlaceholderPhone,
@@ -222,7 +242,7 @@ func (b *mappingBuilder) addWebsiteAndSocialRules(profile core.Profile) {
 // compileMappings sorts raw mappings longest-first and compiles unique regexp rules.
 func compileMappings(mappings []rawMapping) []textRule {
 	// Sort by source length descending to prevent partial prefix collision.
-	sort.Slice(mappings, func(i, j int) bool {
+	sort.SliceStable(mappings, func(i, j int) bool {
 		return len(mappings[i].source) > len(mappings[j].source)
 	})
 
@@ -236,8 +256,7 @@ func compileMappings(mappings []rawMapping) []textRule {
 		seen[key] = true
 
 		pattern := m.customPattern
-		replace := m.customReplace
-		literal := false
+		hasPrefixGroup := pattern != ""
 		if pattern == "" {
 			pattern = regexp.QuoteMeta(m.source)
 			if m.wordBound {
@@ -245,20 +264,52 @@ func compileMappings(mappings []rawMapping) []textRule {
 			} else {
 				pattern = fmt.Sprintf(`(?i)%s`, pattern)
 			}
-			replace = m.replacement
-			literal = true
 		}
 
 		re, err := regexp.Compile(pattern)
 		if err == nil {
 			rules = append(rules, textRule{
-				re:      re,
-				replace: replace,
-				literal: literal,
+				re:             re,
+				replace:        m.replacement,
+				hasPrefixGroup: hasPrefixGroup,
 			})
 		}
 	}
 	return rules
+}
+
+// collectObfMatches collects candidate forward match spans across rules against immutable input.
+func collectObfMatches(input string, rules []textRule) []obfMatch {
+	var matches []obfMatch
+	for ruleIdx, rule := range rules {
+		if rule.hasPrefixGroup {
+			for _, loc := range rule.re.FindAllStringSubmatchIndex(input, -1) {
+				// Group 1 captures the leading delimiter; the phone token itself starts at loc[3].
+				if len(loc) < 4 || loc[3] < 0 || loc[3] >= loc[1] {
+					continue
+				}
+				matches = append(matches, obfMatch{
+					start:   loc[3],
+					end:     loc[1],
+					ruleIdx: ruleIdx,
+					replace: rule.replace,
+				})
+			}
+			continue
+		}
+		for _, loc := range rule.re.FindAllStringIndex(input, -1) {
+			if len(loc) < 2 || loc[0] >= loc[1] {
+				continue
+			}
+			matches = append(matches, obfMatch{
+				start:   loc[0],
+				end:     loc[1],
+				ruleIdx: ruleIdx,
+				replace: rule.replace,
+			})
+		}
+	}
+	return matches
 }
 
 // compileDeobfMatcher builds a single-pass case-insensitive alternation regex and lookup map
@@ -338,20 +389,40 @@ func NewSessionFromRequest(req core.GenerationRequest) *Session {
 	return NewSessionFromSnapshot(req.MainProfile)
 }
 
-// ObfuscateString replaces occurrences of real contact details with placeholders.
+// ObfuscateString replaces occurrences of real contact details with placeholders in a single
+// pass against immutable input so emitted sentinels are never re-matched by later rules.
 func (s *Session) ObfuscateString(input string) string {
 	if s == nil || input == "" || len(s.obfRules) == 0 {
 		return input
 	}
-	res := input
-	for _, rule := range s.obfRules {
-		if rule.literal {
-			res = rule.re.ReplaceAllLiteralString(res, rule.replace)
-		} else {
-			res = rule.re.ReplaceAllString(res, rule.replace)
-		}
+	matches := collectObfMatches(input, s.obfRules)
+	if len(matches) == 0 {
+		return input
 	}
-	return res
+	// Resolve leftmost-earliest spans first, breaking equal starts by longest-source rule index.
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].start != matches[j].start {
+			return matches[i].start < matches[j].start
+		}
+		if matches[i].ruleIdx != matches[j].ruleIdx {
+			return matches[i].ruleIdx < matches[j].ruleIdx
+		}
+		return matches[i].end > matches[j].end
+	})
+
+	var buf strings.Builder
+	buf.Grow(len(input))
+	cursor := 0
+	for _, m := range matches {
+		if m.start < cursor {
+			continue
+		}
+		buf.WriteString(input[cursor:m.start])
+		buf.WriteString(m.replace)
+		cursor = m.end
+	}
+	buf.WriteString(input[cursor:])
+	return buf.String()
 }
 
 // DeobfuscateString replaces occurrences of placeholders with real contact details in a single

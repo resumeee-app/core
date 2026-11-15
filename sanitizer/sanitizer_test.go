@@ -1102,6 +1102,10 @@ func TestSession_SentinelPlaceholders_RoundTripAndMultiLanguage(t *testing.T) {
 			{"PlaceholderSocialHandle(1)", sanitizer.PlaceholderSocialHandle(1), "[SOCIAL_HANDLE_PLACEHOLDER_1]"},
 			{"PlaceholderSocialURL(10)", sanitizer.PlaceholderSocialURL(10), "[SOCIAL_URL_PLACEHOLDER_10]"},
 			{"PlaceholderSocialHandle(10)", sanitizer.PlaceholderSocialHandle(10), "[SOCIAL_HANDLE_PLACEHOLDER_10]"},
+			{"PlaceholderSocialURL(0) clamps to 1", sanitizer.PlaceholderSocialURL(0), "[SOCIAL_URL_PLACEHOLDER_1]"},
+			{"PlaceholderSocialURL(-3) clamps to 1", sanitizer.PlaceholderSocialURL(-3), "[SOCIAL_URL_PLACEHOLDER_1]"},
+			{"PlaceholderSocialHandle(0) clamps to 1", sanitizer.PlaceholderSocialHandle(0), "[SOCIAL_HANDLE_PLACEHOLDER_1]"},
+			{"PlaceholderSocialHandle(-2) clamps to 1", sanitizer.PlaceholderSocialHandle(-2), "[SOCIAL_HANDLE_PLACEHOLDER_1]"},
 		}
 		for _, tc := range checks {
 			t.Run(tc.name, func(t *testing.T) {
@@ -1476,6 +1480,44 @@ func TestSession_SinglePassCollisionProtection(t *testing.T) {
 			deobfIn:   "Handles: " + sanitizer.PlaceholderSocialHandle(1) + ", " + sanitizer.PlaceholderSocialHandle(10) + ", " + sanitizer.PlaceholderSocialHandle(11) + ", " + sanitizer.PlaceholderFullName + ".",
 			wantDeobf: "Handles: handle_one, handle_" + sanitizer.PlaceholderSocialHandle(1) + ", handle_$1_" + sanitizer.PlaceholderFullName + ", Alice Walker.",
 		},
+		{
+			name: "shorter Username NAME_PLACEHOLDER does not rewrite longer FullName placeholder",
+			profile: core.Profile{
+				FullName: "Bartholomew Cubbins",
+				Profiles: []core.SocialLink{
+					{Network: "GitHub", Username: "NAME_PLACEHOLDER"},
+				},
+			},
+			input:     "Bartholomew Cubbins (@NAME_PLACEHOLDER) and NAME_PLACEHOLDER",
+			wantObf:   sanitizer.PlaceholderFullName + " (@" + sanitizer.PlaceholderSocialHandle(1) + ") and " + sanitizer.PlaceholderSocialHandle(1),
+			deobfIn:   sanitizer.PlaceholderFullName + " (@" + sanitizer.PlaceholderSocialHandle(1) + ") and " + sanitizer.PlaceholderSocialHandle(1),
+			wantDeobf: "Bartholomew Cubbins (@NAME_PLACEHOLDER) and NAME_PLACEHOLDER",
+		},
+		{
+			name: "shorter FullName [EMAIL_PLACEHOLDER] does not overwrite longer Email placeholder",
+			profile: core.Profile{
+				FullName: "[EMAIL_PLACEHOLDER]",
+				Email:    "alice.wonderland@example.org",
+			},
+			input:     "[EMAIL_PLACEHOLDER] <alice.wonderland@example.org>",
+			wantObf:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			deobfIn:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			wantDeobf: "[EMAIL_PLACEHOLDER] <alice.wonderland@example.org>",
+		},
+		{
+			name: "adjacent phone capture-delimiter boundary with overlapping social URL and handle",
+			profile: core.Profile{
+				FullName: "Alice:",
+				Phone:    "+1 (555) 234-5678",
+				Profiles: []core.SocialLink{
+					{Network: "GitHub", Username: "alicewalker-dev", URL: "https://github.com/alicewalker-dev"},
+				},
+			},
+			input:     "Alice:+1 (555) 234-5678,+1 (555) 234-5678 https://github.com/alicewalker-dev/raft-go",
+			wantObf:   sanitizer.PlaceholderFullName + sanitizer.PlaceholderPhone + "," + sanitizer.PlaceholderPhone + " " + sanitizer.PlaceholderSocialURL(1) + "/raft-go",
+			deobfIn:   sanitizer.PlaceholderFullName + sanitizer.PlaceholderPhone + "," + sanitizer.PlaceholderPhone + " " + sanitizer.PlaceholderSocialURL(1) + "/raft-go",
+			wantDeobf: "Alice:+1 (555) 234-5678,+1 (555) 234-5678 https://github.com/alicewalker-dev/raft-go",
+		},
 	}
 
 	for _, tc := range cases {
@@ -1484,6 +1526,9 @@ func TestSession_SinglePassCollisionProtection(t *testing.T) {
 			gotObf := session.ObfuscateString(tc.input)
 			if gotObf != tc.wantObf {
 				t.Errorf("ObfuscateString() = %q, want %q", gotObf, tc.wantObf)
+			}
+			if gotRoundTrip := session.DeobfuscateString(gotObf); gotRoundTrip != tc.input {
+				t.Errorf("DeobfuscateString(ObfuscateString(input)) = %q, want %q", gotRoundTrip, tc.input)
 			}
 			gotDeobf := session.DeobfuscateString(tc.deobfIn)
 			if gotDeobf != tc.wantDeobf {

@@ -176,7 +176,7 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 		Now:                 now,
 	})
 	if err != nil {
-		s.releaseReservationWithDetachedContext(reservationID, err.Error())
+		s.releaseReservationWithDetachedContext(reservationID, formatQuotaErrorMessage(err))
 		return nil, err
 	}
 	s.releaseReservationsWithDetachedContext(superseded)

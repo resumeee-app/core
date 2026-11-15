@@ -842,10 +842,12 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	}
 
 	// 3. CommitUsage
-	usage := core.TokenUsage{
-		PromptTokens:     500,
-		CompletionTokens: 1200,
-		TotalTokens:      1700,
+	usage := core.LLMTelemetry{
+		Usage: core.TokenUsage{
+			PromptTokens:     500,
+			CompletionTokens: 1200,
+			TotalTokens:      1700,
+		},
 	}
 	if err := store.CommitUsage(ctx, rec.ID, usage); err != nil {
 		t.Fatalf("failed to commit usage: %v", err)
@@ -873,7 +875,7 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	}
 
 	// 6. Release second quota
-	if err := store.ReleaseQuota(ctx, rec2.ID, "cancelled"); err != nil {
+	if err := store.ReleaseQuota(ctx, rec2.ID, "cancelled", core.LLMTelemetry{}); err != nil {
 		t.Fatalf("failed to release quota: %v", err)
 	}
 
@@ -887,7 +889,7 @@ func TestMemoryStore_QuotaLifecycle(t *testing.T) {
 	}
 
 	// 8. Releasing non-existent reservation returns ErrNotFound
-	if err := store.ReleaseQuota(ctx, "non-existent-id", "err"); !errors.Is(err, core.ErrNotFound) {
+	if err := store.ReleaseQuota(ctx, "non-existent-id", "err", core.LLMTelemetry{}); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for unknown reservation, got %v", err)
 	}
 }
@@ -2739,7 +2741,7 @@ func TestMemoryStore_QuotaWindowRolloverSafety(t *testing.T) {
 
 		// Delayed ReleaseQuota of r1 (from old daily window, same monthly window):
 		// DailyRequestsUsed must remain 1 (r3), MonthlyTokensUsed must drop by 1000 (2300 -> 1300).
-		if err := store.ReleaseQuota(ctx, r1.ID, "delayed failure"); err != nil {
+		if err := store.ReleaseQuota(ctx, r1.ID, "delayed failure", core.LLMTelemetry{}); err != nil {
 			t.Fatalf("release r1: %v", err)
 		}
 		q, err := store.Quota(ctx, userID)
@@ -2754,7 +2756,7 @@ func TestMemoryStore_QuotaWindowRolloverSafety(t *testing.T) {
 		}
 
 		// Delayed CommitUsage of r2 (from old daily window, same monthly window) adjusts MonthlyTokensUsed by (1100 - 800 = +300 -> 1600).
-		if err := store.CommitUsage(ctx, r2.ID, core.TokenUsage{TotalTokens: 1100}); err != nil {
+		if err := store.CommitUsage(ctx, r2.ID, core.LLMTelemetry{Usage: core.TokenUsage{TotalTokens: 1100}}); err != nil {
 			t.Fatalf("commit r2: %v", err)
 		}
 		q, _ = store.Quota(ctx, userID)
@@ -2784,11 +2786,11 @@ func TestMemoryStore_QuotaWindowRolloverSafety(t *testing.T) {
 		}
 
 		// Delayed CommitUsage with actual < estimated (100 - 2000 = -1900) must NOT reduce new month's 400 tokens.
-		if err := store.CommitUsage(ctx, r1.ID, core.TokenUsage{PromptTokens: 40, CompletionTokens: 60, TotalTokens: 100}); err != nil {
+		if err := store.CommitUsage(ctx, r1.ID, core.LLMTelemetry{Usage: core.TokenUsage{PromptTokens: 40, CompletionTokens: 60, TotalTokens: 100}}); err != nil {
 			t.Fatalf("commit r1: %v", err)
 		}
 		// Delayed ReleaseQuota must NOT decrement new month's DailyRequestsUsed (1) or MonthlyTokensUsed (400).
-		if err := store.ReleaseQuota(ctx, r2.ID, "delayed abort"); err != nil {
+		if err := store.ReleaseQuota(ctx, r2.ID, "delayed abort", core.LLMTelemetry{}); err != nil {
 			t.Fatalf("release r2: %v", err)
 		}
 
@@ -2834,7 +2836,7 @@ func TestMemoryStore_QuotaWindowRolloverSafety(t *testing.T) {
 		}
 
 		// Release r1: daily window matches (2 -> 1), monthly window expired (stays 300!).
-		if err := store.ReleaseQuota(ctx, r1.ID, "split rollover"); err != nil {
+		if err := store.ReleaseQuota(ctx, r1.ID, "split rollover", core.LLMTelemetry{}); err != nil {
 			t.Fatalf("release r1: %v", err)
 		}
 		qAfter, _ := store.Quota(ctx, userID)

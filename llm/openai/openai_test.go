@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
 	"github.com/resumeee-app/resumeee-core/llm/openai"
 )
@@ -291,11 +293,11 @@ func TestOpenAIClient_Complete_ResponsesAPI(t *testing.T) {
 
 	t.Run("nil client and empty api key guards", func(t *testing.T) {
 		req := llm.Request{UserPrompt: "ping"}
-		if _, err := (*openai.Client)(nil).Complete(context.Background(), req); !errors.Is(err, llm.ErrUnauthorized) {
-			t.Errorf("expected ErrUnauthorized for nil openai.Client, got %v", err)
+		if resp, err := (*openai.Client)(nil).Complete(context.Background(), req); !errors.Is(err, llm.ErrUnauthorized) || resp != nil {
+			t.Errorf("expected (nil, ErrUnauthorized) for nil openai.Client, got (%+v, %v)", resp, err)
 		}
-		if _, err := openai.New("   ").Complete(context.Background(), req); !errors.Is(err, llm.ErrUnauthorized) {
-			t.Errorf("expected ErrUnauthorized for empty OpenAI key, got %v", err)
+		if resp, err := openai.New("   ").Complete(context.Background(), req); !errors.Is(err, llm.ErrUnauthorized) || resp != nil {
+			t.Errorf("expected (nil, ErrUnauthorized) for empty OpenAI key, got (%+v, %v)", resp, err)
 		}
 	})
 
@@ -359,5 +361,281 @@ func TestOpenAIClient_Complete_ResponsesAPI(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestOpenAIClient_Complete_Telemetry(t *testing.T) {
+	t.Run("usage extraction and model resolution", func(t *testing.T) {
+		cases := []struct {
+			name         string
+			defaultModel string
+			reqModel     string
+			body         string
+			wantModel    string
+			wantUsage    core.TokenUsage
+		}{
+			{
+				name:      "explicit total tokens preserved with provider default model",
+				body:      `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":50,"output_tokens":25,"total_tokens":90}}`,
+				wantModel: llm.DefaultModelForProvider(llm.ProviderOpenAI),
+				wantUsage: core.TokenUsage{PromptTokens: 50, CompletionTokens: 25, TotalTokens: 90},
+			},
+			{
+				name:      "omitted total tokens backfilled with explicit request model",
+				reqModel:  "  gpt-4.1  ",
+				body:      `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":18,"output_tokens":7}}`,
+				wantModel: "gpt-4.1",
+				wantUsage: core.TokenUsage{PromptTokens: 18, CompletionTokens: 7, TotalTokens: 25},
+			},
+			{
+				name:         "prompt-only usage backfilled with custom default model",
+				defaultModel: "gpt-5",
+				body:         `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":14}}`,
+				wantModel:    "gpt-5",
+				wantUsage:    core.TokenUsage{PromptTokens: 14, TotalTokens: 14},
+			},
+			{
+				name:      "omitted usage stays zero",
+				body:      `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`,
+				wantModel: llm.DefaultModelForProvider(llm.ProviderOpenAI),
+				wantUsage: core.TokenUsage{},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				defer srv.Close()
+
+				opts := []openai.Option{openai.WithBaseURL(srv.URL), openai.WithHTTPClient(srv.Client())}
+				if tc.defaultModel != "" {
+					opts = append(opts, openai.WithDefaultModel(tc.defaultModel))
+				}
+				client := openai.New("key", opts...)
+
+				resp, err := client.Complete(context.Background(), llm.Request{
+					Model:      tc.reqModel,
+					UserPrompt: "hello",
+				})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if resp == nil {
+					t.Fatalf("expected non-nil response")
+				}
+				if resp.Provider != llm.ProviderOpenAI || resp.Model != tc.wantModel || resp.StatusCode != http.StatusOK {
+					t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, 200)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderOpenAI, tc.wantModel)
+				}
+				if resp.Latency <= 0 {
+					t.Errorf("expected Latency > 0, got %v", resp.Latency)
+				}
+				if resp.Usage != tc.wantUsage {
+					t.Errorf("Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
+				}
+			})
+		}
+	})
+
+	t.Run("HTTP errors and 200 invalid responses populate telemetry and partial usage", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			reqModel   string
+			statusCode int
+			body       string
+			wantErr    error
+			wantModel  string
+			wantUsage  core.TokenUsage
+		}{
+			{
+				name:       "400 bad request",
+				statusCode: http.StatusBadRequest,
+				body:       `{"error":{"message":"invalid schema"}}`,
+				wantErr:    llm.ErrBadRequest,
+				wantModel:  llm.DefaultModelForProvider(llm.ProviderOpenAI),
+			},
+			{
+				name:       "401 unauthorized",
+				reqModel:   "gpt-4.1",
+				statusCode: http.StatusUnauthorized,
+				body:       `{"error":{"message":"invalid key"}}`,
+				wantErr:    llm.ErrUnauthorized,
+				wantModel:  "gpt-4.1",
+			},
+			{
+				name:       "429 rate limited",
+				statusCode: http.StatusTooManyRequests,
+				body:       `{"error":{"message":"rate limit"}}`,
+				wantErr:    llm.ErrRateLimited,
+				wantModel:  llm.DefaultModelForProvider(llm.ProviderOpenAI),
+			},
+			{
+				name:       "500 upstream error",
+				statusCode: http.StatusInternalServerError,
+				body:       `{"error":{"message":"internal error"}}`,
+				wantErr:    llm.ErrUpstream,
+				wantModel:  llm.DefaultModelForProvider(llm.ProviderOpenAI),
+			},
+			{
+				name:       "200 malformed json",
+				statusCode: http.StatusOK,
+				body:       `{broken`,
+				wantErr:    llm.ErrInvalidResponse,
+				wantModel:  llm.DefaultModelForProvider(llm.ProviderOpenAI),
+			},
+			{
+				name:       "200 incomplete preserves partial usage with backfill",
+				reqModel:   "gpt-4o-mini",
+				statusCode: http.StatusOK,
+				body:       `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[],"usage":{"input_tokens":30,"output_tokens":12}}`,
+				wantErr:    llm.ErrInvalidResponse,
+				wantModel:  "gpt-4o-mini",
+				wantUsage:  core.TokenUsage{PromptTokens: 30, CompletionTokens: 12, TotalTokens: 42},
+			},
+			{
+				name:       "200 empty output preserves partial usage",
+				statusCode: http.StatusOK,
+				body:       `{"status":"completed","output":[],"usage":{"input_tokens":24}}`,
+				wantErr:    llm.ErrInvalidResponse,
+				wantModel:  llm.DefaultModelForProvider(llm.ProviderOpenAI),
+				wantUsage:  core.TokenUsage{PromptTokens: 24, TotalTokens: 24},
+			},
+			{
+				name:       "200 refusal preserves explicit usage",
+				statusCode: http.StatusOK,
+				body:       `{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"nope"}]}],"usage":{"input_tokens":11,"output_tokens":3,"total_tokens":16}}`,
+				wantErr:    llm.ErrInvalidResponse,
+				wantModel:  llm.DefaultModelForProvider(llm.ProviderOpenAI),
+				wantUsage:  core.TokenUsage{PromptTokens: 11, CompletionTokens: 3, TotalTokens: 16},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(tc.statusCode)
+					_, _ = w.Write([]byte(tc.body))
+				}))
+				defer srv.Close()
+
+				client := openai.New("key", openai.WithBaseURL(srv.URL), openai.WithHTTPClient(srv.Client()))
+				resp, err := client.Complete(context.Background(), llm.Request{
+					Model:      tc.reqModel,
+					UserPrompt: "hi",
+				})
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("error = %v, want %v", err, tc.wantErr)
+				}
+				if resp == nil {
+					t.Fatalf("expected non-nil response on error")
+				}
+				if resp.Provider != llm.ProviderOpenAI || resp.Model != tc.wantModel || resp.StatusCode != tc.statusCode {
+					t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, %d)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderOpenAI, tc.wantModel, tc.statusCode)
+				}
+				if resp.Latency <= 0 {
+					t.Errorf("expected Latency > 0, got %v", resp.Latency)
+				}
+				if resp.Usage != tc.wantUsage {
+					t.Errorf("Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
+				}
+			})
+		}
+	})
+
+	t.Run("timeout and transport errors return non-nil telemetry with zero status", func(t *testing.T) {
+		t.Run("context deadline exceeded", func(t *testing.T) {
+			done := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				select {
+				case <-done:
+				case <-r.Context().Done():
+				case <-time.After(500 * time.Millisecond):
+				}
+			}))
+			defer srv.Close()
+			defer close(done)
+
+			client := openai.New("key", openai.WithBaseURL(srv.URL), openai.WithHTTPClient(srv.Client()))
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+			defer cancel()
+
+			resp, err := client.Complete(ctx, llm.Request{
+				Model:      "gpt-4.1",
+				UserPrompt: "ping",
+			})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+			}
+			if resp == nil {
+				t.Fatalf("expected non-nil response on timeout")
+			}
+			if resp.Provider != llm.ProviderOpenAI || resp.Model != "gpt-4.1" || resp.StatusCode != 0 {
+				t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, 0)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderOpenAI, "gpt-4.1")
+			}
+			if resp.Latency <= 0 {
+				t.Errorf("expected Latency > 0, got %v", resp.Latency)
+			}
+		})
+
+		t.Run("client WithTimeout exceeded", func(t *testing.T) {
+			done := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				select {
+				case <-done:
+				case <-r.Context().Done():
+				case <-time.After(500 * time.Millisecond):
+				}
+			}))
+			defer srv.Close()
+			defer close(done)
+
+			client := openai.New(
+				"key",
+				openai.WithBaseURL(srv.URL),
+				openai.WithHTTPClient(srv.Client()),
+				openai.WithTimeout(15*time.Millisecond),
+			)
+			resp, err := client.Complete(context.Background(), llm.Request{
+				Model:      "gpt-4o-mini",
+				UserPrompt: "ping",
+			})
+			if err == nil {
+				t.Fatalf("expected timeout error from WithTimeout")
+			}
+			if resp == nil {
+				t.Fatalf("expected non-nil response on client timeout")
+			}
+			if resp.Provider != llm.ProviderOpenAI || resp.Model != "gpt-4o-mini" || resp.StatusCode != 0 {
+				t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, 0)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderOpenAI, "gpt-4o-mini")
+			}
+			if resp.Latency <= 0 {
+				t.Errorf("expected Latency > 0, got %v", resp.Latency)
+			}
+		})
+
+		t.Run("closed server transport failure", func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			srvURL := srv.URL
+			httpClient := srv.Client()
+			srv.Close()
+
+			client := openai.New("key", openai.WithBaseURL(srvURL), openai.WithHTTPClient(httpClient))
+			resp, err := client.Complete(context.Background(), llm.Request{UserPrompt: "ping"})
+			if err == nil {
+				t.Fatalf("expected transport error against closed server")
+			}
+			if resp == nil {
+				t.Fatalf("expected non-nil response on transport error")
+			}
+			wantModel := llm.DefaultModelForProvider(llm.ProviderOpenAI)
+			if resp.Provider != llm.ProviderOpenAI || resp.Model != wantModel || resp.StatusCode != 0 {
+				t.Errorf("metadata = (provider=%q, model=%q, status=%d), want (%q, %q, 0)", resp.Provider, resp.Model, resp.StatusCode, llm.ProviderOpenAI, wantModel)
+			}
+			if resp.Latency <= 0 {
+				t.Errorf("expected Latency > 0, got %v", resp.Latency)
+			}
+		})
 	})
 }

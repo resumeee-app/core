@@ -13,12 +13,12 @@ import (
 // PDFQuotaReserver reserves and releases tenant LLM quota units during PDF job submission and cancellation.
 type PDFQuotaReserver interface {
 	ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error)
-	ReleaseQuota(ctx context.Context, reservationID string, reason string) error
+	ReleaseQuota(ctx context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error
 }
 
 // QuotaReleaser releases reserved tenant quota units when a pending job is cancelled or rejected.
 type QuotaReleaser interface {
-	ReleaseQuota(ctx context.Context, reservationID string, reason string) error
+	ReleaseQuota(ctx context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error
 }
 
 // PDFSubmitConfig defines stores, admission bounds, TTL, and notification dependencies for SubmitPDFJob.
@@ -125,7 +125,7 @@ func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission
 		if cfg.Quotas != nil && reservationID != "" {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 			defer cancel()
-			_ = cfg.Quotas.ReleaseQuota(cleanupCtx, reservationID, sanitizePDFSubmitFailureReason(err))
+			_ = cfg.Quotas.ReleaseQuota(cleanupCtx, reservationID, sanitizePDFSubmitFailureReason(err), core.LLMTelemetry{})
 		}
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func CancelPDFJob(
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 		defer cancel()
-		_ = quotas.ReleaseQuota(cleanupCtx, cancelled.ReservationID, "cancelled by user")
+		_ = quotas.ReleaseQuota(cleanupCtx, cancelled.ReservationID, "cancelled by user", core.LLMTelemetry{})
 	}
 	return cancelled, nil
 }

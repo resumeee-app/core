@@ -87,11 +87,16 @@ func (q *TenantQuota) ReleaseReservation(estimatedTokens int) {
 	}
 }
 
-// LLMUsageRecord records an individual LLM operation reservation, token metrics, and terminal status.
+// LLMUsageRecord records an individual LLM operation reservation, provider telemetry,
+// token metrics, and terminal status.
 type LLMUsageRecord struct {
 	ID                 string            `json:"id"`
 	UserID             string            `json:"user_id"`
 	Operation          LLMOperationType  `json:"operation"`
+	Provider           string            `json:"provider,omitempty"`
+	Model              string            `json:"model,omitempty"`
+	StatusCode         int               `json:"status_code,omitempty"`
+	Latency            time.Duration     `json:"latency,omitempty"`
 	EstimatedTokens    int               `json:"estimated_tokens"`
 	PromptTokens       int               `json:"prompt_tokens"`
 	CompletionTokens   int               `json:"completion_tokens"`
@@ -108,7 +113,7 @@ type LLMUsageRecord struct {
 type QuotaStore interface {
 	Quota(ctx context.Context, userID string) (*TenantQuota, error)
 	ReserveQuota(ctx context.Context, userID string, op LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*LLMUsageRecord, error)
-	CommitUsage(ctx context.Context, reservationID string, usage TokenUsage) error
-	ReleaseQuota(ctx context.Context, reservationID string, errMsg string) error
+	CommitUsage(ctx context.Context, reservationID string, telemetry LLMTelemetry) error
+	ReleaseQuota(ctx context.Context, reservationID string, errMsg string, telemetry LLMTelemetry) error
 	ListUsageRecords(ctx context.Context, userID string, limit int) ([]LLMUsageRecord, error)
 }

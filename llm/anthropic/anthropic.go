@@ -259,15 +259,18 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 		"x-api-key":         c.apiKey,
 		"anthropic-version": apiVersion,
 	}
+	start := time.Now()
 	bodyBytes, statusCode, err := httpx.PostJSON(ctx, c.settings.HTTPClient, url, payload, headers, llm.ProviderAnthropic)
+	latency := time.Since(start)
 	if err != nil {
-		if bodyBytes == nil && statusCode == 0 {
-			return nil, err
-		}
-		return &llm.Response{RawBody: string(bodyBytes), StatusCode: statusCode}, err
+		return (&llm.Response{
+			RawBody:    string(bodyBytes),
+			StatusCode: statusCode,
+		}).PopulateTelemetry(c.Name(), model, latency), err
 	}
 
-	return parseMessagesResponse(bodyBytes, statusCode, payload.OutputConfig != nil)
+	resp, err := parseMessagesResponse(bodyBytes, statusCode, payload.OutputConfig != nil)
+	return resp.PopulateTelemetry(c.Name(), model, latency), err
 }
 
 // buildRequestPayload constructs an Anthropic request payload with capability-gated schema attachment.
@@ -310,11 +313,10 @@ func parseMessagesResponse(bodyBytes []byte, statusCode int, structured bool) (*
 			fmt.Errorf("%w: malformed anthropic response: %v", llm.ErrInvalidResponse, err)
 	}
 
-	usage := core.TokenUsage{
+	usage := (core.TokenUsage{
 		PromptTokens:     parsed.Usage.InputTokens,
 		CompletionTokens: parsed.Usage.OutputTokens,
-		TotalTokens:      parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
-	}
+	}).Normalize()
 	if parsed.StopReason == "refusal" {
 		return &llm.Response{RawBody: rawBody, StatusCode: statusCode, Usage: usage},
 			fmt.Errorf("%w: anthropic model refused request", llm.ErrInvalidResponse)

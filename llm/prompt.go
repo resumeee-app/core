@@ -21,16 +21,16 @@ var templateFS embed.FS
 // Compiled prompt templates parsed at package initialization from embedded templateFS assets.
 var (
 	// tailorSystemTmpl renders the system prompt for resume tailoring.
-	tailorSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/tailor_system.tmpl"))
+	tailorSystemTmpl = parseScrubbedPromptTemplate("templates/tailor_system.tmpl")
 
 	// tailorUserTmpl renders the user prompt for resume tailoring.
-	tailorUserTmpl = template.Must(template.ParseFS(templateFS, "templates/tailor_user.tmpl"))
+	tailorUserTmpl = parseScrubbedPromptTemplate("templates/tailor_user.tmpl")
 
 	// gapAnalysisSystemTmpl renders the system prompt for qualification gap analysis.
-	gapAnalysisSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_system.tmpl"))
+	gapAnalysisSystemTmpl = parseScrubbedPromptTemplate("templates/gap_analysis_system.tmpl")
 
 	// gapAnalysisUserTmpl renders the user prompt for qualification gap analysis.
-	gapAnalysisUserTmpl = template.Must(template.ParseFS(templateFS, "templates/gap_analysis_user.tmpl"))
+	gapAnalysisUserTmpl = parseScrubbedPromptTemplate("templates/gap_analysis_user.tmpl")
 
 	// resumeExtractSystemTmpl renders the system prompt for raw resume extraction.
 	resumeExtractSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/resume_extract_system.tmpl"))
@@ -39,17 +39,23 @@ var (
 	resumeExtractUserTmpl = template.Must(template.ParseFS(templateFS, "templates/resume_extract_user.tmpl"))
 
 	// atsExtractSystemTmpl renders the system prompt for Stage 1 ATS extraction.
-	atsExtractSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_extract_system.tmpl"))
+	atsExtractSystemTmpl = parseScrubbedPromptTemplate("templates/ats_extract_system.tmpl")
 
 	// atsExtractUserTmpl renders the user prompt for Stage 1 ATS extraction.
-	atsExtractUserTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_extract_user.tmpl"))
+	atsExtractUserTmpl = parseScrubbedPromptTemplate("templates/ats_extract_user.tmpl")
 
 	// atsMatchSystemTmpl renders the system prompt for Stage 2 ATS job matching.
-	atsMatchSystemTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_match_system.tmpl"))
+	atsMatchSystemTmpl = parseScrubbedPromptTemplate("templates/ats_match_system.tmpl")
 
 	// atsMatchUserTmpl renders the user prompt for Stage 2 ATS job matching.
-	atsMatchUserTmpl = template.Must(template.ParseFS(templateFS, "templates/ats_match_user.tmpl"))
+	atsMatchUserTmpl = parseScrubbedPromptTemplate("templates/ats_match_user.tmpl")
 )
+
+// parseScrubbedPromptTemplate parses the embedded prompt template at path together with the
+// shared PII placeholder partials, keeping path as the root template executed on render.
+func parseScrubbedPromptTemplate(path string) *template.Template {
+	return template.Must(template.ParseFS(templateFS, path, "templates/pii_placeholder_rules.tmpl"))
+}
 
 // ReadTemplateFile reads an embedded prompt template file by filename from templates/.
 func ReadTemplateFile(name string) (string, error) {
@@ -468,7 +474,7 @@ type atsMatchPromptContext struct {
 
 // promptTagRegex matches internal prompt XML delimiter tags across all prompt templates
 // to prevent embedded tag smuggling from untrusted inputs.
-var promptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|raw_resume_text|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|instructions|json_schema_hints|grounding_and_provenance_rules|gap_analysis_guidelines|schema_and_tailoring_hints|language_and_localization_rules|target_context|main_profile_data|prior_active_version|response_schema|json_output_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
+var promptTagRegex = regexp.MustCompile(`(?i)</?\s*(?:resume_document|raw_resume_text|target_job_description|extracted_candidate_data|ats_extraction_rules|ats_matching_rules|instructions|json_schema_hints|grounding_and_provenance_rules|gap_analysis_guidelines|schema_and_tailoring_hints|language_and_localization_rules|pii_placeholder_rules|target_context|main_profile_data|prior_active_version|response_schema|json_output_schema|rules_hierarchy|tier_1_global_rules|tier_2_strategy_instructions|tier_3_branch_directives|main_career_profile|custom_instructions)\b[^>]*>`)
 
 // sanitizePromptValue strips matching outer wrapper tags and escapes embedded XML delimiter tags in untrusted text.
 func sanitizePromptValue(content, stripOuterTag string) string {

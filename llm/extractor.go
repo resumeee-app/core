@@ -25,7 +25,7 @@ type CompletionRequest struct {
 type Completer interface {
 	AvailableModels() []core.ModelOption
 	SupportsStructuredCompletion(provider, model string) bool
-	Complete(ctx context.Context, req CompletionRequest) (string, core.TokenUsage, error)
+	Complete(ctx context.Context, req CompletionRequest) (string, core.LLMTelemetry, error)
 }
 
 // CompleterFunc adapts a simple text completion function to satisfy Completer.
@@ -41,29 +41,31 @@ func (f CompleterFunc) SupportsStructuredCompletion(_, _ string) bool {
 	return false
 }
 
-// Complete invokes the wrapped function and returns zero reported token usage.
-func (f CompleterFunc) Complete(ctx context.Context, req CompletionRequest) (string, core.TokenUsage, error) {
+// Complete invokes the wrapped function and returns zero telemetry unless error telemetry is attached.
+func (f CompleterFunc) Complete(ctx context.Context, req CompletionRequest) (string, core.LLMTelemetry, error) {
 	if f == nil {
-		return "", core.TokenUsage{}, fmt.Errorf("%w: no completer configured", core.ErrValidation)
+		return "", core.LLMTelemetry{}, fmt.Errorf("%w: no completer configured", core.ErrValidation)
 	}
 	text, err := f(ctx, req.SystemPrompt, req.UserPrompt, req.Provider, req.Model)
-	return text, core.TokenUsage{}, err
+	if err != nil {
+		return "", core.ResolveTelemetry(core.LLMTelemetry{}, err), err
+	}
+	return text, core.LLMTelemetry{}, nil
 }
 
-// ExtractResumeWithTokenUsage extracts a structured resume using extractor and applies defaultTokens
+// ExtractResumeWithTelemetry extracts a structured resume using extractor and applies defaultTokens
 // when a successful extraction reports zero usage. A nil extractor fails closed with core.ErrValidation.
-func ExtractResumeWithTokenUsage(ctx context.Context, extractor worker.ResumeExtractor, text, provider, model string, defaultTokens int) (*core.JSONResume, core.TokenUsage, error) {
+func ExtractResumeWithTelemetry(ctx context.Context, extractor worker.ResumeExtractor, text, provider, model string, defaultTokens int) (*core.JSONResume, core.LLMTelemetry, error) {
 	if extractor == nil {
-		return nil, core.TokenUsage{}, fmt.Errorf("%w: no resume extractor configured", core.ErrValidation)
+		return nil, core.LLMTelemetry{}, fmt.Errorf("%w: no resume extractor configured", core.ErrValidation)
 	}
-	extracted, usage, err := extractor.ExtractResume(ctx, text, provider, model)
+	extracted, telemetry, err := extractor.ExtractResume(ctx, text, provider, model)
+	telemetry = core.ResolveTelemetry(telemetry, err)
 	if err != nil {
-		return nil, core.TokenUsage{}, err
+		return nil, telemetry, core.AttachLLMTelemetry(err, telemetry)
 	}
-	if usage.TotalTokens == 0 && defaultTokens > 0 {
-		usage.TotalTokens = defaultTokens
-	}
-	return extracted, usage, nil
+	telemetry.Usage = telemetry.Usage.WithFallback(defaultTokens)
+	return extracted, telemetry, nil
 }
 
 // Extractor implements worker.ResumeExtractor and core.ModelEnumerator using an injected Completer.
@@ -89,18 +91,18 @@ func (e *Extractor) AvailableModels() []core.ModelOption {
 	return e.completer.AvailableModels()
 }
 
-// ExtractResume parses unstructured resume text into a structured JSONResume and reports token usage.
-func (e *Extractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.TokenUsage, error) {
+// ExtractResume parses unstructured resume text into a structured JSONResume and reports call telemetry.
+func (e *Extractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.LLMTelemetry, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, core.TokenUsage{}, err
+		return nil, core.LLMTelemetry{}, err
 	}
 
 	trimmedText := strings.TrimSpace(text)
 	if trimmedText == "" {
-		return nil, core.TokenUsage{}, fmt.Errorf("%w: empty resume text", core.ErrValidation)
+		return nil, core.LLMTelemetry{}, fmt.Errorf("%w: empty resume text", core.ErrValidation)
 	}
 	if e == nil || e.completer == nil {
-		return nil, core.TokenUsage{}, fmt.Errorf("%w: no completer configured", core.ErrValidation)
+		return nil, core.LLMTelemetry{}, fmt.Errorf("%w: no completer configured", core.ErrValidation)
 	}
 
 	supportsStructured := e.completer.SupportsStructuredCompletion(provider, model)
@@ -108,7 +110,7 @@ func (e *Extractor) ExtractResume(ctx context.Context, text, provider, model str
 		NativeStructuredOutput: supportsStructured,
 	})
 	if err != nil {
-		return nil, core.TokenUsage{}, fmt.Errorf("failed to build resume extraction prompt: %w", err)
+		return nil, core.LLMTelemetry{}, fmt.Errorf("failed to build resume extraction prompt: %w", err)
 	}
 
 	var schema *Schema
@@ -118,7 +120,7 @@ func (e *Extractor) ExtractResume(ctx context.Context, text, provider, model str
 		schemaName = "resume_extract_response"
 	}
 
-	rawResponse, usage, err := e.completer.Complete(ctx, CompletionRequest{
+	rawResponse, telemetry, err := e.completer.Complete(ctx, CompletionRequest{
 		Operation:    "ExtractResume",
 		SystemPrompt: prompts.SystemPrompt,
 		UserPrompt:   prompts.UserPrompt,
@@ -127,23 +129,26 @@ func (e *Extractor) ExtractResume(ctx context.Context, text, provider, model str
 		SchemaName:   schemaName,
 		Schema:       schema,
 	})
+	telemetry = core.ResolveTelemetry(telemetry, err)
 	if err != nil {
-		return nil, core.TokenUsage{}, err
+		return nil, telemetry, core.AttachLLMTelemetry(err, telemetry)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, core.TokenUsage{}, err
+		return nil, telemetry, core.AttachLLMTelemetry(err, telemetry)
 	}
 
 	cleanedJSON := ExtractJSON(rawResponse)
 	if strings.TrimSpace(cleanedJSON) == "" {
-		return nil, core.TokenUsage{}, fmt.Errorf("%w: empty or missing JSON in LLM response", core.ErrValidation)
+		parseErr := fmt.Errorf("%w: empty or missing JSON in LLM response", core.ErrValidation)
+		return nil, telemetry, core.AttachLLMTelemetry(parseErr, telemetry)
 	}
 
 	var resume core.JSONResume
 	if err := json.Unmarshal([]byte(cleanedJSON), &resume); err != nil {
-		return nil, core.TokenUsage{}, fmt.Errorf("%w: failed to parse structured LLM response: %v", core.ErrValidation, err)
+		parseErr := fmt.Errorf("%w: failed to parse structured LLM response: %v", core.ErrValidation, err)
+		return nil, telemetry, core.AttachLLMTelemetry(parseErr, telemetry)
 	}
-	return &resume, usage, nil
+	return &resume, telemetry, nil
 }
 
 // RegistryCompleter adapts a Registry into a capability-aware Completer.
@@ -185,10 +190,10 @@ func (rc *RegistryCompleter) SupportsStructuredCompletion(provider, model string
 }
 
 // Complete resolves the target client and dispatches a capability-aware completion request.
-func (rc *RegistryCompleter) Complete(ctx context.Context, req CompletionRequest) (string, core.TokenUsage, error) {
+func (rc *RegistryCompleter) Complete(ctx context.Context, req CompletionRequest) (string, core.LLMTelemetry, error) {
 	client, targetModel, err := rc.resolveClientAndModel(req.Provider, req.Model)
 	if err != nil {
-		return "", core.TokenUsage{}, err
+		return "", core.LLMTelemetry{}, err
 	}
 	return rc.registry.CompleteStructured(ctx, client, req.Operation, Request{
 		Model:          targetModel,

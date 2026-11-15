@@ -28,7 +28,7 @@ func (p *Pool) safeProcessPDFJob(job *core.PDFParseJob) {
 					"panic", r,
 				)
 			}
-			p.failClaimedJob(p.pdfJobDescriptor(job, ""), "An unexpected internal error occurred while parsing the resume.", true)
+			p.failClaimedJob(p.pdfJobDescriptor(job, ""), "An unexpected internal error occurred while parsing the resume.", true, core.LLMTelemetry{})
 		}
 	}()
 
@@ -57,41 +57,38 @@ func (p *Pool) processClaimedPDFJob(job *core.PDFParseJob) {
 
 	if job.ExpiresAt != nil && !job.ExpiresAt.After(p.now()) {
 		stopHeartbeat()
-		p.failClaimedJob(desc, core.ErrJobExpired.Error(), true)
+		p.failClaimedJob(desc, core.ErrJobExpired.Error(), true, core.LLMTelemetry{})
 		return
 	}
 
 	if strings.TrimSpace(job.RawText) == "" {
 		stopHeartbeat()
-		p.failClaimedJob(desc, "Document validation failed: resume raw text cannot be empty.", true)
+		p.failClaimedJob(desc, "Document validation failed: resume raw text cannot be empty.", true, core.LLMTelemetry{})
 		return
 	}
 
 	if p.resumeExtractor == nil {
 		stopHeartbeat()
-		p.failClaimedJob(desc, "Resume extraction service is unavailable.", true)
+		p.failClaimedJob(desc, "Resume extraction service is unavailable.", true, core.LLMTelemetry{})
 		return
 	}
 
-	timeout := p.llmTimeout
-	if timeout <= 0 {
-		timeout = defaultLLMJobTimeout
-	}
-	extractCtx, extractCancel := context.WithTimeout(attemptCtx, timeout)
-	extracted, usage, err := p.resumeExtractor.ExtractResume(extractCtx, job.RawText, job.Provider, job.Model)
+	extractCtx, extractCancel := p.withLLMTimeout(attemptCtx)
+	extracted, telemetry, err := p.resumeExtractor.ExtractResume(extractCtx, job.RawText, job.Provider, job.Model)
 	extractCancel()
+	telemetry = core.ResolveTelemetry(telemetry, err)
 
 	if err != nil {
 		stopHeartbeat()
-		p.routeAttemptError(attemptCtx, desc, err, "Resume extraction interrupted by worker shutdown.", classifyPDFExtractionError)
+		p.routeAttemptError(attemptCtx, desc, err, telemetry, "Resume extraction interrupted by worker shutdown.", classifyPDFExtractionError)
 		return
 	}
 	if attemptCtx.Err() != nil {
 		stopHeartbeat()
 		if p.isShuttingDown() {
-			p.failClaimedJob(desc, "Resume extraction interrupted by worker shutdown.", true)
+			p.failClaimedJob(desc, "Resume extraction interrupted by worker shutdown.", true, core.LLMTelemetry{})
 		} else {
-			p.failClaimedJob(desc, core.ErrLeaseExpired.Error(), true)
+			p.failClaimedJob(desc, core.ErrLeaseExpired.Error(), true, core.LLMTelemetry{})
 		}
 		return
 	}
@@ -100,14 +97,13 @@ func (p *Pool) processClaimedPDFJob(job *core.PDFParseJob) {
 		if p.logger != nil {
 			p.logger.Error("pdf resume extraction returned empty result", "job_id", job.ID, "worker_id", claimedBy)
 		}
-		p.failClaimedJob(desc, "Resume extraction returned an empty result.", true)
+		p.failClaimedJob(desc, "Resume extraction returned an empty result.", true, telemetry)
 		return
 	}
 
-	if usage.TotalTokens == 0 {
-		usage.TotalTokens = defaultPDFExtractionTokens
-	}
-	p.commitUsageDetached(job.ReservationID, usage)
+	// Commit consumed LLM usage immediately upon successful extraction so downstream persistence failures cannot refund it.
+	telemetry.Usage = telemetry.Usage.WithFallback(defaultPDFExtractionTokens)
+	p.commitUsageDetached(job.ReservationID, telemetry)
 
 	stopHeartbeat()
 	if err := p.pdfJobs.CompleteClaimedJob(attemptCtx, job.ID, claimedBy, extracted); err != nil {
@@ -118,7 +114,7 @@ func (p *Pool) processClaimedPDFJob(job *core.PDFParseJob) {
 				"error", err,
 			)
 		}
-		p.failClaimedJob(desc, "Failed to save extracted resume.", false)
+		p.failClaimedJob(desc, "Failed to save extracted resume.", false, core.LLMTelemetry{})
 		return
 	}
 }

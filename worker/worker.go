@@ -646,7 +646,7 @@ func (p *Pool) safeProcessVersion(ver *core.BranchVersion) {
 					"panic", r,
 				)
 			}
-			p.failClaimedJob(p.versionJobDescriptor(ver, ""), "An unexpected internal error occurred during resume generation.", true)
+			p.failClaimedJob(p.versionJobDescriptor(ver, ""), "An unexpected internal error occurred during resume generation.", true, core.LLMTelemetry{})
 		}
 	}()
 
@@ -760,7 +760,7 @@ func (p *Pool) releaseReservationDetached(reservationID, reason string) {
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), p.cleanupDuration())
 	defer cancel()
-	if err := p.quotas.ReleaseQuota(cleanupCtx, reservationID, reason); err != nil && p.logger != nil {
+	if err := p.quotas.ReleaseQuota(cleanupCtx, reservationID, reason, core.LLMTelemetry{}); err != nil && p.logger != nil {
 		p.logger.Warn("failed to release quota reservation", "reservation_id", reservationID, "reason", reason, "err", err)
 	}
 }

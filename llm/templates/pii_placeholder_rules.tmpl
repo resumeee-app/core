@@ -1,0 +1,12 @@
+{{define "pii_placeholder_system_rules" -}}
+<pii_placeholder_rules>
+1. Deterministic Sentinel Tokens: Candidate personally identifiable information (PII) in the input has been masked with bracketed uppercase sentinel placeholders such as [NAME_PLACEHOLDER], [EMAIL_PLACEHOLDER], [PHONE_PLACEHOLDER], [WEBSITE_PLACEHOLDER], [SOCIAL_URL_PLACEHOLDER_1], and [SOCIAL_HANDLE_PLACEHOLDER_1] (with 1, 2, ... for indexed social profiles).
+2. Verbatim Preservation: Whenever a placeholder token appears in the input and is referenced or carried forward in your JSON output, preserve it character-for-character verbatim.
+3. Strict Prohibitions: NEVER translate, transliterate, localize, reformat, alter casing, drop or remove brackets from, or modify any PII placeholder token — even inside translated non-English text.
+4. Embedded & Company Names: Keep placeholder tokens intact when embedded inside company names, project names, titles, or compound phrases (for example, [NAME_PLACEHOLDER] Consulting must remain [NAME_PLACEHOLDER] Consulting verbatim, never translated, transliterated, reformatted, cased differently, or unbracketed).
+</pii_placeholder_rules>
+{{- end}}
+
+{{define "pii_placeholder_user_directive" -}}
+Preserve any bracketed uppercase PII placeholder tokens (such as [FIELD_PLACEHOLDER] and [SOCIAL_*_PLACEHOLDER_N]) verbatim; never translate, transliterate, reformat, alter casing, drop brackets from, or modify them, including when embedded in company names or translated prose.
+{{- end}}

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -104,7 +105,47 @@ type Response struct {
 	Text       string
 	RawBody    string
 	StatusCode int
+	Provider   string
+	Model      string
+	Latency    time.Duration
 	Usage      core.TokenUsage
+}
+
+// PopulateTelemetry fills missing provider, model, and zero latency metadata on r and normalizes Usage.
+// If r is nil, a new Response carrying the supplied telemetry metadata is allocated.
+func (r *Response) PopulateTelemetry(provider, model string, latency time.Duration) *Response {
+	if r == nil {
+		return &Response{
+			Provider: provider,
+			Model:    model,
+			Latency:  latency,
+		}
+	}
+	if strings.TrimSpace(r.Provider) == "" {
+		r.Provider = provider
+	}
+	if strings.TrimSpace(r.Model) == "" {
+		r.Model = model
+	}
+	if r.Latency == 0 {
+		r.Latency = latency
+	}
+	r.Usage = r.Usage.Normalize()
+	return r
+}
+
+// Telemetry converts r into normalized core.LLMTelemetry, returning zero telemetry when r is nil.
+func (r *Response) Telemetry() core.LLMTelemetry {
+	if r == nil {
+		return core.LLMTelemetry{}
+	}
+	return core.LLMTelemetry{
+		Provider:   r.Provider,
+		Model:      r.Model,
+		StatusCode: r.StatusCode,
+		Latency:    r.Latency,
+		Usage:      r.Usage.Normalize(),
+	}
 }
 
 // Client defines the vendor-agnostic completion contract implemented by each LLM provider backend.
@@ -315,6 +356,23 @@ func (r *Registry) resolveClient(req core.GenerationRequest) (Client, error) {
 	return r.Client(providerName)
 }
 
+// canonicalProviderName normalizes provider identifiers and collapses accepted aliases to their canonical name.
+func canonicalProviderName(name string) string {
+	norm := strings.ToLower(strings.TrimSpace(name))
+	if norm == ProviderCompatAlt {
+		return ProviderCompat
+	}
+	return norm
+}
+
+// resolvedRequestModel selects req.Model when non-blank, falling back to client or provider defaults.
+func resolvedRequestModel(client Client, req Request) string {
+	if model := strings.TrimSpace(req.Model); model != "" {
+		return model
+	}
+	return resolvedClientDefaultModel(client, client.Name())
+}
+
 // resolveModel resolves the target model using request override, branch override, registry default, or client default.
 func (r *Registry) resolveModel(req core.GenerationRequest, client Client) string {
 	if m := strings.TrimSpace(req.Model); m != "" {
@@ -323,7 +381,7 @@ func (r *Registry) resolveModel(req core.GenerationRequest, client Client) strin
 	if m := strings.TrimSpace(req.BranchContext.ModelOverride); m != "" {
 		return m
 	}
-	if defMod := r.DefaultModel(); defMod != "" && r.DefaultProvider() == client.Name() {
+	if defMod := r.DefaultModel(); defMod != "" && canonicalProviderName(r.DefaultProvider()) == canonicalProviderName(client.Name()) {
 		return defMod
 	}
 	return resolvedClientDefaultModel(client, client.Name())
@@ -362,10 +420,7 @@ func (r *Registry) sortedCanonicalProvidersLocked() []string {
 	providers := make([]string, 0, len(r.clients))
 	seen := make(map[string]bool, len(r.clients))
 	for name := range r.clients {
-		canonical := name
-		if canonical == ProviderCompatAlt {
-			canonical = ProviderCompat
-		}
+		canonical := canonicalProviderName(name)
 		if !seen[canonical] {
 			seen[canonical] = true
 			providers = append(providers, canonical)
@@ -417,10 +472,7 @@ func (r *Registry) Complete(ctx context.Context, client Client, operation string
 		return nil, ErrNoProviders
 	}
 
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		model = resolvedClientDefaultModel(client, client.Name())
-	}
+	model := resolvedRequestModel(client, req)
 	req.Model = model
 
 	if strings.TrimSpace(operation) == "" {
@@ -430,36 +482,31 @@ func (r *Registry) Complete(ctx context.Context, client Client, operation string
 	logger := r.logger
 	trace := logLLMRequest(ctx, logger, client.Name(), model, operation)
 
-	var statusCode int
+	var latency time.Duration
 	defer func() {
-		logLLMResponse(ctx, logger, trace, statusCode, retErr)
+		logLLMResponseTelemetry(ctx, logger, trace, latency, resp, retErr)
 	}()
 
 	resp, err := client.Complete(ctx, req)
-	if resp != nil {
-		statusCode = resp.StatusCode
+	latency = time.Since(trace.startTime)
+	if err == nil && resp == nil {
+		err = fmt.Errorf("%w: empty completion response from provider %s", ErrInvalidResponse, client.Name())
 	}
+	resp = resp.PopulateTelemetry(client.Name(), model, latency)
 	if err != nil {
-		retErr = err
+		retErr = core.AttachLLMTelemetry(err, resp.Telemetry())
 		return resp, retErr
-	}
-	if resp == nil {
-		retErr = fmt.Errorf("%w: empty completion response from provider %s", ErrInvalidResponse, client.Name())
-		return nil, retErr
 	}
 	return resp, nil
 }
 
 // CompleteStructured dispatches a capability-aware completion request, omitting ResponseSchema when unsupported.
-func (r *Registry) CompleteStructured(ctx context.Context, client Client, operation string, req Request) (string, core.TokenUsage, error) {
+func (r *Registry) CompleteStructured(ctx context.Context, client Client, operation string, req Request) (string, core.LLMTelemetry, error) {
 	if r == nil || client == nil {
-		return "", core.TokenUsage{}, ErrNoProviders
+		return "", core.LLMTelemetry{}, ErrNoProviders
 	}
 
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		model = resolvedClientDefaultModel(client, client.Name())
-	}
+	model := resolvedRequestModel(client, req)
 	req.Model = model
 
 	// Strip transport-level schemas when the selected model requires inline prompt instructions instead.
@@ -469,10 +516,11 @@ func (r *Registry) CompleteStructured(ctx context.Context, client Client, operat
 	}
 
 	resp, err := r.Complete(ctx, client, operation, req)
+	telemetry := core.ResolveTelemetry(resp.Telemetry(), err)
 	if err != nil {
-		return "", core.TokenUsage{}, err
+		return "", telemetry, err
 	}
-	return strings.TrimSpace(resp.Text), resp.Usage, nil
+	return strings.TrimSpace(resp.Text), telemetry, nil
 }
 
 // _ enforces at compile time that Registry implements core.ModelEnumerator.

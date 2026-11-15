@@ -98,30 +98,25 @@ func isUpstreamQuotaMessage(body string) bool {
 	return false
 }
 
-// MapHTTPStatusError maps a non-200 HTTP status code and provider payload into canonical llm sentinels.
+// MapHTTPStatusError maps a non-200 HTTP status code and provider payload into canonical llm sentinels
+// without embedding raw upstream response body payloads into returned error messages.
 func MapHTTPStatusError(provider string, statusCode int, body string) error {
 	trimmed := strings.TrimSpace(body)
-	if statusCode != 200 && isUpstreamQuotaMessage(trimmed) {
-		return fmt.Errorf("%w: status %d: %s", ErrUpstreamQuota, statusCode, body)
+	if statusCode != 200 && (statusCode == 402 || isUpstreamQuotaMessage(trimmed)) {
+		return fmt.Errorf("%w: %s api returned status %d (%d bytes)", ErrUpstreamQuota, provider, statusCode, len(body))
 	}
 	switch {
 	case statusCode == 200:
 		return nil
-	case statusCode == 402:
-		return fmt.Errorf("%w: status 402: %s", ErrUpstreamQuota, body)
 	case statusCode == 400 || statusCode == 404 || statusCode == 422:
-		return fmt.Errorf("%w: status %d: %s", ErrBadRequest, statusCode, body)
+		return fmt.Errorf("%w: %s api returned status %d (%d bytes)", ErrBadRequest, provider, statusCode, len(body))
 	case statusCode == 401 || statusCode == 403:
-		return fmt.Errorf("%w: status %d: %s", ErrUnauthorized, statusCode, body)
+		return fmt.Errorf("%w: %s api returned status %d (%d bytes)", ErrUnauthorized, provider, statusCode, len(body))
 	case statusCode == 429:
-		return fmt.Errorf("%w: status 429: %s", ErrRateLimited, body)
+		return fmt.Errorf("%w: %s api returned status 429 (%d bytes)", ErrRateLimited, provider, len(body))
 	case statusCode >= 500:
-		return fmt.Errorf("%w: status %d: %s", ErrUpstream, statusCode, body)
+		return fmt.Errorf("%w: %s api returned status %d (%d bytes)", ErrUpstream, provider, statusCode, len(body))
 	default:
-		if trimmed == "" {
-			trimmed = fmt.Sprintf("%s api returned status %d", provider, statusCode)
-			return fmt.Errorf("%s", trimmed)
-		}
-		return fmt.Errorf("%s api returned status %d: %s", provider, statusCode, body)
+		return fmt.Errorf("%s api returned status %d (%d bytes)", provider, statusCode, len(body))
 	}
 }

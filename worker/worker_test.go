@@ -52,6 +52,7 @@ type mockLLM struct {
 	shouldPanic  bool
 	panicVal     any
 	customResp   *core.GenerationResponse
+	telemetry    core.LLMTelemetry
 	requestCount int
 	capturedCtx  context.Context
 }
@@ -67,6 +68,7 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req core.Generatio
 	shouldPanic := m.shouldPanic
 	panicVal := m.panicVal
 	custom := m.customResp
+	telemetry := m.telemetry
 	m.mu.Unlock()
 
 	if shouldPanic {
@@ -139,15 +141,20 @@ func (m *mockLLM) GenerateTailoredResume(ctx context.Context, req core.Generatio
 		GapReport: core.GapReport{
 			OverallMatchSummary: "Candidate strongly matches requirements.",
 		},
+		Telemetry: telemetry,
 	}, nil
 }
 
-func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (m *mockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &resp.GapReport, nil
+	return &core.GapAnalysisResponse{
+		GapReport: resp.GapReport,
+		Usage:     resp.Usage,
+		Telemetry: resp.Telemetry,
+	}, nil
 }
 
 func (m *mockLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
@@ -254,7 +261,7 @@ func submitPendingVersionWithQuota(
 		UpdatedAt:         now,
 	}
 	if _, err := store.SubmitPendingVersion(ctx, ver, opts); err != nil {
-		_ = store.ReleaseQuota(ctx, rec.ID, err.Error())
+		_ = store.ReleaseQuota(ctx, rec.ID, err.Error(), core.LLMTelemetry{})
 		t.Fatalf("SubmitPendingVersion failed: %v", err)
 	}
 	return ver
@@ -485,7 +492,7 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 	if !errors.Is(submitErr, core.ErrPendingLimitExceeded) || !errors.Is(submitErr, core.ErrQueueFull) {
 		t.Fatalf("expected ErrPendingLimitExceeded / ErrQueueFull, got %v", submitErr)
 	}
-	_ = env.store.ReleaseQuota(ctx, recOver.ID, "rejected by pending limit")
+	_ = env.store.ReleaseQuota(ctx, recOver.ID, "rejected by pending limit", core.LLMTelemetry{})
 
 	// Also verify PDF SubmitPDFJob enforces MaxPendingPerTenant and releases quota on rejection
 	_, pdfErr := worker.SubmitPDFJob(ctx, worker.PDFSubmitConfig{
@@ -591,12 +598,16 @@ func (m *blockingMockLLM) GenerateTailoredResume(ctx context.Context, req core.G
 	}
 }
 
-func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (m *blockingMockLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &resp.GapReport, nil
+	return &core.GapAnalysisResponse{
+		GapReport: resp.GapReport,
+		Usage:     resp.Usage,
+		Telemetry: resp.Telemetry,
+	}, nil
 }
 
 func (m *blockingMockLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
@@ -1066,8 +1077,13 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 	}
 }
 
-// 8. Panic Recovery Test
+// TestPool_WorkerPanicRecovery verifies that a panic during job execution is caught,
+// transitions the version to failed with a sanitized message, releases any pending quota
+// reservation, and keeps the worker goroutine alive for subsequent jobs.
 func TestPool_WorkerPanicRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	env := setupTestWorkerEnv(t)
 	env.llm.mu.Lock()
 	env.llm.shouldPanic = true
@@ -1087,8 +1103,6 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		Renderer:     env.renderer,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	pool.Start(ctx)
 	defer pool.Stop()
 
@@ -1107,6 +1121,14 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 	}
 	if st := reservationStatus(ctx, t, env.store, env.defaultUser, verPanic.ReservationID); st != core.ReservationStatusReleased {
 		t.Errorf("expected quota released on worker panic, got %s", st)
+	}
+	quotaAfterPanic, err := env.store.Quota(ctx, env.defaultUser)
+	if err != nil {
+		t.Fatalf("Quota failed: %v", err)
+	}
+	if quotaAfterPanic.MonthlyTokensUsed != 0 || quotaAfterPanic.DailyRequestsUsed != 0 {
+		t.Errorf("expected refunded quota (0, 0) after panic, got (%d, %d)",
+			quotaAfterPanic.MonthlyTokensUsed, quotaAfterPanic.DailyRequestsUsed)
 	}
 
 	env.llm.mu.Lock()
@@ -1134,10 +1156,11 @@ type mockResumeExtractor struct {
 	failErrMsg   string
 	result       *core.JSONResume
 	usage        core.TokenUsage
+	telemetry    core.LLMTelemetry
 	requestCount int
 }
 
-func (m *mockResumeExtractor) ExtractResume(ctx context.Context, _, _, _ string) (*core.JSONResume, core.TokenUsage, error) {
+func (m *mockResumeExtractor) ExtractResume(ctx context.Context, _, _, _ string) (*core.JSONResume, core.LLMTelemetry, error) {
 	m.mu.Lock()
 	m.requestCount++
 	delay := m.delay
@@ -1145,31 +1168,34 @@ func (m *mockResumeExtractor) ExtractResume(ctx context.Context, _, _, _ string)
 	failErr := m.failErr
 	failErrMsg := m.failErrMsg
 	result := m.result
-	usage := m.usage
+	telemetry := m.telemetry
+	if telemetry.Usage.IsZero() && !m.usage.IsZero() {
+		telemetry.Usage = m.usage
+	}
 	m.mu.Unlock()
 
 	if delay > 0 {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return nil, core.TokenUsage{}, ctx.Err()
+			return nil, telemetry, ctx.Err()
 		}
 	}
 	if failErr != nil {
-		return nil, core.TokenUsage{}, failErr
+		return nil, telemetry, failErr
 	}
 	if fail {
-		return nil, core.TokenUsage{}, errors.New(failErrMsg)
+		return nil, telemetry, errors.New(failErrMsg)
 	}
 	if result != nil {
-		return result, usage, nil
+		return result, telemetry, nil
 	}
 	return &core.JSONResume{
 		Basics: core.JSONResumeBasics{
 			Name:  "Test Candidate",
 			Email: "candidate@test.com",
 		},
-	}, usage, nil
+	}, telemetry, nil
 }
 
 // 9. PDF Parse Job Success
@@ -1609,15 +1635,19 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 }
 
 type callbackResumeExtractor struct {
-	fn func(ctx context.Context, text, provider, model string) (*core.JSONResume, error)
+	fn    func(ctx context.Context, text, provider, model string) (*core.JSONResume, error)
+	fnTel func(ctx context.Context, text, provider, model string) (*core.JSONResume, core.LLMTelemetry, error)
 }
 
-func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.TokenUsage, error) {
+func (c *callbackResumeExtractor) ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.LLMTelemetry, error) {
+	if c.fnTel != nil {
+		return c.fnTel(ctx, text, provider, model)
+	}
 	if c.fn != nil {
 		res, err := c.fn(ctx, text, provider, model)
-		return res, core.TokenUsage{}, err
+		return res, core.LLMTelemetry{}, err
 	}
-	return &core.JSONResume{}, core.TokenUsage{}, nil
+	return &core.JSONResume{}, core.LLMTelemetry{}, nil
 }
 
 type callbackLLM struct {
@@ -1631,12 +1661,16 @@ func (m *callbackLLM) GenerateTailoredResume(ctx context.Context, req core.Gener
 	return &core.GenerationResponse{TailoredContent: core.TailoredContent{Summary: "OK"}}, nil
 }
 
-func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapReport, error) {
+func (m *callbackLLM) GenerateGapAnalysis(ctx context.Context, req core.GenerationRequest) (*core.GapAnalysisResponse, error) {
 	resp, err := m.GenerateTailoredResume(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	return &resp.GapReport, nil
+	return &core.GapAnalysisResponse{
+		GapReport: resp.GapReport,
+		Usage:     resp.Usage,
+		Telemetry: resp.Telemetry,
+	}, nil
 }
 
 func (m *callbackLLM) SimulateATS(_ context.Context, _ core.ATSSimulationRequest) (*core.ATSSimulationResponse, error) {
@@ -3009,7 +3043,7 @@ func TestPool_CancellationAndSupersedence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CancelVersion failed: %v", err)
 		}
-		_ = env.store.ReleaseQuota(ctx, cancelledVer.ReservationID, "cancelled by user")
+		_ = env.store.ReleaseQuota(ctx, cancelledVer.ReservationID, "cancelled by user", core.LLMTelemetry{})
 
 		pdfJob := submitPendingPDFWithQuota(ctx, t, env.store, nil, "user-cancel-pdf", "Sensitive raw resume text", "mock", "m", core.DefaultJobTTL, nil)
 		cancelledPDF, err := worker.CancelPDFJob(ctx, env.store, env.store, "user-cancel-pdf", pdfJob.ID, 2*time.Second)
@@ -3147,7 +3181,7 @@ func TestPool_CancellationAndSupersedence(t *testing.T) {
 			onProfile: func() {
 				released, _ := env.store.AbortBranchVersions(ctx, env.branchID, "branch deleted")
 				for _, r := range released {
-					_ = env.store.ReleaseQuota(ctx, r.ReservationID, r.Reason)
+					_ = env.store.ReleaseQuota(ctx, r.ReservationID, r.Reason, core.LLMTelemetry{})
 				}
 				_ = env.store.DeleteBranch(ctx, env.defaultUser, env.branchID)
 			},
@@ -3596,11 +3630,11 @@ func TestPool_ConcurrentRace_AtMostOnceAndBranchExclusivity(t *testing.T) {
 	}
 }
 
-type failingValidator struct {
+type redactFailingValidator struct {
 	err error
 }
 
-func (v *failingValidator) Validate(_ *core.TailoredContent, _ *core.MainProfileSnapshot, _ *core.Branch) (*core.ValidationResult, error) {
+func (v *redactFailingValidator) Validate(_ *core.TailoredContent, _ *core.MainProfileSnapshot, _ *core.Branch) (*core.ValidationResult, error) {
 	return nil, v.err
 }
 
@@ -3636,8 +3670,8 @@ type tokenReportingExtractor struct {
 	err   error
 }
 
-func (e *tokenReportingExtractor) ExtractResume(_ context.Context, _, _, _ string) (*core.JSONResume, core.TokenUsage, error) {
-	return e.res, e.usage, e.err
+func (e *tokenReportingExtractor) ExtractResume(_ context.Context, _, _, _ string) (*core.JSONResume, core.LLMTelemetry, error) {
+	return e.res, core.LLMTelemetry{Usage: e.usage}, e.err
 }
 
 type spyQuotaReserver struct {
@@ -3652,11 +3686,11 @@ func (s *spyQuotaReserver) ReserveQuota(ctx context.Context, userID string, op c
 	return s.inner.ReserveQuota(ctx, userID, op, estimatedTokens, dailyLimit, monthlyLimit)
 }
 
-func (s *spyQuotaReserver) ReleaseQuota(ctx context.Context, reservationID, reason string) error {
+func (s *spyQuotaReserver) ReleaseQuota(ctx context.Context, reservationID, reason string, telemetry core.LLMTelemetry) error {
 	s.releaseMu.Lock()
 	s.releaseReason = reason
 	s.releaseMu.Unlock()
-	return s.inner.ReleaseQuota(ctx, reservationID, reason)
+	return s.inner.ReleaseQuota(ctx, reservationID, reason, telemetry)
 }
 
 func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.T) {
@@ -3676,7 +3710,7 @@ func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.
 			Templates:    env1.templateRepo,
 			Quotas:       env1.quotaRepo,
 			Generator:    env1.llm,
-			Validator:    &failingValidator{err: errors.New(secretErr)},
+			Validator:    &redactFailingValidator{err: errors.New(secretErr)},
 			Renderer:     env1.renderer,
 		})
 		pool1.Start(ctx)

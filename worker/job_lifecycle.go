@@ -33,6 +33,7 @@ func (p *Pool) routeAttemptError(
 	attemptCtx context.Context,
 	job claimedJobDescriptor,
 	err error,
+	telemetry core.LLMTelemetry,
 	shutdownMsg string,
 	mapUserErr func(error, core.ErrorClass) string,
 ) {
@@ -47,11 +48,11 @@ func (p *Pool) routeAttemptError(
 	}
 
 	if p.isShuttingDown() {
-		p.failClaimedJob(job, shutdownMsg, true)
+		p.failClaimedJob(job, shutdownMsg, true, core.LLMTelemetry{})
 		return
 	}
 	if attemptCtx.Err() != nil {
-		p.failClaimedJob(job, core.ErrLeaseExpired.Error(), true)
+		p.failClaimedJob(job, core.ErrLeaseExpired.Error(), true, core.LLMTelemetry{})
 		return
 	}
 
@@ -96,11 +97,11 @@ func (p *Pool) routeAttemptError(
 		}
 	}
 
-	p.failClaimedJob(job, userErrMsg, true)
+	p.failClaimedJob(job, userErrMsg, true, telemetry)
 }
 
 // failClaimedJob records terminal failure for a claimed job using a bounded detached context and optionally releases reserved quota.
-func (p *Pool) failClaimedJob(job claimedJobDescriptor, errMsg string, refundQuota bool) {
+func (p *Pool) failClaimedJob(job claimedJobDescriptor, errMsg string, refundQuota bool, telemetry core.LLMTelemetry) {
 	if job.id == "" || job.failFn == nil {
 		return
 	}
@@ -128,28 +129,28 @@ func (p *Pool) failClaimedJob(job claimedJobDescriptor, errMsg string, refundQuo
 		return
 	}
 	if refundQuota {
-		p.releaseJobQuota(cleanupCtx, job.reservationID, errMsg)
+		p.releaseJobQuota(cleanupCtx, job.reservationID, errMsg, telemetry)
 	}
 }
 
-// commitUsageDetached commits token usage for reservationID using a bounded detached cleanup context.
-func (p *Pool) commitUsageDetached(reservationID string, usage core.TokenUsage) {
+// commitUsageDetached commits token usage and LLM call telemetry for reservationID using a bounded detached cleanup context.
+func (p *Pool) commitUsageDetached(reservationID string, telemetry core.LLMTelemetry) {
 	if p.quotas == nil || reservationID == "" {
 		return
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), p.cleanupDuration())
 	defer cancel()
-	if err := p.quotas.CommitUsage(cleanupCtx, reservationID, usage); err != nil && p.logger != nil {
+	if err := p.quotas.CommitUsage(cleanupCtx, reservationID, telemetry.Normalize()); err != nil && p.logger != nil {
 		p.logger.Warn("failed to commit quota usage", "reservation_id", reservationID, "err", err)
 	}
 }
 
-// releaseJobQuota releases reserved tenant quota units when a job fails prior to commitment.
-func (p *Pool) releaseJobQuota(ctx context.Context, reservationID, reason string) {
+// releaseJobQuota releases reserved tenant quota units alongside optional failure telemetry when a job fails prior to commitment.
+func (p *Pool) releaseJobQuota(ctx context.Context, reservationID, reason string, telemetry core.LLMTelemetry) {
 	if p.quotas == nil || reservationID == "" {
 		return
 	}
-	if err := p.quotas.ReleaseQuota(ctx, reservationID, reason); err != nil && p.logger != nil {
+	if err := p.quotas.ReleaseQuota(ctx, reservationID, reason, telemetry.Normalize()); err != nil && p.logger != nil {
 		p.logger.Warn("failed to release job quota", "reservation_id", reservationID, "reason", reason, "err", err)
 	}
 }

@@ -108,6 +108,50 @@ type TokenUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// Normalize clamps negative token counts to zero and backfills TotalTokens from PromptTokens and CompletionTokens
+// when TotalTokens is zero and component token counts are present.
+func (u TokenUsage) Normalize() TokenUsage {
+	if u.PromptTokens < 0 {
+		u.PromptTokens = 0
+	}
+	if u.CompletionTokens < 0 {
+		u.CompletionTokens = 0
+	}
+	if u.TotalTokens < 0 {
+		u.TotalTokens = 0
+	}
+	if u.TotalTokens == 0 && (u.PromptTokens > 0 || u.CompletionTokens > 0) {
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	}
+	return u
+}
+
+// IsZero reports whether all token counts are zero or negative.
+func (u TokenUsage) IsZero() bool {
+	return u.PromptTokens <= 0 && u.CompletionTokens <= 0 && u.TotalTokens <= 0
+}
+
+// Add sums two TokenUsage values after normalizing missing TotalTokens on each operand.
+func (u TokenUsage) Add(other TokenUsage) TokenUsage {
+	left := u.Normalize()
+	right := other.Normalize()
+	return TokenUsage{
+		PromptTokens:     left.PromptTokens + right.PromptTokens,
+		CompletionTokens: left.CompletionTokens + right.CompletionTokens,
+		TotalTokens:      left.TotalTokens + right.TotalTokens,
+	}
+}
+
+// WithFallback normalizes u and substitutes estimatedTokens as TotalTokens only when all
+// reported token counters are zero and estimatedTokens is positive.
+func (u TokenUsage) WithFallback(estimatedTokens int) TokenUsage {
+	normalized := u.Normalize()
+	if normalized.IsZero() && estimatedTokens > 0 {
+		return TokenUsage{TotalTokens: estimatedTokens}
+	}
+	return normalized
+}
+
 // GenerationRequest contains full context required by an LLM provider to tailor a resume.
 type GenerationRequest struct {
 	Model              string
@@ -121,11 +165,35 @@ type GenerationRequest struct {
 	PriorVersion       *TailoredContent // For iterative refinements
 }
 
-// GenerationResponse wraps structured tailored content and gap analysis returned by an LLM.
+// GenerationResponse wraps structured tailored content, gap analysis, and call telemetry returned by an LLM.
 type GenerationResponse struct {
 	TailoredContent TailoredContent `json:"tailored_content"`
 	GapReport       GapReport       `json:"gap_report"`
 	Usage           TokenUsage      `json:"usage"`
+	Telemetry       LLMTelemetry    `json:"telemetry,omitempty"`
+}
+
+// EffectiveTelemetry returns r.Telemetry with Usage populated from r.Usage when Telemetry.Usage is zero.
+func (r *GenerationResponse) EffectiveTelemetry() LLMTelemetry {
+	if r == nil {
+		return LLMTelemetry{}
+	}
+	return resolveResponseTelemetry(r.Telemetry, r.Usage)
+}
+
+// GapAnalysisResponse wraps structured gap analysis output, token usage, and provider call telemetry.
+type GapAnalysisResponse struct {
+	GapReport GapReport    `json:"gap_report"`
+	Usage     TokenUsage   `json:"usage"`
+	Telemetry LLMTelemetry `json:"telemetry,omitempty"`
+}
+
+// EffectiveTelemetry returns r.Telemetry with Usage populated from r.Usage when Telemetry.Usage is zero.
+func (r *GapAnalysisResponse) EffectiveTelemetry() LLMTelemetry {
+	if r == nil {
+		return LLMTelemetry{}
+	}
+	return resolveResponseTelemetry(r.Telemetry, r.Usage)
 }
 
 // ValidationResult contains the sanitized tailored content and structured warnings.

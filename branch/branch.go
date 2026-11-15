@@ -153,7 +153,7 @@ func (s *Service) releaseReservationWithDetachedContext(reservationID, reason st
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if err := s.quotas.ReleaseQuota(cleanupCtx, reservationID, reason); err != nil && s.logger != nil {
+	if err := s.quotas.ReleaseQuota(cleanupCtx, reservationID, reason, core.LLMTelemetry{}); err != nil && s.logger != nil {
 		s.logger.Warn("failed to release quota reservation", "reservation_id", reservationID, "reason", reason, "err", err)
 	}
 }

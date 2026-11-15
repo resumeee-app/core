@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 	"github.com/resumeee-app/resumeee-core/llm"
@@ -17,6 +18,8 @@ type sequencedATSProvider struct {
 	responses    []string
 	errs         []error
 	usages       []core.TokenUsage
+	statuses     []int
+	latencies    []time.Duration
 	calls        int
 	prompts      []llm.PromptPayload
 }
@@ -44,21 +47,37 @@ func (p *sequencedATSProvider) Complete(_ context.Context, req llm.Request) (*ll
 		SystemPrompt: req.SystemPrompt,
 		UserPrompt:   req.UserPrompt,
 	})
+	var u core.TokenUsage
+	if idx < len(p.usages) {
+		u = p.usages[idx]
+	}
+	var lat time.Duration
+	if idx < len(p.latencies) {
+		lat = p.latencies[idx]
+	}
+	status := 200
+	if idx < len(p.statuses) && p.statuses[idx] != 0 {
+		status = p.statuses[idx]
+	}
 	if idx < len(p.errs) && p.errs[idx] != nil {
+		if (idx < len(p.statuses) && p.statuses[idx] != 0) || lat != 0 || !u.IsZero() {
+			return &llm.Response{
+				StatusCode: status,
+				Latency:    lat,
+				Usage:      u,
+			}, p.errs[idx]
+		}
 		return nil, p.errs[idx]
 	}
 	resp := "{}"
 	if idx < len(p.responses) {
 		resp = p.responses[idx]
 	}
-	var u core.TokenUsage
-	if idx < len(p.usages) {
-		u = p.usages[idx]
-	}
 	return &llm.Response{
 		Text:       resp,
 		RawBody:    resp,
-		StatusCode: 200,
+		StatusCode: status,
+		Latency:    lat,
 		Usage:      u,
 	}, nil
 }
@@ -193,9 +212,12 @@ func TestService_SimulateATS_TwoStageFlow(t *testing.T) {
 		t.Errorf("expected deobfuscated candidate name in ExtractedCandidate.Summary, got %q", resp.Score.ExtractedCandidate.Summary)
 	}
 
-	// Verify cumulative token usage
+	// Verify cumulative token usage and telemetry
 	if resp.Usage.TotalTokens != 500 {
 		t.Errorf("expected cumulative TotalTokens 500, got %d", resp.Usage.TotalTokens)
+	}
+	if resp.Telemetry.Provider != "gemini" || resp.Telemetry.Model != "gemini-2.5-flash" || resp.Telemetry.StatusCode != 200 || resp.Telemetry.Usage != resp.Usage {
+		t.Errorf("unexpected SimulateATS telemetry: %+v", resp.Telemetry)
 	}
 	if resp.Score.EvaluatedAt == nil {
 		t.Errorf("expected EvaluatedAt to be populated")
@@ -428,6 +450,148 @@ func TestService_SimulateATS_StructuredVsFallbackTransport(t *testing.T) {
 						t.Errorf("stage %d: expected nil ResponseSchema on transport for fallback provider", i+1)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestService_SimulateATS_Telemetry(t *testing.T) {
+	validStage1 := `{"extraction_confidence_score":0.95,"extraction_summary":"Clean","extracted_candidate":{"summary":"Go dev","skills":["Go"],"experiences":[],"educations":[]}}`
+	validStage2 := `{"job_matching_score":0.88,"matching_summary":"Great fit"}`
+
+	cases := []struct {
+		name           string
+		responses      []string
+		errs           []error
+		statuses       []int
+		latencies      []time.Duration
+		usages         []core.TokenUsage
+		wantErr        error
+		wantCalls      int
+		wantStatusCode int
+		wantLatency    time.Duration
+		wantUsage      core.TokenUsage
+	}{
+		{
+			name:           "success merges stage 1 and stage 2 latency and unnormalized usage",
+			responses:      []string{validStage1, validStage2},
+			statuses:       []int{200, 200},
+			latencies:      []time.Duration{11 * time.Millisecond, 19 * time.Millisecond},
+			usages:         []core.TokenUsage{{PromptTokens: 120, CompletionTokens: 40}, {PromptTokens: 80, CompletionTokens: 20}},
+			wantCalls:      2,
+			wantStatusCode: 200,
+			wantLatency:    30 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 200, CompletionTokens: 60, TotalTokens: 260},
+		},
+		{
+			name:           "stage 1 provider HTTP error preserves stage 1 telemetry",
+			errs:           []error{llm.ErrUpstream},
+			statuses:       []int{503},
+			latencies:      []time.Duration{9 * time.Millisecond},
+			usages:         []core.TokenUsage{{PromptTokens: 15}},
+			wantErr:        llm.ErrUpstream,
+			wantCalls:      1,
+			wantStatusCode: 503,
+			wantLatency:    9 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 15, TotalTokens: 15},
+		},
+		{
+			name:           "stage 1 HTTP 200 malformed JSON preserves stage 1 telemetry",
+			responses:      []string{"{not-json"},
+			statuses:       []int{200},
+			latencies:      []time.Duration{10 * time.Millisecond},
+			usages:         []core.TokenUsage{{PromptTokens: 40, CompletionTokens: 12}},
+			wantErr:        llm.ErrInvalidResponse,
+			wantCalls:      1,
+			wantStatusCode: 200,
+			wantLatency:    10 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 40, CompletionTokens: 12, TotalTokens: 52},
+		},
+		{
+			name:           "stage 2 provider HTTP error merges stage 1 and stage 2 telemetry",
+			responses:      []string{validStage1},
+			errs:           []error{nil, llm.ErrRateLimited},
+			statuses:       []int{200, 429},
+			latencies:      []time.Duration{11 * time.Millisecond, 13 * time.Millisecond},
+			usages:         []core.TokenUsage{{PromptTokens: 80, CompletionTokens: 30}, {PromptTokens: 10}},
+			wantErr:        llm.ErrRateLimited,
+			wantCalls:      2,
+			wantStatusCode: 429,
+			wantLatency:    24 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 90, CompletionTokens: 30, TotalTokens: 120},
+		},
+		{
+			name:           "stage 2 HTTP 200 malformed JSON merges stage 1 and stage 2 telemetry",
+			responses:      []string{validStage1, "{bad-stage2"},
+			statuses:       []int{200, 200},
+			latencies:      []time.Duration{11 * time.Millisecond, 15 * time.Millisecond},
+			usages:         []core.TokenUsage{{PromptTokens: 80, CompletionTokens: 30}, {PromptTokens: 50, CompletionTokens: 20}},
+			wantErr:        llm.ErrInvalidResponse,
+			wantCalls:      2,
+			wantStatusCode: 200,
+			wantLatency:    26 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 130, CompletionTokens: 50, TotalTokens: 180},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prov := &sequencedATSProvider{
+				name:         llm.ProviderGemini,
+				defaultModel: "gemini-2.5-flash",
+				responses:    tc.responses,
+				errs:         tc.errs,
+				statuses:     tc.statuses,
+				latencies:    tc.latencies,
+				usages:       tc.usages,
+			}
+			reg := llm.NewRegistry()
+			reg.Register(prov)
+			svc := llm.NewService(reg)
+
+			resp, err := svc.SimulateATS(context.Background(), core.ATSSimulationRequest{
+				ResumeText: "# Jane Doe\nGo Engineer",
+				FormatUsed: "markdown",
+				BranchContext: core.Branch{
+					ProviderOverride:   llm.ProviderGemini,
+					ModelOverride:      "gemini-2.5-flash",
+					TargetRequirements: "Go",
+				},
+			})
+
+			if prov.calls != tc.wantCalls {
+				t.Errorf("calls = %d, want %d", prov.calls, tc.wantCalls)
+			}
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+				if resp != nil {
+					t.Errorf("expected nil response on error, got %+v", resp)
+				}
+				tel, ok := core.LLMTelemetryFromError(err)
+				if !ok {
+					t.Fatalf("expected telemetry attached to error")
+				}
+				if tel.Provider != llm.ProviderGemini || tel.Model != "gemini-2.5-flash" || tel.StatusCode != tc.wantStatusCode {
+					t.Errorf("error telemetry = %+v, want status=%d", tel, tc.wantStatusCode)
+				}
+				if tel.Latency != tc.wantLatency || tel.Usage != tc.wantUsage {
+					t.Errorf("error telemetry latency/usage = (%v, %+v), want (%v, %+v)", tel.Latency, tel.Usage, tc.wantLatency, tc.wantUsage)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("SimulateATS unexpected error: %v", err)
+			}
+			if resp.Usage != tc.wantUsage {
+				t.Errorf("resp.Usage = %+v, want %+v", resp.Usage, tc.wantUsage)
+			}
+			if resp.Telemetry.Provider != llm.ProviderGemini || resp.Telemetry.Model != "gemini-2.5-flash" || resp.Telemetry.StatusCode != tc.wantStatusCode {
+				t.Errorf("resp.Telemetry = %+v, want status=%d", resp.Telemetry, tc.wantStatusCode)
+			}
+			if resp.Telemetry.Latency != tc.wantLatency || resp.Telemetry.Usage != tc.wantUsage {
+				t.Errorf("resp.Telemetry latency/usage = (%v, %+v), want (%v, %+v)", resp.Telemetry.Latency, resp.Telemetry.Usage, tc.wantLatency, tc.wantUsage)
 			}
 		})
 	}

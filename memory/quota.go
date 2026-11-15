@@ -77,11 +77,23 @@ func (s *Store) ReserveQuota(
 	return clone(record), nil
 }
 
-// CommitUsage reconciles estimated tokens against actual reported usage for a reservation.
-func (s *Store) CommitUsage(_ context.Context, reservationID string, usage core.TokenUsage) error {
+// applyUsageTelemetry copies pre-normalized provider telemetry and token counters onto record.
+func applyUsageTelemetry(record *core.LLMUsageRecord, normalized core.LLMTelemetry) {
+	record.Provider = normalized.Provider
+	record.Model = normalized.Model
+	record.StatusCode = normalized.StatusCode
+	record.Latency = normalized.Latency
+	record.PromptTokens = normalized.Usage.PromptTokens
+	record.CompletionTokens = normalized.Usage.CompletionTokens
+	record.TotalTokens = normalized.Usage.TotalTokens
+}
+
+// CommitUsage reconciles estimated tokens against actual reported usage and telemetry for a reservation.
+func (s *Store) CommitUsage(_ context.Context, reservationID string, telemetry core.LLMTelemetry) error {
 	if reservationID == "" {
 		return fmt.Errorf("%w: reservation id cannot be empty", core.ErrValidation)
 	}
+	normalized := telemetry.Normalize()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,25 +110,24 @@ func (s *Store) CommitUsage(_ context.Context, reservationID string, usage core.
 	if quota, ok := s.quotas[record.UserID]; ok {
 		quota.ResetWindowsIfExpired(now)
 		if !record.MonthlyWindowStart.IsZero() && quota.MonthlyWindowStart.Equal(record.MonthlyWindowStart) {
-			delta := usage.TotalTokens - record.EstimatedTokens
+			delta := normalized.Usage.TotalTokens - record.EstimatedTokens
 			quota.AdjustMonthlyTokens(delta)
 		}
 		quota.UpdatedAt = now
 	}
 
 	record.Status = core.ReservationStatusCommitted
-	record.PromptTokens = usage.PromptTokens
-	record.CompletionTokens = usage.CompletionTokens
-	record.TotalTokens = usage.TotalTokens
+	applyUsageTelemetry(record, normalized)
 	record.CommittedAt = &now
 	return nil
 }
 
-// ReleaseQuota refunds a pending reservation back into the tenant's quota window.
-func (s *Store) ReleaseQuota(_ context.Context, reservationID string, errMsg string) error {
+// ReleaseQuota refunds a pending reservation back into the tenant's quota window while recording call telemetry.
+func (s *Store) ReleaseQuota(_ context.Context, reservationID string, errMsg string, telemetry core.LLMTelemetry) error {
 	if reservationID == "" {
 		return fmt.Errorf("%w: reservation id cannot be empty", core.ErrValidation)
 	}
+	normalized := telemetry.Normalize()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -145,6 +156,7 @@ func (s *Store) ReleaseQuota(_ context.Context, reservationID string, errMsg str
 	}
 
 	record.Status = core.ReservationStatusReleased
+	applyUsageTelemetry(record, normalized)
 	record.ErrorMessage = errMsg
 	return nil
 }

@@ -16,6 +16,8 @@ type mockSanitizerClient struct {
 	defaultModel string
 	tailoredResp *core.GenerationResponse
 	completeText string
+	completeFn   func(req llm.Request) (*llm.Response, error)
+	requests     []llm.Request
 }
 
 func (m *mockSanitizerClient) Name() string {
@@ -41,6 +43,10 @@ func (m *mockSanitizerClient) SupportsStructuredOutput(_ string) bool {
 }
 
 func (m *mockSanitizerClient) Complete(_ context.Context, req llm.Request) (*llm.Response, error) {
+	m.requests = append(m.requests, req)
+	if m.completeFn != nil {
+		return m.completeFn(req)
+	}
 	if m.tailoredResp != nil && (req.SchemaName == "tailored_resume_response" || strings.Contains(req.SystemPrompt, "\"tailored_content\"")) {
 		copyResp := *m.tailoredResp
 		raw, err := json.Marshal(&copyResp)
@@ -61,7 +67,7 @@ func TestService_GenerateTailoredResume_DeobfuscationSeam(t *testing.T) {
 		defaultModel: "gpt-4o",
 		tailoredResp: &core.GenerationResponse{
 			TailoredContent: core.TailoredContent{
-				Summary: "Results-driven engineer " + sanitizer.PlaceholderFullName + " reachable at " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". Portfolio: " + sanitizer.PlaceholderWebsite + ". Handle: candidate-social-1.",
+				Summary: "Results-driven engineer " + sanitizer.PlaceholderFullName + " reachable at " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". Portfolio: " + sanitizer.PlaceholderWebsite + ". Handle: " + sanitizer.PlaceholderSocialHandle(1) + ".",
 				Experiences: []core.TailoredExperience{
 					{
 						Company:       "Acme",
@@ -194,7 +200,7 @@ func TestService_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 	mockProv := &mockSanitizerClient{
 		name:         "openai",
 		defaultModel: "gpt-4o",
-		completeText: `{"gap_report":{"overall_match_summary":"` + sanitizer.PlaceholderFullName + ` demonstrates strong capability.","missing_requirements":[{"requirement":"Kubernetes","missing_area":"Cloud","clarifying_prompt":"Does ` + sanitizer.PlaceholderFullName + ` have experience?","recommended_action":"Review ` + sanitizer.PlaceholderFullName + `'s GitHub candidate-social-1"}]}}`,
+		completeText: `{"gap_report":{"overall_match_summary":"` + sanitizer.PlaceholderFullName + ` demonstrates strong capability.","missing_requirements":[{"requirement":"Kubernetes","missing_area":"Cloud","clarifying_prompt":"Does ` + sanitizer.PlaceholderFullName + ` have experience?","recommended_action":"Review ` + sanitizer.PlaceholderFullName + `'s GitHub ` + sanitizer.PlaceholderSocialHandle(1) + `"}]}}`,
 	}
 
 	reg := llm.NewRegistry()
@@ -219,10 +225,14 @@ func TestService_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 		},
 	}
 
-	report, err := svc.GenerateGapAnalysis(context.Background(), req)
+	resp, err := svc.GenerateGapAnalysis(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if resp == nil {
+		t.Fatal("expected non-nil gap analysis response")
+	}
+	report := resp.GapReport
 
 	if strings.Contains(report.OverallMatchSummary, sanitizer.PlaceholderFullName) {
 		t.Errorf("gap report overall summary contains placeholder: %s", report.OverallMatchSummary)
@@ -240,5 +250,103 @@ func TestService_GenerateGapAnalysis_DeobfuscationSeam(t *testing.T) {
 	}
 	if !strings.Contains(reqItem.RecommendedAction, "Review Alice Walker's GitHub alicewalker") {
 		t.Errorf("recommended action failed deobfuscation: %s", reqItem.RecommendedAction)
+	}
+}
+
+func TestService_SimulateATS_DeobfuscationSeam(t *testing.T) {
+	mockProv := &mockSanitizerClient{
+		name:         "openai",
+		defaultModel: "gpt-4o",
+	}
+	mockProv.completeFn = func(req llm.Request) (*llm.Response, error) {
+		if strings.Contains(req.SystemPrompt, `"extraction_confidence_score"`) {
+			return &llm.Response{
+				Text: `{
+					"extraction_confidence_score": 0.94,
+					"extraction_summary": "Parsed profile for ` + sanitizer.PlaceholderFullName + `.",
+					"extracted_candidate": {
+						"summary": "` + sanitizer.PlaceholderFullName + ` leads Go platform teams.",
+						"skills": ["Go", "Kubernetes"],
+						"experiences": [
+							{
+								"company": "` + sanitizer.PlaceholderFullName + ` Consulting",
+								"title": "Principal Consultant",
+								"date_range": "2021 - Present",
+								"highlights": ["Built systems for ` + sanitizer.PlaceholderFullName + ` clients."]
+							},
+							{
+								"company": "CloudScale",
+								"title": "Staff Engineer",
+								"date_range": "2018 - 2021",
+								"highlights": ["Scaled distributed storage."]
+							}
+						],
+						"educations": []
+					}
+				}`,
+				StatusCode: 200,
+			}, nil
+		}
+		return &llm.Response{
+			Text: `{
+				"job_matching_score": 0.88,
+				"matching_summary": "` + sanitizer.PlaceholderFullName + ` matches Go and Kubernetes requirements."
+			}`,
+			StatusCode: 200,
+		}, nil
+	}
+
+	reg := llm.NewRegistry()
+	reg.Register(mockProv)
+	svc := llm.NewService(reg)
+
+	req := core.ATSSimulationRequest{
+		FormatUsed: string(core.OutputFormatMarkdown),
+		ResumeText: "# Alice Walker\n## Experience\n- Alice Walker Consulting (2021 - Present)\n- CloudScale (2018 - 2021)",
+		BranchContext: core.Branch{
+			ProviderOverride:   "openai",
+			ModelOverride:      "gpt-4o",
+			TargetRole:         "Staff Go Engineer",
+			TargetCompany:      "CloudScale",
+			TargetRequirements: "Go and Kubernetes production systems.",
+		},
+		MainProfile: &core.MainProfileSnapshot{
+			Profile: core.Profile{
+				FullName: "Alice Walker",
+				Email:    "alice.walker@example.org",
+			},
+		},
+	}
+
+	resp, err := svc.SimulateATS(context.Background(), req)
+	if err != nil {
+		t.Fatalf("SimulateATS failed: %v", err)
+	}
+	if len(mockProv.requests) != 2 {
+		t.Fatalf("expected 2 LLM requests (extract + match), got %d", len(mockProv.requests))
+	}
+	for i, sent := range mockProv.requests {
+		if strings.Contains(sent.UserPrompt, "Alice Walker") {
+			t.Errorf("outbound ATS request %d leaked candidate name:\n%s", i, sent.UserPrompt)
+		}
+	}
+	if !strings.Contains(mockProv.requests[1].UserPrompt, sanitizer.PlaceholderFullName+" Consulting") {
+		t.Errorf("Stage 2 prompt missing scrubbed company placeholder:\n%s", mockProv.requests[1].UserPrompt)
+	}
+
+	if resp.Score.ExtractedCandidate == nil || len(resp.Score.ExtractedCandidate.Experiences) != 2 {
+		t.Fatalf("expected 2 extracted experiences, got %+v", resp.Score.ExtractedCandidate)
+	}
+	if got := resp.Score.ExtractedCandidate.Experiences[0].Company; got != "Alice Walker Consulting" {
+		t.Errorf("ExtractedCandidate.Experiences[0].Company = %q, want %q", got, "Alice Walker Consulting")
+	}
+	if got := resp.Score.ExtractedCandidate.Experiences[1].Company; got != "CloudScale" {
+		t.Errorf("ExtractedCandidate.Experiences[1].Company = %q, want %q", got, "CloudScale")
+	}
+	if resp.Score.ExtractionSummary != "Parsed profile for Alice Walker." {
+		t.Errorf("ExtractionSummary = %q, want restored candidate name", resp.Score.ExtractionSummary)
+	}
+	if resp.Score.MatchingSummary != "Alice Walker matches Go and Kubernetes requirements." {
+		t.Errorf("MatchingSummary = %q, want restored candidate name", resp.Score.MatchingSummary)
 	}
 }

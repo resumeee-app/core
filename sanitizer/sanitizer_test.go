@@ -274,10 +274,10 @@ func TestSession_ObfuscateSnapshot_LLMBoundFieldsScrubbed(t *testing.T) {
 		{"Experience.Fact.Impact", obf.Experiences[0].Facts[0].Impact, sanitizer.PlaceholderEmail},
 		{"Project.Name", obf.Projects[0].Name, sanitizer.PlaceholderFullName},
 		{"Project.Role", obf.Projects[0].Role, sanitizer.PlaceholderFullName},
-		{"Project.URL", obf.Projects[0].URL, sanitizer.PlaceholderSocialURLPrefix + "2/raft-go"},
-		{"Project.Summary", obf.Projects[0].Summary, sanitizer.PlaceholderSocialUserPrefix + "2"},
+		{"Project.URL", obf.Projects[0].URL, sanitizer.PlaceholderSocialURL(2) + "/raft-go"},
+		{"Project.Summary", obf.Projects[0].Summary, sanitizer.PlaceholderSocialHandle(2)},
 		{"Project.Fact.Statement", obf.Projects[0].Facts[0].Statement, sanitizer.PlaceholderWebsite},
-		{"Project.Fact.Impact", obf.Projects[0].Facts[0].Impact, sanitizer.PlaceholderSocialUserPrefix + "2"},
+		{"Project.Fact.Impact", obf.Projects[0].Facts[0].Impact, sanitizer.PlaceholderSocialHandle(2)},
 		{"Education.Fact.Statement", obf.Education[0].Facts[0].Statement, sanitizer.PlaceholderFullName},
 		{"Education.Fact.Impact", obf.Education[0].Facts[0].Impact, sanitizer.PlaceholderWebsite},
 		{"Certification.URL", obf.Certifications[0].URL, sanitizer.PlaceholderWebsite + "/cka"},
@@ -450,7 +450,7 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 	session := sanitizer.NewSessionFromRequest(core.GenerationRequest{MainProfile: snap})
 
 	tailored := core.TailoredContent{
-		Summary: "Results-driven cloud architect " + sanitizer.PlaceholderFullName + " (also John Doe) with expertise in Kubernetes. Contact: " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". See " + sanitizer.PlaceholderWebsite + " and https://social.example.com/profile-1.",
+		Summary: "Results-driven cloud architect " + sanitizer.PlaceholderFullName + " with expertise in Kubernetes. Contact: " + sanitizer.PlaceholderEmail + " or " + sanitizer.PlaceholderPhone + ". See " + sanitizer.PlaceholderWebsite + " and " + sanitizer.PlaceholderSocialURL(1) + ".",
 		SkillGroups: []core.TailoredSkillGroup{
 			{Category: "Cloud", Skills: []string{"Go", "Kubernetes"}},
 		},
@@ -468,7 +468,7 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 				},
 				Bullets: []core.TailoredBullet{
 					{Text: sanitizer.PlaceholderFullName + " designed zero-trust networking reducing attack surface."},
-					{Text: "Direct inquiries to " + sanitizer.PlaceholderEmail + " or candidate profile candidate-social-1."},
+					{Text: "Direct inquiries to " + sanitizer.PlaceholderEmail + " or candidate profile " + sanitizer.PlaceholderSocialHandle(1) + "."},
 				},
 			},
 		},
@@ -477,8 +477,8 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 				SourceEntityID: "proj-1",
 				Name:           "Raft-Go (" + sanitizer.PlaceholderFullName + ")",
 				Role:           "Creator (" + sanitizer.PlaceholderFullName + ")",
-				URL:            "https://social.example.com/profile-2",
-				Summary:        "Maintained by " + sanitizer.PlaceholderFullName + " (candidate-social-2).",
+				URL:            sanitizer.PlaceholderSocialURL(2),
+				Summary:        "Maintained by " + sanitizer.PlaceholderFullName + " (" + sanitizer.PlaceholderSocialHandle(2) + ").",
 				Bullets: []core.TailoredBullet{
 					{Text: "Published by " + sanitizer.PlaceholderFullName + "."},
 				},
@@ -499,7 +499,7 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 			{
 				SourceEntityID: "cert-1",
 				Name:           "CKA (" + sanitizer.PlaceholderFullName + ")",
-				Issuer:         "CNCF / candidate-social-1",
+				Issuer:         "CNCF / " + sanitizer.PlaceholderSocialHandle(1),
 				URL:            sanitizer.PlaceholderWebsite + "/cka",
 				Summary:        "Credential issued to " + sanitizer.PlaceholderFullName + " (" + sanitizer.PlaceholderEmail + ").",
 			},
@@ -539,8 +539,7 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 
 	// 1. Verify LLM-generated free-text TailoredContent fields are deobfuscated
 	if strings.Contains(genResp.TailoredContent.Summary, sanitizer.PlaceholderFullName) ||
-		strings.Contains(genResp.TailoredContent.Summary, "John Doe") ||
-		!strings.Contains(genResp.TailoredContent.Summary, "Alice Walker (also Alice Walker)") {
+		!strings.Contains(genResp.TailoredContent.Summary, "Results-driven cloud architect Alice Walker with expertise in Kubernetes.") {
 		t.Errorf("Summary failed to deobfuscate FullName: %s", genResp.TailoredContent.Summary)
 	}
 	if !strings.Contains(genResp.TailoredContent.Summary, "alice.walker@example.org") ||
@@ -591,12 +590,12 @@ func TestSession_DeobfuscationRestoresSchemaFieldsAndSkipsNonSchemaFields(t *tes
 		{"Experience.CompanyContact.Value", exp.CompanyContact.Value, sanitizer.PlaceholderEmail},
 		{"Project.Name", proj.Name, "Raft-Go (" + sanitizer.PlaceholderFullName + ")"},
 		{"Project.Role", proj.Role, "Creator (" + sanitizer.PlaceholderFullName + ")"},
-		{"Project.URL", proj.URL, "https://social.example.com/profile-2"},
+		{"Project.URL", proj.URL, sanitizer.PlaceholderSocialURL(2)},
 		{"Education.Institution", genResp.TailoredContent.Education[0].Institution, "MIT (" + sanitizer.PlaceholderFullName + ")"},
 		{"Education.Degree", genResp.TailoredContent.Education[0].Degree, "M.S. (" + sanitizer.PlaceholderFullName + ")"},
 		{"Education.Field", genResp.TailoredContent.Education[0].Field, "CS (" + sanitizer.PlaceholderFullName + ")"},
 		{"Certification.Name", genResp.TailoredContent.Certifications[0].Name, "CKA (" + sanitizer.PlaceholderFullName + ")"},
-		{"Certification.Issuer", genResp.TailoredContent.Certifications[0].Issuer, "CNCF / candidate-social-1"},
+		{"Certification.Issuer", genResp.TailoredContent.Certifications[0].Issuer, "CNCF / " + sanitizer.PlaceholderSocialHandle(1)},
 		{"Certification.URL", genResp.TailoredContent.Certifications[0].URL, sanitizer.PlaceholderWebsite + "/cka"},
 	}
 	for _, tc := range untouchedTailored {
@@ -698,6 +697,9 @@ func TestSession_DeobfuscateATSScore(t *testing.T) {
 	if !strings.Contains(c.Summary, "Alice Walker") || !strings.Contains(c.Summary, "alice.walker@example.org") {
 		t.Errorf("ATSExtractedCandidate.Summary failed: %s", c.Summary)
 	}
+	if c.Experiences[0].Company != "Alice Walker LLC" {
+		t.Errorf("ATSExtractedCandidate.Experiences[0].Company failed: %q", c.Experiences[0].Company)
+	}
 	if c.Experiences[0].Title != "Engineer (Alice Walker)" {
 		t.Errorf("ATSExtractedCandidate.Experiences[0].Title failed: %q", c.Experiences[0].Title)
 	}
@@ -705,12 +707,9 @@ func TestSession_DeobfuscateATSScore(t *testing.T) {
 		t.Errorf("ATSExtractedCandidate.Experiences[0].Highlights[0] failed: %q", c.Experiences[0].Highlights[0])
 	}
 
-	// Structured skills, company, date range, education, and certification details must NOT be deobfuscated
+	// Structured skills, date range, education, and certification details must NOT be deobfuscated
 	if c.Skills[0] != "Go ("+sanitizer.PlaceholderFullName+")" {
 		t.Errorf("expected Skills[0] untouched, got %q", c.Skills[0])
-	}
-	if c.Experiences[0].Company != sanitizer.PlaceholderFullName+" LLC" {
-		t.Errorf("expected Experiences[0].Company untouched, got %q", c.Experiences[0].Company)
 	}
 	if c.Experiences[0].DateRange != "2021 - "+sanitizer.PlaceholderFullName {
 		t.Errorf("expected Experiences[0].DateRange untouched, got %q", c.Experiences[0].DateRange)
@@ -731,7 +730,7 @@ func TestSession_IdempotenceAndNilSafety(t *testing.T) {
 	if nilSession.ObfuscateString("Alice") != "Alice" {
 		t.Errorf("nil session mutated ObfuscateString")
 	}
-	if nilSession.DeobfuscateString("[John Doe]") != "[John Doe]" {
+	if nilSession.DeobfuscateString(sanitizer.PlaceholderFullName) != sanitizer.PlaceholderFullName {
 		t.Errorf("nil session mutated DeobfuscateString")
 	}
 	if nilSession.ObfuscateSnapshot(nil) != nil {
@@ -756,7 +755,7 @@ func TestSession_IdempotenceAndNilSafety(t *testing.T) {
 	if snapNilSession == nil || reqNilSession == nil {
 		t.Fatalf("expected non-nil empty sessions from nil snapshot/request constructors")
 	}
-	raw := "Hello [John Doe]"
+	raw := "Hello " + sanitizer.PlaceholderFullName
 	for name, sess := range map[string]*sanitizer.Session{
 		"NewSession(nil)":             emptySession,
 		"NewSessionFromSnapshot(nil)": snapNilSession,
@@ -819,7 +818,7 @@ func TestSession_ShortUsernames_DoNotCorruptTechnicalTerms(t *testing.T) {
 	}
 
 	// 3. Skipped short usernames (< 3 chars) register neither forward nor one-way reverse mappings
-	literalPlaceholderText := "The candidate candidate-social-1 expert designed candidate-social-2 agents."
+	literalPlaceholderText := "The candidate " + sanitizer.PlaceholderSocialHandle(1) + " expert designed " + sanitizer.PlaceholderSocialHandle(2) + " agents."
 	deobf := session.DeobfuscateString(literalPlaceholderText)
 	if deobf != literalPlaceholderText {
 		t.Errorf("expected skipped short username to register no reverse mapping: got %q, want %q", deobf, literalPlaceholderText)
@@ -906,7 +905,7 @@ func TestSession_URLValidation_ValidAndInvalidBoundaries(t *testing.T) {
 	if obf := invalidSession.ObfuscateString(text); obf != text {
 		t.Errorf("invalid URLs corrupted text: got %q, want %q", obf, text)
 	}
-	placeholderText := "Visit " + sanitizer.PlaceholderWebsite + " or https://social.example.com/profile-1."
+	placeholderText := "Visit " + sanitizer.PlaceholderWebsite + " or " + sanitizer.PlaceholderSocialURL(1) + "."
 	if deobf := invalidSession.DeobfuscateString(placeholderText); deobf != placeholderText {
 		t.Errorf("invalid URLs registered unexpected reverse mapping: got %q, want %q", deobf, placeholderText)
 	}
@@ -1029,6 +1028,13 @@ func TestSession_ObfuscateExtractedCandidate(t *testing.T) {
 					"Contact " + realPhone + " for " + realName + " architecture review.",
 				},
 			},
+			{
+				Company: "Acme Corp",
+				Title:   "Staff Engineer",
+				Highlights: []string{
+					"Led distributed systems at Acme Corp.",
+				},
+			},
 		},
 	}
 
@@ -1044,8 +1050,11 @@ func TestSession_ObfuscateExtractedCandidate(t *testing.T) {
 	if !strings.Contains(orig.Summary, realName) {
 		t.Errorf("caller Summary mutated: %q", orig.Summary)
 	}
+	if orig.Experiences[0].Company != realName+" Systems" {
+		t.Errorf("caller Experiences[0].Company mutated: %q", orig.Experiences[0].Company)
+	}
 
-	// Verify candidate PII is scrubbed across Summary, Title, and Highlights while preserving Company.
+	// Verify candidate PII is scrubbed across Summary, Company, Title, and Highlights while preserving non-PII Company.
 	for _, pii := range []string{realName, realEmail, realPhone, realWeb} {
 		if strings.Contains(got.Summary, pii) {
 			t.Errorf("obfuscated Summary leaked %q: %q", pii, got.Summary)
@@ -1057,8 +1066,11 @@ func TestSession_ObfuscateExtractedCandidate(t *testing.T) {
 	if strings.Contains(got.Experiences[0].Title, realName) {
 		t.Errorf("obfuscated Experience Title leaked name: %q", got.Experiences[0].Title)
 	}
-	if got.Experiences[0].Company != realName+" Systems" {
-		t.Errorf("expected non-PII Company preserved, got %q", got.Experiences[0].Company)
+	if got.Experiences[0].Company != sanitizer.PlaceholderFullName+" Systems" {
+		t.Errorf("expected candidate-PII Company scrubbed, got %q", got.Experiences[0].Company)
+	}
+	if got.Experiences[1].Company != "Acme Corp" {
+		t.Errorf("expected non-PII third-party Company preserved, got %q", got.Experiences[1].Company)
 	}
 
 	// Nil safety and copy-on-write cloning even on nil session.
@@ -1069,5 +1081,459 @@ func TestSession_ObfuscateExtractedCandidate(t *testing.T) {
 	nilGot := nilSession.ObfuscateExtractedCandidate(orig)
 	if nilGot == orig || nilGot.Summary != orig.Summary {
 		t.Errorf("expected nil session to clone candidate unchanged, got %+v", nilGot)
+	}
+}
+
+func TestSession_SentinelPlaceholders_RoundTripAndMultiLanguage(t *testing.T) {
+	t.Run("sentinel constant and helper values", func(t *testing.T) {
+		checks := []struct {
+			name string
+			got  string
+			want string
+		}{
+			{"PlaceholderFullName", sanitizer.PlaceholderFullName, "[NAME_PLACEHOLDER]"},
+			{"PlaceholderEmail", sanitizer.PlaceholderEmail, "[EMAIL_PLACEHOLDER]"},
+			{"PlaceholderPhone", sanitizer.PlaceholderPhone, "[PHONE_PLACEHOLDER]"},
+			{"PlaceholderWebsite", sanitizer.PlaceholderWebsite, "[WEBSITE_PLACEHOLDER]"},
+			{"PlaceholderSocialURLPrefix", sanitizer.PlaceholderSocialURLPrefix, "[SOCIAL_URL_PLACEHOLDER_"},
+			{"PlaceholderSocialHandlePrefix", sanitizer.PlaceholderSocialHandlePrefix, "[SOCIAL_HANDLE_PLACEHOLDER_"},
+			{"PlaceholderSocialSuffix", sanitizer.PlaceholderSocialSuffix, "]"},
+			{"PlaceholderSocialURL(1)", sanitizer.PlaceholderSocialURL(1), "[SOCIAL_URL_PLACEHOLDER_1]"},
+			{"PlaceholderSocialHandle(1)", sanitizer.PlaceholderSocialHandle(1), "[SOCIAL_HANDLE_PLACEHOLDER_1]"},
+			{"PlaceholderSocialURL(10)", sanitizer.PlaceholderSocialURL(10), "[SOCIAL_URL_PLACEHOLDER_10]"},
+			{"PlaceholderSocialHandle(10)", sanitizer.PlaceholderSocialHandle(10), "[SOCIAL_HANDLE_PLACEHOLDER_10]"},
+			{"PlaceholderSocialURL(0) clamps to 1", sanitizer.PlaceholderSocialURL(0), "[SOCIAL_URL_PLACEHOLDER_1]"},
+			{"PlaceholderSocialURL(-3) clamps to 1", sanitizer.PlaceholderSocialURL(-3), "[SOCIAL_URL_PLACEHOLDER_1]"},
+			{"PlaceholderSocialHandle(0) clamps to 1", sanitizer.PlaceholderSocialHandle(0), "[SOCIAL_HANDLE_PLACEHOLDER_1]"},
+			{"PlaceholderSocialHandle(-2) clamps to 1", sanitizer.PlaceholderSocialHandle(-2), "[SOCIAL_HANDLE_PLACEHOLDER_1]"},
+		}
+		for _, tc := range checks {
+			t.Run(tc.name, func(t *testing.T) {
+				if tc.got != tc.want {
+					t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("multi-language round-trips and 10+ social profiles", func(t *testing.T) {
+		prof := sampleCandidateProfile()
+		prof.Profiles = []core.SocialLink{
+			{Network: "LinkedIn", Username: "alicewalker", URL: "https://linkedin.com/in/alicewalker"},
+			{Network: "GitHub", Username: "alicewalker-dev", URL: "https://github.com/alicewalker-dev"},
+			{Network: "GitLab", Username: "aw-gitlab", URL: "https://gitlab.com/aw-gitlab"},
+			{Network: "Bitbucket", Username: "aw-bitbucket", URL: "https://bitbucket.org/aw-bitbucket"},
+			{Network: "StackOverflow", Username: "aw-stack", URL: "https://stackoverflow.com/users/aw-stack"},
+			{Network: "CodePen", Username: "aw-codepen", URL: "https://codepen.io/aw-codepen"},
+			{Network: "DevTo", Username: "aw-devto", URL: "https://dev.to/aw-devto"},
+			{Network: "Medium", Username: "aw-medium", URL: "https://medium.com/@aw-medium"},
+			{Network: "Substack", Username: "aw-substack", URL: "https://aw-substack.substack.com"},
+			{Network: "Mastodon", Username: "alicewalker-mastodon", URL: "https://mastodon.social/@alicewalker-mastodon"},
+			{Network: "Bluesky", Username: "alicewalker-bluesky", URL: "https://bsky.app/profile/alicewalker-bluesky"},
+		}
+		session := sanitizer.NewSession(&prof)
+
+		cases := []struct {
+			name    string
+			input   string
+			wantObf string
+		}{
+			{
+				name:    "English with partial company name",
+				input:   "Alice Walker led architecture at Alice Walker Consulting. Contact: alice.walker@example.org, +1 (555) 234-5678, https://alicewalker.dev, https://linkedin.com/in/alicewalker.",
+				wantObf: "[NAME_PLACEHOLDER] led architecture at [NAME_PLACEHOLDER] Consulting. Contact: [EMAIL_PLACEHOLDER], [PHONE_PLACEHOLDER], [WEBSITE_PLACEHOLDER], [SOCIAL_URL_PLACEHOLDER_1].",
+			},
+			{
+				name:    "Spanish",
+				input:   "Perfil de Alice Walker en Alice Walker Consulting: correo alice.walker@example.org, teléfono +1 (555) 234-5678, sitio https://alicewalker.dev y https://mastodon.social/@alicewalker-mastodon.",
+				wantObf: "Perfil de [NAME_PLACEHOLDER] en [NAME_PLACEHOLDER] Consulting: correo [EMAIL_PLACEHOLDER], teléfono [PHONE_PLACEHOLDER], sitio [WEBSITE_PLACEHOLDER] y [SOCIAL_URL_PLACEHOLDER_10].",
+			},
+			{
+				name:    "French",
+				input:   "Parcours d'Alice Walker chez Alice Walker Consulting : alice.walker@example.org, +1 (555) 234-5678, profil https://linkedin.com/in/alicewalker (alicewalker).",
+				wantObf: "Parcours d'[NAME_PLACEHOLDER] chez [NAME_PLACEHOLDER] Consulting : [EMAIL_PLACEHOLDER], [PHONE_PLACEHOLDER], profil [SOCIAL_URL_PLACEHOLDER_1] ([SOCIAL_HANDLE_PLACEHOLDER_1]).",
+			},
+			{
+				name:    "German",
+				input:   "Lebenslauf von Alice Walker bei Alice Walker Consulting: E-Mail alice.walker@example.org, Telefon +1 (555) 234-5678, Webseite https://alicewalker.dev.",
+				wantObf: "Lebenslauf von [NAME_PLACEHOLDER] bei [NAME_PLACEHOLDER] Consulting: E-Mail [EMAIL_PLACEHOLDER], Telefon [PHONE_PLACEHOLDER], Webseite [WEBSITE_PLACEHOLDER].",
+			},
+			{
+				name:    "Japanese",
+				input:   "Alice WalkerはAlice Walker Consultingで設計を担当。連絡先: alice.walker@example.org、電話: +1 (555) 234-5678、サイト: https://alicewalker.dev、SNS: https://mastodon.social/@alicewalker-mastodon。",
+				wantObf: "[NAME_PLACEHOLDER]は[NAME_PLACEHOLDER] Consultingで設計を担当。連絡先: [EMAIL_PLACEHOLDER]、電話: [PHONE_PLACEHOLDER]、サイト: [WEBSITE_PLACEHOLDER]、SNS: [SOCIAL_URL_PLACEHOLDER_10]。",
+			},
+			{
+				name:    "Chinese",
+				input:   "Alice Walker在Alice Walker Consulting担任架构师，邮箱alice.walker@example.org，电话+1 (555) 234-5678，个人网站https://alicewalker.dev，账号alicewalker-mastodon。",
+				wantObf: "[NAME_PLACEHOLDER]在[NAME_PLACEHOLDER] Consulting担任架构师，邮箱[EMAIL_PLACEHOLDER]，电话[PHONE_PLACEHOLDER]，个人网站[WEBSITE_PLACEHOLDER]，账号[SOCIAL_HANDLE_PLACEHOLDER_10]。",
+			},
+			{
+				name:    "10+ social profiles index 1 vs 10 vs 11",
+				input:   "Links: https://linkedin.com/in/alicewalker (alicewalker), https://mastodon.social/@alicewalker-mastodon (alicewalker-mastodon), https://bsky.app/profile/alicewalker-bluesky (alicewalker-bluesky).",
+				wantObf: "Links: [SOCIAL_URL_PLACEHOLDER_1] ([SOCIAL_HANDLE_PLACEHOLDER_1]), [SOCIAL_URL_PLACEHOLDER_10] ([SOCIAL_HANDLE_PLACEHOLDER_10]), [SOCIAL_URL_PLACEHOLDER_11] ([SOCIAL_HANDLE_PLACEHOLDER_11]).",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				gotObf := session.ObfuscateString(tc.input)
+				if gotObf != tc.wantObf {
+					t.Errorf("ObfuscateString() = %q, want %q", gotObf, tc.wantObf)
+				}
+				gotDeobf := session.DeobfuscateString(gotObf)
+				if gotDeobf != tc.input {
+					t.Errorf("DeobfuscateString(%q) = %q, want %q", gotObf, gotDeobf, tc.input)
+				}
+			})
+		}
+	})
+
+	t.Run("candidate usernames matching sentinel keywords do not corrupt tokens", func(t *testing.T) {
+		prof := &core.Profile{
+			FullName: "Alice Walker",
+			Email:    "alice.walker@example.org",
+			Phone:    "+1 (555) 234-5678",
+			Profiles: []core.SocialLink{
+				{Network: "GitHub", Username: "website", URL: "https://github.com/website"},
+				{Network: "GitLab", Username: "email", URL: "https://gitlab.com/email"},
+				{Network: "Twitter", Username: "name", URL: "https://x.com/name"},
+				{Network: "Mastodon", Username: "social", URL: "https://mastodon.social/@social"},
+			},
+			Metadata: map[string]any{
+				"website": "https://alicewalker.dev",
+			},
+		}
+		session := sanitizer.NewSession(prof)
+
+		cases := []struct {
+			name      string
+			input     string
+			wantObf   string
+			wantDeobf string
+		}{
+			{
+				name:      "real PII and sentinel-keyword usernames",
+				input:     "Alice Walker <alice.walker@example.org> +1 (555) 234-5678 https://alicewalker.dev https://github.com/website handles: website, email, name, social",
+				wantObf:   "[NAME_PLACEHOLDER] <[EMAIL_PLACEHOLDER]> [PHONE_PLACEHOLDER] [WEBSITE_PLACEHOLDER] [SOCIAL_URL_PLACEHOLDER_1] handles: [SOCIAL_HANDLE_PLACEHOLDER_1], [SOCIAL_HANDLE_PLACEHOLDER_2], [SOCIAL_HANDLE_PLACEHOLDER_3], [SOCIAL_HANDLE_PLACEHOLDER_4]",
+				wantDeobf: "Alice Walker <alice.walker@example.org> +1 (555) 234-5678 https://alicewalker.dev https://github.com/website handles: website, email, name, social",
+			},
+			{
+				name:      "pre-existing sentinel tokens remain intact during obfuscation",
+				input:     "[NAME_PLACEHOLDER] [EMAIL_PLACEHOLDER] [PHONE_PLACEHOLDER] [WEBSITE_PLACEHOLDER] [SOCIAL_URL_PLACEHOLDER_1] [SOCIAL_HANDLE_PLACEHOLDER_1]",
+				wantObf:   "[NAME_PLACEHOLDER] [EMAIL_PLACEHOLDER] [PHONE_PLACEHOLDER] [WEBSITE_PLACEHOLDER] [SOCIAL_URL_PLACEHOLDER_1] [SOCIAL_HANDLE_PLACEHOLDER_1]",
+				wantDeobf: "Alice Walker alice.walker@example.org +1 (555) 234-5678 https://alicewalker.dev https://github.com/website website",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				gotObf := session.ObfuscateString(tc.input)
+				if gotObf != tc.wantObf {
+					t.Errorf("ObfuscateString() = %q, want %q", gotObf, tc.wantObf)
+				}
+				gotDeobf := session.DeobfuscateString(gotObf)
+				if gotDeobf != tc.wantDeobf {
+					t.Errorf("DeobfuscateString() = %q, want %q", gotDeobf, tc.wantDeobf)
+				}
+			})
+		}
+	})
+}
+
+func TestSession_NoBracketlessOrNaturalLanguageFallbacks(t *testing.T) {
+	prof := sampleCandidateProfile()
+	session := sanitizer.NewSession(&prof)
+
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{name: "unbracketed John Doe", input: "John Doe"},
+		{name: "bracketed John Doe", input: "[John Doe]"},
+		{name: "legacy email placeholder", input: "candidate@email.com"},
+		{name: "legacy phone placeholder", input: "+1 111 111 1111"},
+		{name: "legacy website placeholder", input: "https://candidate.example.com"},
+		{name: "legacy social URL placeholder", input: "https://social.example.com/profile-1"},
+		{name: "legacy social handle placeholder", input: "candidate-social-1"},
+		{name: "bracketless NAME_PLACEHOLDER", input: "NAME_PLACEHOLDER"},
+		{name: "bracketless EMAIL_PLACEHOLDER", input: "EMAIL_PLACEHOLDER"},
+		{name: "bracketless PHONE_PLACEHOLDER", input: "PHONE_PLACEHOLDER"},
+		{name: "bracketless WEBSITE_PLACEHOLDER", input: "WEBSITE_PLACEHOLDER"},
+		{name: "bracketless SOCIAL_URL_PLACEHOLDER_1", input: "SOCIAL_URL_PLACEHOLDER_1"},
+		{name: "bracketless SOCIAL_HANDLE_PLACEHOLDER_1", input: "SOCIAL_HANDLE_PLACEHOLDER_1"},
+		{name: "sentence mixing legacy and bracketless tokens", input: "Legacy: John Doe, [John Doe], candidate@email.com, NAME_PLACEHOLDER, SOCIAL_HANDLE_PLACEHOLDER_1."},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := session.DeobfuscateString(tc.input); got != tc.input {
+				t.Errorf("DeobfuscateString(%q) = %q, want unmodified %q", tc.input, got, tc.input)
+			}
+		})
+	}
+}
+
+func TestSession_ATSCompanyName_RoundTrip(t *testing.T) {
+	prof := sampleCandidateProfile()
+	session := sanitizer.NewSession(&prof)
+
+	cases := []struct {
+		name        string
+		company     string
+		wantObf     string
+		wantDeobf   string
+		title       string
+		wantTitle   string
+		highlight   string
+		wantHighlgt string
+	}{
+		{
+			name:        "candidate-named consulting company round-trips",
+			company:     "Alice Walker Consulting",
+			wantObf:     sanitizer.PlaceholderFullName + " Consulting",
+			wantDeobf:   "Alice Walker Consulting",
+			title:       "Principal Consultant",
+			wantTitle:   "Principal Consultant",
+			highlight:   "Delivered architecture for Alice Walker clients.",
+			wantHighlgt: "Delivered architecture for Alice Walker clients.",
+		},
+		{
+			name:        "non-PII third-party company stays intact",
+			company:     "Acme Corp",
+			wantObf:     "Acme Corp",
+			wantDeobf:   "Acme Corp",
+			title:       "Staff Engineer",
+			wantTitle:   "Staff Engineer",
+			highlight:   "Alice Walker scaled Acme Corp services.",
+			wantHighlgt: "Alice Walker scaled Acme Corp services.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := &core.ATSExtractedCandidate{
+				Experiences: []core.ATSExtractedExperience{
+					{
+						Company:    tc.company,
+						Title:      tc.title,
+						Highlights: []string{tc.highlight},
+					},
+				},
+			}
+
+			obf := session.ObfuscateExtractedCandidate(orig)
+			if obf.Experiences[0].Company != tc.wantObf {
+				t.Errorf("ObfuscateExtractedCandidate Company = %q, want %q", obf.Experiences[0].Company, tc.wantObf)
+			}
+
+			score := &core.ATSScore{ExtractedCandidate: obf}
+			session.DeobfuscateATSScore(score)
+
+			got := score.ExtractedCandidate.Experiences[0]
+			if got.Company != tc.wantDeobf {
+				t.Errorf("DeobfuscateATSScore Company = %q, want %q", got.Company, tc.wantDeobf)
+			}
+			if got.Title != tc.wantTitle {
+				t.Errorf("DeobfuscateATSScore Title = %q, want %q", got.Title, tc.wantTitle)
+			}
+			if got.Highlights[0] != tc.wantHighlgt {
+				t.Errorf("DeobfuscateATSScore Highlights[0] = %q, want %q", got.Highlights[0], tc.wantHighlgt)
+			}
+		})
+	}
+}
+
+func TestSession_DollarExpansionProtection(t *testing.T) {
+	cases := []struct {
+		name      string
+		profile   core.Profile
+		input     string
+		wantObf   string
+		deobfIn   string
+		wantDeobf string
+	}{
+		{
+			name: "FullName with RE2 dollar expressions",
+			profile: core.Profile{
+				FullName: "Alice $1 $$ ${1} $var Walker",
+			},
+			input:     "Author: Alice $1 $$ ${1} $var Walker.",
+			wantObf:   "Author: " + sanitizer.PlaceholderFullName + ".",
+			deobfIn:   "Author: " + sanitizer.PlaceholderFullName + ".",
+			wantDeobf: "Author: Alice $1 $$ ${1} $var Walker.",
+		},
+		{
+			name: "Username with RE2 dollar expressions",
+			profile: core.Profile{
+				Profiles: []core.SocialLink{
+					{Network: "GitHub", Username: "dev_$1_$$_${1}_$var", URL: "https://github.com/dev"},
+				},
+			},
+			input:     "Handle: dev_$1_$$_${1}_$var.",
+			wantObf:   "Handle: " + sanitizer.PlaceholderSocialHandle(1) + ".",
+			deobfIn:   "Handle: " + sanitizer.PlaceholderSocialHandle(1) + ".",
+			wantDeobf: "Handle: dev_$1_$$_${1}_$var.",
+		},
+		{
+			name: "Website URL with RE2 dollar expressions",
+			profile: core.Profile{
+				Metadata: map[string]any{
+					"website": "https://alice.dev/$1/$$/${1}/$var",
+				},
+			},
+			input:     "Site: https://alice.dev/$1/$$/${1}/$var.",
+			wantObf:   "Site: " + sanitizer.PlaceholderWebsite + ".",
+			deobfIn:   "Site: " + sanitizer.PlaceholderWebsite + ".",
+			wantDeobf: "Site: https://alice.dev/$1/$$/${1}/$var.",
+		},
+		{
+			name: "Combined FullName, Username, and Website with dollar expressions and lowercase placeholders",
+			profile: core.Profile{
+				FullName: "$1 Alice $$ ${1} $var",
+				Profiles: []core.SocialLink{
+					{Network: "GitHub", Username: "$1$$${1}$var", URL: "https://github.com/alice"},
+				},
+				Metadata: map[string]any{
+					"website": "https://alice.dev/path/$1/$$/${1}/$var",
+				},
+			},
+			input:     "$1 Alice $$ ${1} $var | $1$$${1}$var | https://alice.dev/path/$1/$$/${1}/$var",
+			wantObf:   sanitizer.PlaceholderFullName + " | " + sanitizer.PlaceholderSocialHandle(1) + " | " + sanitizer.PlaceholderWebsite,
+			deobfIn:   "[name_placeholder] | [social_handle_placeholder_1] | [website_placeholder]",
+			wantDeobf: "$1 Alice $$ ${1} $var | $1$$${1}$var | https://alice.dev/path/$1/$$/${1}/$var",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			session := sanitizer.NewSession(&tc.profile)
+			gotObf := session.ObfuscateString(tc.input)
+			if gotObf != tc.wantObf {
+				t.Errorf("ObfuscateString() = %q, want %q", gotObf, tc.wantObf)
+			}
+			gotDeobf := session.DeobfuscateString(gotObf)
+			if gotDeobf != tc.wantDeobf {
+				t.Errorf("DeobfuscateString(obf) = %q, want %q", gotDeobf, tc.wantDeobf)
+			}
+			if tc.deobfIn != "" && tc.deobfIn != gotObf {
+				gotCustomDeobf := session.DeobfuscateString(tc.deobfIn)
+				if gotCustomDeobf != tc.wantDeobf {
+					t.Errorf("DeobfuscateString(%q) = %q, want %q", tc.deobfIn, gotCustomDeobf, tc.wantDeobf)
+				}
+			}
+		})
+	}
+}
+
+func TestSession_SinglePassCollisionProtection(t *testing.T) {
+	cases := []struct {
+		name      string
+		profile   core.Profile
+		input     string
+		wantObf   string
+		deobfIn   string
+		wantDeobf string
+	}{
+		{
+			name: "FullName containing EMAIL_PLACEHOLDER does not double-expand",
+			profile: core.Profile{
+				FullName: "Alice [EMAIL_PLACEHOLDER]",
+				Email:    "alice@example.org",
+			},
+			input:     "Alice [EMAIL_PLACEHOLDER] <alice@example.org>",
+			wantObf:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			deobfIn:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			wantDeobf: "Alice [EMAIL_PLACEHOLDER] <alice@example.org>",
+		},
+		{
+			name: "Email containing NAME_PLACEHOLDER does not double-expand",
+			profile: core.Profile{
+				FullName: "Alice Walker",
+				Email:    "alice+[NAME_PLACEHOLDER]@example.org",
+			},
+			input:     "Alice Walker <alice+[NAME_PLACEHOLDER]@example.org>",
+			wantObf:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			deobfIn:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			wantDeobf: "Alice Walker <alice+[NAME_PLACEHOLDER]@example.org>",
+		},
+		{
+			name: "10+ social handles _1 _10 _11 single-pass restoration without collision",
+			profile: core.Profile{
+				FullName: "Alice Walker",
+				Profiles: []core.SocialLink{
+					{Network: "P1", Username: "handle_one"},
+					{Network: "P2", Username: "handle_02"},
+					{Network: "P3", Username: "handle_03"},
+					{Network: "P4", Username: "handle_04"},
+					{Network: "P5", Username: "handle_05"},
+					{Network: "P6", Username: "handle_06"},
+					{Network: "P7", Username: "handle_07"},
+					{Network: "P8", Username: "handle_08"},
+					{Network: "P9", Username: "handle_09"},
+					{Network: "P10", Username: "handle_" + sanitizer.PlaceholderSocialHandle(1)},
+					{Network: "P11", Username: "handle_$1_" + sanitizer.PlaceholderFullName},
+				},
+			},
+			input:     "Handles: handle_one, handle_" + sanitizer.PlaceholderSocialHandle(1) + ", handle_$1_" + sanitizer.PlaceholderFullName + ", Alice Walker.",
+			wantObf:   "Handles: " + sanitizer.PlaceholderSocialHandle(1) + ", " + sanitizer.PlaceholderSocialHandle(10) + ", " + sanitizer.PlaceholderSocialHandle(11) + ", " + sanitizer.PlaceholderFullName + ".",
+			deobfIn:   "Handles: " + sanitizer.PlaceholderSocialHandle(1) + ", " + sanitizer.PlaceholderSocialHandle(10) + ", " + sanitizer.PlaceholderSocialHandle(11) + ", " + sanitizer.PlaceholderFullName + ".",
+			wantDeobf: "Handles: handle_one, handle_" + sanitizer.PlaceholderSocialHandle(1) + ", handle_$1_" + sanitizer.PlaceholderFullName + ", Alice Walker.",
+		},
+		{
+			name: "shorter Username NAME_PLACEHOLDER does not rewrite longer FullName placeholder",
+			profile: core.Profile{
+				FullName: "Bartholomew Cubbins",
+				Profiles: []core.SocialLink{
+					{Network: "GitHub", Username: "NAME_PLACEHOLDER"},
+				},
+			},
+			input:     "Bartholomew Cubbins (@NAME_PLACEHOLDER) and NAME_PLACEHOLDER",
+			wantObf:   sanitizer.PlaceholderFullName + " (@" + sanitizer.PlaceholderSocialHandle(1) + ") and " + sanitizer.PlaceholderSocialHandle(1),
+			deobfIn:   sanitizer.PlaceholderFullName + " (@" + sanitizer.PlaceholderSocialHandle(1) + ") and " + sanitizer.PlaceholderSocialHandle(1),
+			wantDeobf: "Bartholomew Cubbins (@NAME_PLACEHOLDER) and NAME_PLACEHOLDER",
+		},
+		{
+			name: "shorter FullName [EMAIL_PLACEHOLDER] does not overwrite longer Email placeholder",
+			profile: core.Profile{
+				FullName: "[EMAIL_PLACEHOLDER]",
+				Email:    "alice.wonderland@example.org",
+			},
+			input:     "[EMAIL_PLACEHOLDER] <alice.wonderland@example.org>",
+			wantObf:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			deobfIn:   sanitizer.PlaceholderFullName + " <" + sanitizer.PlaceholderEmail + ">",
+			wantDeobf: "[EMAIL_PLACEHOLDER] <alice.wonderland@example.org>",
+		},
+		{
+			name: "adjacent phone capture-delimiter boundary with overlapping social URL and handle",
+			profile: core.Profile{
+				FullName: "Alice:",
+				Phone:    "+1 (555) 234-5678",
+				Profiles: []core.SocialLink{
+					{Network: "GitHub", Username: "alicewalker-dev", URL: "https://github.com/alicewalker-dev"},
+				},
+			},
+			input:     "Alice:+1 (555) 234-5678,+1 (555) 234-5678 https://github.com/alicewalker-dev/raft-go",
+			wantObf:   sanitizer.PlaceholderFullName + sanitizer.PlaceholderPhone + "," + sanitizer.PlaceholderPhone + " " + sanitizer.PlaceholderSocialURL(1) + "/raft-go",
+			deobfIn:   sanitizer.PlaceholderFullName + sanitizer.PlaceholderPhone + "," + sanitizer.PlaceholderPhone + " " + sanitizer.PlaceholderSocialURL(1) + "/raft-go",
+			wantDeobf: "Alice:+1 (555) 234-5678,+1 (555) 234-5678 https://github.com/alicewalker-dev/raft-go",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			session := sanitizer.NewSession(&tc.profile)
+			gotObf := session.ObfuscateString(tc.input)
+			if gotObf != tc.wantObf {
+				t.Errorf("ObfuscateString() = %q, want %q", gotObf, tc.wantObf)
+			}
+			if gotRoundTrip := session.DeobfuscateString(gotObf); gotRoundTrip != tc.input {
+				t.Errorf("DeobfuscateString(ObfuscateString(input)) = %q, want %q", gotRoundTrip, tc.input)
+			}
+			gotDeobf := session.DeobfuscateString(tc.deobfIn)
+			if gotDeobf != tc.wantDeobf {
+				t.Errorf("DeobfuscateString() = %q, want %q", gotDeobf, tc.wantDeobf)
+			}
+		})
 	}
 }

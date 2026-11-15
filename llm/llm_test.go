@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -535,14 +536,302 @@ func TestStructuredVsFallbackDispatch_TailorAndGapAnalysis(t *testing.T) {
 		reg.Register(&fakeClient{name: ProviderCompat})
 		svc := NewService(reg)
 
-		report, err := svc.GenerateGapAnalysis(context.Background(), sampleRequest())
+		resp, err := svc.GenerateGapAnalysis(context.Background(), sampleRequest())
 		if err != nil {
 			t.Fatalf("GenerateGapAnalysis fallback failed: %v", err)
 		}
-		if report.OverallMatchSummary != sampleResponse.GapReport.OverallMatchSummary {
-			t.Errorf("expected fallback gap summary %q, got %q", sampleResponse.GapReport.OverallMatchSummary, report.OverallMatchSummary)
+		if resp == nil {
+			t.Fatal("expected non-nil GapAnalysisResponse")
+		}
+		if resp.GapReport.OverallMatchSummary != sampleResponse.GapReport.OverallMatchSummary {
+			t.Errorf("expected fallback gap summary %q, got %q", sampleResponse.GapReport.OverallMatchSummary, resp.GapReport.OverallMatchSummary)
+		}
+		if resp.Telemetry.Provider != ProviderCompat || resp.Telemetry.StatusCode != 200 {
+			t.Errorf("expected fallback telemetry populated for compat/200, got %+v", resp.Telemetry)
 		}
 	})
+}
+
+func TestResponse_PopulateTelemetryAndTelemetry(t *testing.T) {
+	t.Run("nil response Telemetry returns zero and PopulateTelemetry allocates", func(t *testing.T) {
+		var nilResp *Response
+		if got := nilResp.Telemetry(); !got.IsZero() {
+			t.Errorf("expected zero telemetry from nil *Response, got %+v", got)
+		}
+
+		allocated := nilResp.PopulateTelemetry(ProviderOpenAI, "gpt-4o", 15*time.Millisecond)
+		if allocated == nil {
+			t.Fatal("expected PopulateTelemetry on nil receiver to allocate *Response")
+		}
+		gotTel := allocated.Telemetry()
+		wantTel := core.LLMTelemetry{
+			Provider: ProviderOpenAI,
+			Model:    "gpt-4o",
+			Latency:  15 * time.Millisecond,
+		}
+		if gotTel != wantTel {
+			t.Errorf("allocated telemetry = %+v, want %+v", gotTel, wantTel)
+		}
+	})
+
+	t.Run("non-nil response backfills missing fields and normalizes usage while preserving explicit values", func(t *testing.T) {
+		resp := &Response{
+			Text:       "ok",
+			StatusCode: 200,
+			Usage:      core.TokenUsage{PromptTokens: 12, CompletionTokens: 8},
+		}
+		got := resp.PopulateTelemetry(ProviderGemini, "gemini-2.5-flash", 22*time.Millisecond)
+		if got != resp {
+			t.Fatal("expected PopulateTelemetry to mutate and return existing *Response")
+		}
+		if got.Provider != ProviderGemini || got.Model != "gemini-2.5-flash" || got.Latency != 22*time.Millisecond {
+			t.Errorf("unexpected populated metadata: %+v", got)
+		}
+		if got.Usage.TotalTokens != 20 {
+			t.Errorf("expected normalized TotalTokens=20, got %+v", got.Usage)
+		}
+
+		// Calling PopulateTelemetry again preserves already-populated Provider, Model, and Latency.
+		got.PopulateTelemetry(ProviderOpenAI, "other-model", 99*time.Millisecond)
+		if got.Provider != ProviderGemini || got.Model != "gemini-2.5-flash" || got.Latency != 22*time.Millisecond {
+			t.Errorf("expected explicit fields preserved, got %+v", got)
+		}
+	})
+}
+
+func TestRegistry_CompleteAndStructured_Telemetry(t *testing.T) {
+	cases := []struct {
+		name           string
+		providerName   string
+		defaultModel   string
+		reqModel       string
+		completeFn     func(ctx context.Context, req Request) (*Response, error)
+		wantErr        error
+		wantProvider   string
+		wantModel      string
+		wantStatusCode int
+		wantMinLatency time.Duration
+		wantUsage      core.TokenUsage
+		wantText       string
+	}{
+		{
+			name:         "success populates provider model latency and normalizes omitted TotalTokens",
+			providerName: ProviderOpenAI,
+			defaultModel: "gpt-4o",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				time.Sleep(2 * time.Millisecond)
+				return &Response{
+					Text:       "  hello world  ",
+					StatusCode: 200,
+					Usage:      core.TokenUsage{PromptTokens: 14, CompletionTokens: 6},
+				}, nil
+			},
+			wantProvider:   ProviderOpenAI,
+			wantModel:      "gpt-4o",
+			wantStatusCode: 200,
+			wantMinLatency: 2 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 14, CompletionTokens: 6, TotalTokens: 20},
+			wantText:       "hello world",
+		},
+		{
+			name:         "success preserves explicit response provider model and latency",
+			providerName: ProviderAnthropic,
+			defaultModel: "claude-sonnet-4-5",
+			reqModel:     "claude-opus-4-1",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				return &Response{
+					Text:       "ok",
+					Provider:   "anthropic-custom",
+					Model:      "claude-resolved",
+					StatusCode: 200,
+					Latency:    45 * time.Millisecond,
+					Usage:      core.TokenUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+				}, nil
+			},
+			wantProvider:   "anthropic-custom",
+			wantModel:      "claude-resolved",
+			wantStatusCode: 200,
+			wantMinLatency: 45 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+			wantText:       "ok",
+		},
+		{
+			name:         "HTTP error attaches status code latency and partial usage to response and error",
+			providerName: ProviderOpenAI,
+			defaultModel: "gpt-4o",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				time.Sleep(2 * time.Millisecond)
+				return &Response{
+					RawBody:    `{"error":"rate limit"}`,
+					StatusCode: 429,
+					Usage:      core.TokenUsage{PromptTokens: 9},
+				}, ErrRateLimited
+			},
+			wantErr:        ErrRateLimited,
+			wantProvider:   ProviderOpenAI,
+			wantModel:      "gpt-4o",
+			wantStatusCode: 429,
+			wantMinLatency: 2 * time.Millisecond,
+			wantUsage:      core.TokenUsage{PromptTokens: 9, TotalTokens: 9},
+		},
+		{
+			name:         "nil response stub client error still populates provider model and latency",
+			providerName: ProviderGemini,
+			defaultModel: "gemini-2.5-flash",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				time.Sleep(2 * time.Millisecond)
+				return nil, ErrUpstream
+			},
+			wantErr:        ErrUpstream,
+			wantProvider:   ProviderGemini,
+			wantModel:      "gemini-2.5-flash",
+			wantStatusCode: 0,
+			wantMinLatency: 2 * time.Millisecond,
+		},
+		{
+			name:         "nil response with nil error converts to ErrInvalidResponse with telemetry",
+			providerName: ProviderCompat,
+			defaultModel: "local-v1",
+			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				time.Sleep(2 * time.Millisecond)
+				return nil, nil
+			},
+			wantErr:        ErrInvalidResponse,
+			wantProvider:   ProviderCompat,
+			wantModel:      "local-v1",
+			wantStatusCode: 0,
+			wantMinLatency: 2 * time.Millisecond,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeTransportClient{
+				name:         tc.providerName,
+				defaultModel: tc.defaultModel,
+				completeFn:   tc.completeFn,
+			}
+			reg := NewRegistry()
+			reg.Register(client)
+
+			resp, err := reg.Complete(context.Background(), client, "TestOp", Request{
+				Model:        tc.reqModel,
+				SystemPrompt: "sys",
+				UserPrompt:   "usr",
+			})
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Complete error = %v, want %v", err, tc.wantErr)
+				}
+				if resp == nil {
+					t.Fatalf("expected non-nil Response carrying telemetry on error")
+				}
+				errTel, ok := core.LLMTelemetryFromError(err)
+				if !ok {
+					t.Fatalf("expected telemetry attached to error, got none")
+				}
+				if errTel != resp.Telemetry() {
+					t.Errorf("error telemetry %+v != resp.Telemetry() %+v", errTel, resp.Telemetry())
+				}
+			} else if err != nil {
+				t.Fatalf("Complete unexpected error: %v", err)
+			}
+
+			gotTel := resp.Telemetry()
+			if gotTel.Provider != tc.wantProvider || gotTel.Model != tc.wantModel || gotTel.StatusCode != tc.wantStatusCode {
+				t.Errorf("Complete telemetry = %+v, want provider=%q model=%q status=%d", gotTel, tc.wantProvider, tc.wantModel, tc.wantStatusCode)
+			}
+			if gotTel.Latency < tc.wantMinLatency {
+				t.Errorf("Complete latency = %v, want >= %v", gotTel.Latency, tc.wantMinLatency)
+			}
+			if gotTel.Usage != tc.wantUsage {
+				t.Errorf("Complete usage = %+v, want %+v", gotTel.Usage, tc.wantUsage)
+			}
+
+			txt, structTel, structErr := reg.CompleteStructured(context.Background(), client, "TestOp", Request{
+				Model:        tc.reqModel,
+				SystemPrompt: "sys",
+				UserPrompt:   "usr",
+			})
+			if tc.wantErr != nil {
+				if !errors.Is(structErr, tc.wantErr) {
+					t.Fatalf("CompleteStructured error = %v, want %v", structErr, tc.wantErr)
+				}
+				if txt != "" {
+					t.Errorf("expected empty text on error, got %q", txt)
+				}
+			} else {
+				if structErr != nil {
+					t.Fatalf("CompleteStructured unexpected error: %v", structErr)
+				}
+				if txt != tc.wantText {
+					t.Errorf("CompleteStructured text = %q, want %q", txt, tc.wantText)
+				}
+			}
+			if structTel.Provider != tc.wantProvider || structTel.Model != tc.wantModel || structTel.StatusCode != tc.wantStatusCode {
+				t.Errorf("CompleteStructured telemetry = %+v, want provider=%q model=%q status=%d", structTel, tc.wantProvider, tc.wantModel, tc.wantStatusCode)
+			}
+			if structTel.Latency < tc.wantMinLatency {
+				t.Errorf("CompleteStructured latency = %v, want >= %v", structTel.Latency, tc.wantMinLatency)
+			}
+			if structTel.Usage != tc.wantUsage {
+				t.Errorf("CompleteStructured usage = %+v, want %+v", structTel.Usage, tc.wantUsage)
+			}
+		})
+	}
+}
+
+func TestRegistry_ConcurrentComplete_Race(t *testing.T) {
+	reg := NewRegistry()
+	primary := &fakeTransportClient{
+		name:         ProviderOpenAI,
+		defaultModel: "gpt-4o",
+		completeFn: func(_ context.Context, _ Request) (*Response, error) {
+			return &Response{
+				Text:       `{"ok":true}`,
+				StatusCode: 200,
+				Usage:      core.TokenUsage{PromptTokens: 10, CompletionTokens: 5},
+			}, nil
+		},
+	}
+	failing := &fakeTransportClient{
+		name:         ProviderGemini,
+		defaultModel: "gemini-2.5-flash",
+		completeFn: func(_ context.Context, _ Request) (*Response, error) {
+			return &Response{StatusCode: 503}, ErrUpstream
+		},
+	}
+	reg.Register(primary)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			if idx%4 == 0 {
+				reg.Register(failing)
+			}
+			_ = reg.AvailableModels()
+			if idx%2 == 0 {
+				txt, tel, err := reg.CompleteStructured(context.Background(), primary, "RaceOp", Request{
+					SystemPrompt: "sys",
+					UserPrompt:   "usr",
+				})
+				if err != nil || txt == "" || tel.Provider != ProviderOpenAI || tel.Usage.TotalTokens != 15 {
+					t.Errorf("unexpected concurrent success result: txt=%q tel=%+v err=%v", txt, tel, err)
+				}
+			} else {
+				_, tel, err := reg.CompleteStructured(context.Background(), failing, "RaceOp", Request{
+					SystemPrompt: "sys",
+					UserPrompt:   "usr",
+				})
+				if !errors.Is(err, ErrUpstream) || tel.Provider != ProviderGemini || tel.StatusCode != 503 {
+					t.Errorf("unexpected concurrent error result: tel=%+v err=%v", tel, err)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 type unstructuredCustomClient struct {
@@ -564,4 +853,22 @@ func (p *unstructuredCustomClient) Complete(_ context.Context, req Request) (*Re
 		StatusCode: 200,
 		Usage:      core.TokenUsage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10},
 	}, nil
+}
+
+func TestRegistry_Resolve_CompatAliasDefaultModel(t *testing.T) {
+	reg := NewRegistry()
+	compatClient := &unstructuredCustomClient{name: ProviderCompat}
+	reg.Register(compatClient)
+	reg.SetDefault(ProviderCompatAlt, "custom-compat-alias-model")
+
+	client, model, err := reg.Resolve(core.GenerationRequest{}, nil, nil)
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if client.Name() != ProviderCompat {
+		t.Errorf("resolved provider = %q, want %q", client.Name(), ProviderCompat)
+	}
+	if model != "custom-compat-alias-model" {
+		t.Errorf("resolved model = %q, want %q", model, "custom-compat-alias-model")
+	}
 }

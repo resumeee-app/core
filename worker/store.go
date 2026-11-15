@@ -52,15 +52,15 @@ type PDFJobStore interface {
 	RecoverInterruptedJobs(ctx context.Context, reason string) ([]core.ReleasedReservation, error)
 }
 
-// QuotaCommitter finalizes or releases tenant LLM quota reservations after job execution.
+// QuotaCommitter finalizes or releases tenant LLM quota reservations alongside call telemetry.
 type QuotaCommitter interface {
-	CommitUsage(ctx context.Context, reservationID string, usage core.TokenUsage) error
-	ReleaseQuota(ctx context.Context, reservationID string, reason string) error
+	CommitUsage(ctx context.Context, reservationID string, telemetry core.LLMTelemetry) error
+	ReleaseQuota(ctx context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error
 }
 
 // ResumeExtractor parses raw resume text into a structured JSONResume using an LLM.
 type ResumeExtractor interface {
-	ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.TokenUsage, error)
+	ExtractResume(ctx context.Context, text, provider, model string) (*core.JSONResume, core.LLMTelemetry, error)
 }
 
 // Generator executes AI-backed resume tailoring for a branch generation job.

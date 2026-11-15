@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -84,14 +85,15 @@ func TestLLMTrace_RegistryAndService_TelemetryAndPrivacy(t *testing.T) {
 	sampleRespStr := string(respBytes)
 
 	cases := []struct {
-		name           string
-		providerName   string
-		model          string
-		wantOperation  string
-		wantStatusCode int
-		wantErr        error
-		invoke         func(t *testing.T, reg *Registry, client Client) error
-		completeFn     func(ctx context.Context, req Request) (*Response, error)
+		name              string
+		providerName      string
+		model             string
+		wantOperation     string
+		wantStatusCode    int
+		wantMinDurationMS int64
+		wantErr           error
+		invoke            func(t *testing.T, reg *Registry, client Client) error
+		completeFn        func(ctx context.Context, req Request) (*Response, error)
 	}{
 		{
 			name:           "GenerateTailoredResume success logs metadata without payload or disk artifacts",
@@ -118,8 +120,13 @@ func TestLLMTrace_RegistryAndService_TelemetryAndPrivacy(t *testing.T) {
 				})
 				req.BranchContext.TargetRequirements = secretJobReq
 				res, callErr := svc.GenerateTailoredResume(context.Background(), req)
-				if callErr == nil && res == nil {
-					t.Fatal("expected non-nil GenerationResponse")
+				if callErr == nil {
+					if res == nil {
+						t.Fatal("expected non-nil GenerationResponse")
+					}
+					if res.Telemetry.Provider != ProviderGemini || res.Telemetry.Model != "gemini-2.5-pro" || res.Telemetry.StatusCode != 200 || res.Telemetry.Usage.TotalTokens != 30 {
+						t.Errorf("unexpected response telemetry: %+v", res.Telemetry)
+					}
 				}
 				return callErr
 			},
@@ -148,16 +155,21 @@ func TestLLMTrace_RegistryAndService_TelemetryAndPrivacy(t *testing.T) {
 				})
 				req.BranchContext.TargetRequirements = secretJobReq
 				_, callErr := svc.GenerateTailoredResume(context.Background(), req)
+				if errTel, ok := core.LLMTelemetryFromError(callErr); !ok || errTel.Provider != ProviderOpenAI || errTel.Model != "gpt-4o" || errTel.StatusCode != 429 {
+					t.Errorf("expected attached error telemetry (openai/gpt-4o/429), got (%+v, ok=%v)", errTel, ok)
+				}
 				return callErr
 			},
 		},
 		{
-			name:           "CompleteStructured unstructured success logs metadata without leaking prompts or response",
-			providerName:   ProviderAnthropic,
-			model:          "claude-3-7-sonnet-20250219",
-			wantOperation:  "CompleteText",
-			wantStatusCode: 200,
+			name:              "CompleteStructured unstructured success logs metadata without leaking prompts or response",
+			providerName:      ProviderAnthropic,
+			model:             "claude-3-7-sonnet-20250219",
+			wantOperation:     "CompleteText",
+			wantStatusCode:    200,
+			wantMinDurationMS: 1,
 			completeFn: func(_ context.Context, _ Request) (*Response, error) {
+				time.Sleep(2 * time.Millisecond)
 				return &Response{
 					Text:       "extracted output SECRET_SUMMARY_OUTPUT_1122",
 					RawBody:    secretRawBody,
@@ -167,7 +179,7 @@ func TestLLMTrace_RegistryAndService_TelemetryAndPrivacy(t *testing.T) {
 			},
 			invoke: func(t *testing.T, reg *Registry, client Client) error {
 				t.Helper()
-				text, usage, callErr := reg.CompleteStructured(context.Background(), client, "CompleteText", Request{
+				text, telemetry, callErr := reg.CompleteStructured(context.Background(), client, "CompleteText", Request{
 					Model:        "claude-3-7-sonnet-20250219",
 					SystemPrompt: secretSystemPrompt,
 					UserPrompt:   secretUserPrompt,
@@ -176,8 +188,14 @@ func TestLLMTrace_RegistryAndService_TelemetryAndPrivacy(t *testing.T) {
 					if !strings.Contains(text, "extracted output") {
 						t.Errorf("unexpected completion text %q", text)
 					}
-					if usage.TotalTokens != 40 {
-						t.Errorf("expected 40 total tokens, got %d", usage.TotalTokens)
+					if telemetry.Usage.TotalTokens != 40 {
+						t.Errorf("expected 40 total tokens, got %d", telemetry.Usage.TotalTokens)
+					}
+					if telemetry.Provider != ProviderAnthropic || telemetry.Model != "claude-3-7-sonnet-20250219" || telemetry.StatusCode != 200 {
+						t.Errorf("unexpected telemetry metadata: %+v", telemetry)
+					}
+					if telemetry.Latency < 2*time.Millisecond {
+						t.Errorf("expected measured latency >= 2ms, got %v", telemetry.Latency)
 					}
 				}
 				return callErr
@@ -198,11 +216,14 @@ func TestLLMTrace_RegistryAndService_TelemetryAndPrivacy(t *testing.T) {
 			},
 			invoke: func(t *testing.T, reg *Registry, client Client) error {
 				t.Helper()
-				_, _, callErr := reg.CompleteStructured(context.Background(), client, "CompleteText", Request{
+				_, telemetry, callErr := reg.CompleteStructured(context.Background(), client, "CompleteText", Request{
 					Model:        "llama3.3",
 					SystemPrompt: secretSystemPrompt,
 					UserPrompt:   secretUserPrompt,
 				})
+				if telemetry.Provider != ProviderCompat || telemetry.Model != "llama3.3" || telemetry.StatusCode != 503 {
+					t.Errorf("expected error telemetry metadata (compat/llama3.3/503), got %+v", telemetry)
+				}
 				return callErr
 			},
 		},
@@ -271,8 +292,8 @@ func TestLLMTrace_RegistryAndService_TelemetryAndPrivacy(t *testing.T) {
 			if receipt.Provider != tc.providerName || receipt.Model != tc.model || receipt.Operation != tc.wantOperation {
 				t.Errorf("unexpected receipt metadata: got provider=%q model=%q op=%q", receipt.Provider, receipt.Model, receipt.Operation)
 			}
-			if receipt.DurationMS == nil || *receipt.DurationMS < 0 {
-				t.Errorf("expected non-negative duration_ms in receipt log, got %v", receipt.DurationMS)
+			if receipt.DurationMS == nil || *receipt.DurationMS < tc.wantMinDurationMS {
+				t.Errorf("expected duration_ms >= %d in receipt log, got %v", tc.wantMinDurationMS, receipt.DurationMS)
 			}
 			if receipt.StatusCode == nil || *receipt.StatusCode != tc.wantStatusCode {
 				t.Errorf("expected status_code %d in receipt log, got %v", tc.wantStatusCode, receipt.StatusCode)
@@ -303,24 +324,28 @@ func TestLLMLogging_DefensiveNilSafety(t *testing.T) {
 	if trace == nil {
 		t.Fatal("expected non-nil llmTrace")
 	}
-	logLLMResponse(ctx, nil, trace, 200, nil)
+	logLLMResponseTelemetry(ctx, nil, trace, 0, &Response{StatusCode: 200, Latency: 15 * time.Millisecond}, nil)
 
-	// Nil trace emits zero-valued metadata safely without panicking.
+	// Nil trace emits zero-valued metadata when latency and Response are also nil.
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	logLLMResponse(ctx, logger, nil, 502, errors.New("gateway timeout"))
+	logLLMResponseTelemetry(ctx, logger, nil, 0, nil, errors.New("gateway timeout"))
+	logLLMResponseTelemetry(ctx, logger, nil, 0, &Response{StatusCode: 502, Latency: 12 * time.Millisecond}, errors.New("gateway timeout"))
 
 	records := parseLogs(t, logBuf.String())
-	if len(records) != 1 {
-		t.Fatalf("expected 1 log record for nil trace response, got %d", len(records))
+	if len(records) != 2 {
+		t.Fatalf("expected 2 log records for nil trace responses, got %d", len(records))
 	}
-	if records[0].StatusCode == nil || *records[0].StatusCode != 502 {
-		t.Errorf("expected status_code 502, got %v", records[0].StatusCode)
+	if records[0].StatusCode == nil || *records[0].StatusCode != 0 || records[0].DurationMS == nil || *records[0].DurationMS != 0 {
+		t.Errorf("expected zero status/duration for nil trace + nil response, got %+v", records[0])
 	}
-	if records[0].DurationMS == nil || *records[0].DurationMS != 0 {
-		t.Errorf("expected duration_ms 0 for nil trace, got %v", records[0].DurationMS)
+	if records[1].StatusCode == nil || *records[1].StatusCode != 502 {
+		t.Errorf("expected status_code 502, got %v", records[1].StatusCode)
 	}
-	if records[0].Error != "gateway timeout" {
-		t.Errorf("expected error 'gateway timeout', got %q", records[0].Error)
+	if records[1].DurationMS == nil || *records[1].DurationMS != 12 {
+		t.Errorf("expected duration_ms 12 from Response.Latency, got %v", records[1].DurationMS)
+	}
+	if records[1].Error != "gateway timeout" {
+		t.Errorf("expected error 'gateway timeout', got %q", records[1].Error)
 	}
 }

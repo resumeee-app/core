@@ -101,7 +101,7 @@ func (q *Quotas) CommitUsage(ctx context.Context, reservationID string, telemetr
 	normalized := telemetry.Normalize()
 
 	return q.store.backend.Write(ctx, func(tx Tx) error {
-		rec, err := tx.GetUsageRecord(ctx, reservationID)
+		rec, err := tx.UsageRecord(ctx, reservationID)
 		if err != nil {
 			return err
 		}
@@ -109,7 +109,7 @@ func (q *Quotas) CommitUsage(ctx context.Context, reservationID string, telemetr
 			return nil
 		}
 
-		quota, qErr := tx.GetQuota(ctx, rec.UserID)
+		quota, qErr := tx.Quota(ctx, rec.UserID)
 		if qErr != nil && !errors.Is(qErr, core.ErrNotFound) {
 			return qErr
 		}
@@ -141,7 +141,7 @@ func (q *Quotas) ReleaseQuota(ctx context.Context, reservationID, errMsg string,
 	normalized := telemetry.Normalize()
 
 	return q.store.backend.Write(ctx, func(tx Tx) error {
-		rec, err := tx.GetUsageRecord(ctx, reservationID)
+		rec, err := tx.UsageRecord(ctx, reservationID)
 		if err != nil {
 			return err
 		}
@@ -149,7 +149,7 @@ func (q *Quotas) ReleaseQuota(ctx context.Context, reservationID, errMsg string,
 			return nil
 		}
 
-		quota, qErr := tx.GetQuota(ctx, rec.UserID)
+		quota, qErr := tx.Quota(ctx, rec.UserID)
 		if qErr != nil && !errors.Is(qErr, core.ErrNotFound) {
 			return qErr
 		}
@@ -215,7 +215,7 @@ func (q *Quotas) ListUsageRecords(ctx context.Context, userID string, limit int)
 
 // loadOrInitQuota reads or creates a tenant quota record, resetting expired windows and applying limit overrides.
 func loadOrInitQuota(ctx context.Context, tx ReadTx, userID string, dailyLimit, monthlyLimit int, now time.Time) (*core.TenantQuota, bool, error) {
-	quota, err := tx.GetQuota(ctx, userID)
+	quota, err := tx.Quota(ctx, userID)
 	if err != nil && !errors.Is(err, core.ErrNotFound) {
 		return nil, false, err
 	}

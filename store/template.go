@@ -15,11 +15,20 @@ type Templates struct {
 	store *Store
 }
 
+// templateQueryOwners returns the distinct owner user IDs eligible when listing templates for userID.
+func templateQueryOwners(userID string) []string {
+	owners := []string{core.SystemUserID}
+	if userID != core.SystemUserID {
+		owners = append(owners, userID)
+	}
+	return owners
+}
+
 // ListTemplates returns built-in and user-owned template sets ordered built-ins first, then by name and ID.
 func (t *Templates) ListTemplates(ctx context.Context, userID string) ([]core.TemplateSet, error) {
 	var list []core.TemplateSet
 	err := t.store.backend.Read(ctx, func(tx ReadTx) error {
-		raw, listErr := tx.ListTemplates(ctx, userID)
+		raw, listErr := tx.ListTemplates(ctx, templateQueryOwners(userID), []string{builtInIDPrefix}, true)
 		if listErr != nil {
 			return listErr
 		}
@@ -54,7 +63,7 @@ func (t *Templates) Template(ctx context.Context, userID, id string) (*core.Temp
 	}
 	var out *core.TemplateSet
 	err := t.store.backend.Read(ctx, func(tx ReadTx) error {
-		tmpl, getErr := tx.GetTemplate(ctx, id)
+		tmpl, getErr := tx.Template(ctx, id)
 		if getErr != nil {
 			return getErr
 		}
@@ -84,7 +93,7 @@ func (t *Templates) CreateTemplate(ctx context.Context, tmpl *core.TemplateSet) 
 		if toSave.ID == "" {
 			toSave.ID = core.GenerateID("tmpl")
 		}
-		if existing, err := tx.GetTemplate(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Template(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
@@ -116,7 +125,7 @@ func (t *Templates) UpdateTemplate(ctx context.Context, tmpl *core.TemplateSet) 
 	}
 
 	return t.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetTemplate(ctx, tmpl.ID)
+		existing, err := tx.Template(ctx, tmpl.ID)
 		if err != nil {
 			return err
 		}
@@ -145,7 +154,7 @@ func (t *Templates) DeleteTemplate(ctx context.Context, userID, id string) error
 	}
 
 	return t.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetTemplate(ctx, id)
+		existing, err := tx.Template(ctx, id)
 		if err != nil {
 			return err
 		}

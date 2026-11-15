@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -24,62 +23,62 @@ type Backend interface {
 // ReadTx exposes side-effect-free CRUD reads and indexed equality/IN queries within a transaction.
 // Implementations must return core.ErrNotFound when a requested single record does not exist.
 type ReadTx interface {
-	// GetUser loads a user by ID.
-	GetUser(ctx context.Context, id string) (*core.User, error)
+	// User loads a user by ID.
+	User(ctx context.Context, id string) (*core.User, error)
 
-	// ListPresets returns presets belonging to userID or system presets (UserID == core.SystemUserID or "").
-	ListPresets(ctx context.Context, userID string) ([]core.Preset, error)
+	// ListPresets returns presets whose UserID matches userIDs or whose ID starts with any prefix in idPrefixes, deduplicated.
+	ListPresets(ctx context.Context, userIDs []string, idPrefixes []string) ([]core.Preset, error)
 
-	// GetPreset loads a preset by ID.
-	GetPreset(ctx context.Context, id string) (*core.Preset, error)
+	// Preset loads a preset by ID.
+	Preset(ctx context.Context, id string) (*core.Preset, error)
 
-	// ListTemplates returns templates belonging to userID or built-in templates (IsBuiltIn || UserID == core.SystemUserID).
-	ListTemplates(ctx context.Context, userID string) ([]core.TemplateSet, error)
+	// ListTemplates returns templates whose UserID matches userIDs, whose ID starts with any prefix in idPrefixes, or whose IsBuiltIn flag is true when includeBuiltIn is true, deduplicated.
+	ListTemplates(ctx context.Context, userIDs []string, idPrefixes []string, includeBuiltIn bool) ([]core.TemplateSet, error)
 
-	// GetTemplate loads a template set by ID.
-	GetTemplate(ctx context.Context, id string) (*core.TemplateSet, error)
+	// Template loads a template set by ID.
+	Template(ctx context.Context, id string) (*core.TemplateSet, error)
 
-	// GetQuota loads quota state for userID.
-	GetQuota(ctx context.Context, userID string) (*core.TenantQuota, error)
+	// Quota loads quota state for userID.
+	Quota(ctx context.Context, userID string) (*core.TenantQuota, error)
 
-	// GetUsageRecord loads an LLM usage record by ID.
-	GetUsageRecord(ctx context.Context, id string) (*core.LLMUsageRecord, error)
+	// UsageRecord loads an LLM usage record by ID.
+	UsageRecord(ctx context.Context, id string) (*core.LLMUsageRecord, error)
 
 	// ListUsageRecords returns usage records for userID ordered newest-first up to limit when limit > 0.
 	ListUsageRecords(ctx context.Context, userID string, limit int) ([]core.LLMUsageRecord, error)
 
-	// GetProfile loads a candidate profile root by userID.
-	GetProfile(ctx context.Context, userID string) (*core.Profile, error)
+	// Profile loads a candidate profile root by userID.
+	Profile(ctx context.Context, userID string) (*core.Profile, error)
 
 	// ListSkills returns skills owned by userID, optionally including global skills when includeGlobal is true.
 	ListSkills(ctx context.Context, userID string, includeGlobal bool) ([]core.Skill, error)
 
-	// GetSkill loads a skill by ID.
-	GetSkill(ctx context.Context, id string) (*core.Skill, error)
+	// Skill loads a skill by ID.
+	Skill(ctx context.Context, id string) (*core.Skill, error)
 
 	// ListExperiences returns all work experiences owned by userID.
 	ListExperiences(ctx context.Context, userID string) ([]core.WorkExperience, error)
 
-	// GetExperience loads a work experience by ID.
-	GetExperience(ctx context.Context, id string) (*core.WorkExperience, error)
+	// Experience loads a work experience by ID.
+	Experience(ctx context.Context, id string) (*core.WorkExperience, error)
 
 	// ListProjects returns all projects owned by userID.
 	ListProjects(ctx context.Context, userID string) ([]core.Project, error)
 
-	// GetProject loads a project by ID.
-	GetProject(ctx context.Context, id string) (*core.Project, error)
+	// Project loads a project by ID.
+	Project(ctx context.Context, id string) (*core.Project, error)
 
 	// ListEducations returns all education entries owned by userID.
 	ListEducations(ctx context.Context, userID string) ([]core.Education, error)
 
-	// GetEducation loads an education entry by ID.
-	GetEducation(ctx context.Context, id string) (*core.Education, error)
+	// Education loads an education entry by ID.
+	Education(ctx context.Context, id string) (*core.Education, error)
 
 	// ListCertifications returns all certifications owned by userID.
 	ListCertifications(ctx context.Context, userID string) ([]core.Certification, error)
 
-	// GetCertification loads a certification by ID.
-	GetCertification(ctx context.Context, id string) (*core.Certification, error)
+	// Certification loads a certification by ID.
+	Certification(ctx context.Context, id string) (*core.Certification, error)
 
 	// ListFacts returns all facts owned by userID.
 	ListFacts(ctx context.Context, userID string) ([]core.Fact, error)
@@ -87,14 +86,14 @@ type ReadTx interface {
 	// ListFactsByOwner returns facts owned by userID associated with ownerType and ownerID.
 	ListFactsByOwner(ctx context.Context, userID string, ownerType core.OwnerType, ownerID string) ([]core.Fact, error)
 
-	// GetFact loads a fact by ID.
-	GetFact(ctx context.Context, id string) (*core.Fact, error)
+	// Fact loads a fact by ID.
+	Fact(ctx context.Context, id string) (*core.Fact, error)
 
 	// ListBranches returns all branches owned by userID.
 	ListBranches(ctx context.Context, userID string) ([]core.Branch, error)
 
-	// GetBranch loads a branch by ID.
-	GetBranch(ctx context.Context, id string) (*core.Branch, error)
+	// Branch loads a branch by ID.
+	Branch(ctx context.Context, id string) (*core.Branch, error)
 
 	// ListVersionsByBranch returns all versions belonging to branchID.
 	ListVersionsByBranch(ctx context.Context, branchID string) ([]core.BranchVersion, error)
@@ -102,14 +101,14 @@ type ReadTx interface {
 	// ListVersionsByIDs returns versions matching ids.
 	ListVersionsByIDs(ctx context.Context, ids []string) ([]core.BranchVersion, error)
 
-	// GetVersion loads a branch version by ID.
-	GetVersion(ctx context.Context, id string) (*core.BranchVersion, error)
+	// Version loads a branch version by ID.
+	Version(ctx context.Context, id string) (*core.BranchVersion, error)
 
-	// GetVersionByNumber loads a branch version by branchID and versionNumber.
-	GetVersionByNumber(ctx context.Context, branchID string, versionNumber int) (*core.BranchVersion, error)
+	// VersionByNumber loads a branch version by branchID and versionNumber.
+	VersionByNumber(ctx context.Context, branchID string, versionNumber int) (*core.BranchVersion, error)
 
-	// GetJob loads a queued background job by ID.
-	GetJob(ctx context.Context, id string) (*core.Job, error)
+	// Job loads a queued background job by ID.
+	Job(ctx context.Context, id string) (*core.Job, error)
 
 	// ListActiveJobs returns all jobs whose Status is JobStatusPending or JobStatusProcessing.
 	ListActiveJobs(ctx context.Context) ([]core.Job, error)
@@ -117,8 +116,8 @@ type ReadTx interface {
 	// ListJobsByBranch returns all jobs whose Tailor payload targets branchID.
 	ListJobsByBranch(ctx context.Context, branchID string) ([]core.Job, error)
 
-	// ListTerminalJobsBefore returns terminal jobs owned by userID completed/updated strictly before cutoff.
-	ListTerminalJobsBefore(ctx context.Context, userID string, cutoff time.Time) ([]core.Job, error)
+	// ListJobsByUser returns jobs owned by userID matching any status in statuses, or all jobs owned by userID when statuses is empty.
+	ListJobsByUser(ctx context.Context, userID string, statuses []core.JobStatus) ([]core.Job, error)
 }
 
 // Tx extends ReadTx with pure persistence writes for use inside Backend.Write transactions.

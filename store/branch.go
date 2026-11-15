@@ -68,7 +68,7 @@ func (b *Branches) Branch(ctx context.Context, userID, id string) (*core.Branch,
 
 	var out *core.Branch
 	err := b.store.backend.Read(ctx, func(tx ReadTx) error {
-		br, err := tx.GetBranch(ctx, id)
+		br, err := tx.Branch(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func (b *Branches) CreateBranch(ctx context.Context, branch *core.Branch) error 
 		if toSave.ID == "" {
 			toSave.ID = core.GenerateID("br")
 		}
-		if existing, err := tx.GetBranch(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Branch(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
@@ -126,7 +126,7 @@ func (b *Branches) UpdateBranch(ctx context.Context, branch *core.Branch) error 
 	}
 
 	return b.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetBranch(ctx, branch.ID)
+		existing, err := tx.Branch(ctx, branch.ID)
 		if err != nil {
 			return err
 		}
@@ -166,7 +166,7 @@ func (b *Branches) DeleteBranch(ctx context.Context, userID, id string) error {
 	}
 
 	return b.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetBranch(ctx, id)
+		existing, err := tx.Branch(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -208,7 +208,7 @@ func (b *Branches) Version(ctx context.Context, branchID, versionID string) (*co
 
 	var out *core.BranchVersion
 	err := b.store.backend.Read(ctx, func(tx ReadTx) error {
-		ver, err := tx.GetVersion(ctx, versionID)
+		ver, err := tx.Version(ctx, versionID)
 		if err != nil {
 			return err
 		}
@@ -229,7 +229,7 @@ func (b *Branches) VersionByNumber(ctx context.Context, branchID string, version
 
 	var out *core.BranchVersion
 	err := b.store.backend.Read(ctx, func(tx ReadTx) error {
-		ver, err := tx.GetVersionByNumber(ctx, branchID, versionNumber)
+		ver, err := tx.VersionByNumber(ctx, branchID, versionNumber)
 		if err != nil {
 			return err
 		}
@@ -301,7 +301,7 @@ func (b *Branches) SaveCompletedVersion(ctx context.Context, version *core.Branc
 	}
 
 	return b.store.backend.Write(ctx, func(tx Tx) error {
-		br, err := tx.GetBranch(ctx, version.BranchID)
+		br, err := tx.Branch(ctx, version.BranchID)
 		if err != nil {
 			return err
 		}
@@ -310,7 +310,7 @@ func (b *Branches) SaveCompletedVersion(ctx context.Context, version *core.Branc
 		}
 		var existing *core.BranchVersion
 		if version.ID != "" {
-			existing, err = tx.GetVersion(ctx, version.ID)
+			existing, err = tx.Version(ctx, version.ID)
 			if err != nil && !errors.Is(err, core.ErrNotFound) {
 				return err
 			}
@@ -418,11 +418,11 @@ func (b *Branches) SetVersionGapReport(ctx context.Context, versionID string, re
 	}
 
 	return b.store.backend.Write(ctx, func(tx Tx) error {
-		ver, err := tx.GetVersion(ctx, versionID)
+		ver, err := tx.Version(ctx, versionID)
 		if err != nil {
 			return err
 		}
-		br, err := tx.GetBranch(ctx, ver.BranchID)
+		br, err := tx.Branch(ctx, ver.BranchID)
 		if err != nil {
 			return err
 		}
@@ -449,14 +449,14 @@ func (b *Branches) SetVersionATSScore(ctx context.Context, versionID string, ats
 	}
 
 	return b.store.backend.Write(ctx, func(tx Tx) error {
-		ver, err := tx.GetVersion(ctx, versionID)
+		ver, err := tx.Version(ctx, versionID)
 		if err != nil {
 			return err
 		}
 		if atsScore != nil && ver.ATSScore != nil {
 			return fmt.Errorf("%w: ATS score already exists for version %s", core.ErrConflict, versionID)
 		}
-		br, err := tx.GetBranch(ctx, ver.BranchID)
+		br, err := tx.Branch(ctx, ver.BranchID)
 		if err != nil {
 			return err
 		}
@@ -485,7 +485,7 @@ func (b *Branches) SetVersionATSScore(ctx context.Context, versionID string, ats
 
 // currentMainRevision looks up userID's MainRevision or returns 0 when no profile exists yet.
 func currentMainRevision(ctx context.Context, tx ReadTx, userID string) (int64, error) {
-	prof, err := tx.GetProfile(ctx, userID)
+	prof, err := tx.Profile(ctx, userID)
 	if errors.Is(err, core.ErrNotFound) {
 		return 0, nil
 	}

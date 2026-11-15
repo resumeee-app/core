@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/resumeee-app/resumeee-core"
 )
@@ -20,42 +19,65 @@ type writeTx struct {
 	readTx
 }
 
-// GetUser loads a user by ID.
-func (r *readTx) GetUser(ctx context.Context, id string) (*core.User, error) {
+// User loads a user by ID.
+func (r *readTx) User(ctx context.Context, id string) (*core.User, error) {
 	return getRecord(ctx, r.data.users, id)
 }
 
-// ListPresets returns presets belonging to userID or system presets.
-func (r *readTx) ListPresets(ctx context.Context, userID string) ([]core.Preset, error) {
+// ListPresets returns presets whose UserID matches userIDs or whose ID starts with any prefix in idPrefixes, deduplicated.
+func (r *readTx) ListPresets(ctx context.Context, userIDs []string, idPrefixes []string) ([]core.Preset, error) {
+	if len(userIDs) == 0 && len(idPrefixes) == 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return []core.Preset{}, nil
+	}
+	wantUsers := toStringSet(userIDs)
 	return listWhere(ctx, r.data.presets, func(p core.Preset) bool {
-		return p.UserID == "" || p.UserID == core.SystemUserID || p.UserID == userID || p.IsBuiltIn()
+		if _, ok := wantUsers[p.UserID]; ok {
+			return true
+		}
+		return hasAnyPrefix(p.ID, idPrefixes)
 	})
 }
 
-// GetPreset loads a preset by ID.
-func (r *readTx) GetPreset(ctx context.Context, id string) (*core.Preset, error) {
+// Preset loads a preset by ID.
+func (r *readTx) Preset(ctx context.Context, id string) (*core.Preset, error) {
 	return getRecord(ctx, r.data.presets, id)
 }
 
-// ListTemplates returns templates belonging to userID or built-in system templates.
-func (r *readTx) ListTemplates(ctx context.Context, userID string) ([]core.TemplateSet, error) {
+// ListTemplates returns templates whose UserID matches userIDs, whose ID starts with any prefix in idPrefixes, or whose IsBuiltIn flag is true when includeBuiltIn is true, deduplicated.
+func (r *readTx) ListTemplates(ctx context.Context, userIDs []string, idPrefixes []string, includeBuiltIn bool) ([]core.TemplateSet, error) {
+	if len(userIDs) == 0 && len(idPrefixes) == 0 && !includeBuiltIn {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return []core.TemplateSet{}, nil
+	}
+	wantUsers := toStringSet(userIDs)
 	return listWhere(ctx, r.data.templates, func(t core.TemplateSet) bool {
-		return t.IsBuiltIn || strings.HasPrefix(t.ID, "builtin-") || t.UserID == core.SystemUserID || t.UserID == userID
+		if includeBuiltIn && t.IsBuiltIn {
+			return true
+		}
+		if _, ok := wantUsers[t.UserID]; ok {
+			return true
+		}
+		return hasAnyPrefix(t.ID, idPrefixes)
 	})
 }
 
-// GetTemplate loads a template set by ID.
-func (r *readTx) GetTemplate(ctx context.Context, id string) (*core.TemplateSet, error) {
+// Template loads a template set by ID.
+func (r *readTx) Template(ctx context.Context, id string) (*core.TemplateSet, error) {
 	return getRecord(ctx, r.data.templates, id)
 }
 
-// GetQuota loads quota state for userID.
-func (r *readTx) GetQuota(ctx context.Context, userID string) (*core.TenantQuota, error) {
+// Quota loads quota state for userID.
+func (r *readTx) Quota(ctx context.Context, userID string) (*core.TenantQuota, error) {
 	return getRecord(ctx, r.data.quotas, userID)
 }
 
-// GetUsageRecord loads an LLM usage record by ID.
-func (r *readTx) GetUsageRecord(ctx context.Context, id string) (*core.LLMUsageRecord, error) {
+// UsageRecord loads an LLM usage record by ID.
+func (r *readTx) UsageRecord(ctx context.Context, id string) (*core.LLMUsageRecord, error) {
 	return getRecord(ctx, r.data.usageRecords, id)
 }
 
@@ -79,8 +101,8 @@ func (r *readTx) ListUsageRecords(ctx context.Context, userID string, limit int)
 	return recs, nil
 }
 
-// GetProfile loads a candidate profile root by userID.
-func (r *readTx) GetProfile(ctx context.Context, userID string) (*core.Profile, error) {
+// Profile loads a candidate profile root by userID.
+func (r *readTx) Profile(ctx context.Context, userID string) (*core.Profile, error) {
 	return getRecord(ctx, r.data.profiles, userID)
 }
 
@@ -94,8 +116,8 @@ func (r *readTx) ListSkills(ctx context.Context, userID string, includeGlobal bo
 	})
 }
 
-// GetSkill loads a skill by ID.
-func (r *readTx) GetSkill(ctx context.Context, id string) (*core.Skill, error) {
+// Skill loads a skill by ID.
+func (r *readTx) Skill(ctx context.Context, id string) (*core.Skill, error) {
 	return getRecord(ctx, r.data.skills, id)
 }
 
@@ -104,8 +126,8 @@ func (r *readTx) ListExperiences(ctx context.Context, userID string) ([]core.Wor
 	return listWhere(ctx, r.data.experiences, func(e core.WorkExperience) bool { return e.UserID == userID })
 }
 
-// GetExperience loads a work experience by ID.
-func (r *readTx) GetExperience(ctx context.Context, id string) (*core.WorkExperience, error) {
+// Experience loads a work experience by ID.
+func (r *readTx) Experience(ctx context.Context, id string) (*core.WorkExperience, error) {
 	return getRecord(ctx, r.data.experiences, id)
 }
 
@@ -114,8 +136,8 @@ func (r *readTx) ListProjects(ctx context.Context, userID string) ([]core.Projec
 	return listWhere(ctx, r.data.projects, func(p core.Project) bool { return p.UserID == userID })
 }
 
-// GetProject loads a project by ID.
-func (r *readTx) GetProject(ctx context.Context, id string) (*core.Project, error) {
+// Project loads a project by ID.
+func (r *readTx) Project(ctx context.Context, id string) (*core.Project, error) {
 	return getRecord(ctx, r.data.projects, id)
 }
 
@@ -124,8 +146,8 @@ func (r *readTx) ListEducations(ctx context.Context, userID string) ([]core.Educ
 	return listWhere(ctx, r.data.educations, func(e core.Education) bool { return e.UserID == userID })
 }
 
-// GetEducation loads an education entry by ID.
-func (r *readTx) GetEducation(ctx context.Context, id string) (*core.Education, error) {
+// Education loads an education entry by ID.
+func (r *readTx) Education(ctx context.Context, id string) (*core.Education, error) {
 	return getRecord(ctx, r.data.educations, id)
 }
 
@@ -134,8 +156,8 @@ func (r *readTx) ListCertifications(ctx context.Context, userID string) ([]core.
 	return listWhere(ctx, r.data.certifications, func(c core.Certification) bool { return c.UserID == userID })
 }
 
-// GetCertification loads a certification by ID.
-func (r *readTx) GetCertification(ctx context.Context, id string) (*core.Certification, error) {
+// Certification loads a certification by ID.
+func (r *readTx) Certification(ctx context.Context, id string) (*core.Certification, error) {
 	return getRecord(ctx, r.data.certifications, id)
 }
 
@@ -151,8 +173,8 @@ func (r *readTx) ListFactsByOwner(ctx context.Context, userID string, ownerType 
 	})
 }
 
-// GetFact loads a fact by ID.
-func (r *readTx) GetFact(ctx context.Context, id string) (*core.Fact, error) {
+// Fact loads a fact by ID.
+func (r *readTx) Fact(ctx context.Context, id string) (*core.Fact, error) {
 	return getRecord(ctx, r.data.facts, id)
 }
 
@@ -161,8 +183,8 @@ func (r *readTx) ListBranches(ctx context.Context, userID string) ([]core.Branch
 	return listWhere(ctx, r.data.branches, func(b core.Branch) bool { return b.UserID == userID })
 }
 
-// GetBranch loads a branch by ID.
-func (r *readTx) GetBranch(ctx context.Context, id string) (*core.Branch, error) {
+// Branch loads a branch by ID.
+func (r *readTx) Branch(ctx context.Context, id string) (*core.Branch, error) {
 	return getRecord(ctx, r.data.branches, id)
 }
 
@@ -186,13 +208,13 @@ func (r *readTx) ListVersionsByIDs(ctx context.Context, ids []string) ([]core.Br
 	})
 }
 
-// GetVersion loads a branch version by ID.
-func (r *readTx) GetVersion(ctx context.Context, id string) (*core.BranchVersion, error) {
+// Version loads a branch version by ID.
+func (r *readTx) Version(ctx context.Context, id string) (*core.BranchVersion, error) {
 	return getRecord(ctx, r.data.versions, id)
 }
 
-// GetVersionByNumber loads a branch version by branchID and versionNumber.
-func (r *readTx) GetVersionByNumber(ctx context.Context, branchID string, versionNumber int) (*core.BranchVersion, error) {
+// VersionByNumber loads a branch version by branchID and versionNumber.
+func (r *readTx) VersionByNumber(ctx context.Context, branchID string, versionNumber int) (*core.BranchVersion, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -205,8 +227,8 @@ func (r *readTx) GetVersionByNumber(ctx context.Context, branchID string, versio
 	return nil, core.ErrNotFound
 }
 
-// GetJob loads a queued background job by ID.
-func (r *readTx) GetJob(ctx context.Context, id string) (*core.Job, error) {
+// Job loads a queued background job by ID.
+func (r *readTx) Job(ctx context.Context, id string) (*core.Job, error) {
 	return getRecord(ctx, r.data.jobs, id)
 }
 
@@ -224,17 +246,44 @@ func (r *readTx) ListJobsByBranch(ctx context.Context, branchID string) ([]core.
 	})
 }
 
-// ListTerminalJobsBefore returns terminal jobs owned by userID completed/updated strictly before cutoff.
-func (r *readTx) ListTerminalJobsBefore(ctx context.Context, userID string, cutoff time.Time) ([]core.Job, error) {
+// ListJobsByUser returns jobs owned by userID matching any status in statuses, or all jobs owned by userID when statuses is empty.
+func (r *readTx) ListJobsByUser(ctx context.Context, userID string, statuses []core.JobStatus) ([]core.Job, error) {
+	var wantStatuses map[core.JobStatus]struct{}
+	if len(statuses) > 0 {
+		wantStatuses = make(map[core.JobStatus]struct{}, len(statuses))
+		for _, s := range statuses {
+			wantStatuses[s] = struct{}{}
+		}
+	}
 	return listWhere(ctx, r.data.jobs, func(j core.Job) bool {
-		if j.UserID != userID || !j.Status.IsTerminal() {
+		if j.UserID != userID {
 			return false
 		}
-		if j.CompletedAt != nil {
-			return j.CompletedAt.Before(cutoff)
+		if len(wantStatuses) == 0 {
+			return true
 		}
-		return j.UpdatedAt.Before(cutoff)
+		_, ok := wantStatuses[j.Status]
+		return ok
 	})
+}
+
+// toStringSet builds a lookup set from values.
+func toStringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, v := range values {
+		set[v] = struct{}{}
+	}
+	return set
+}
+
+// hasAnyPrefix reports whether value starts with any non-empty prefix in prefixes.
+func hasAnyPrefix(value string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if prefix != "" && strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // PutUser inserts or replaces a user record.

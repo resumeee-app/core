@@ -23,7 +23,7 @@ func (p *Profiles) Profile(ctx context.Context, userID string) (*core.Profile, e
 	}
 	var out *core.Profile
 	err := p.store.backend.Read(ctx, func(tx ReadTx) error {
-		prof, getErr := tx.GetProfile(ctx, userID)
+		prof, getErr := tx.Profile(ctx, userID)
 		if getErr != nil {
 			return getErr
 		}
@@ -40,7 +40,7 @@ func (p *Profiles) UpsertProfile(ctx context.Context, profile *core.Profile) err
 	}
 
 	return p.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetProfile(ctx, profile.UserID)
+		existing, err := tx.Profile(ctx, profile.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -82,7 +82,7 @@ func (p *Profiles) IncrementMainRevision(ctx context.Context, userID string) (in
 
 	var nextRev int64
 	err := p.store.backend.Write(ctx, func(tx Tx) error {
-		prof, getErr := tx.GetProfile(ctx, userID)
+		prof, getErr := tx.Profile(ctx, userID)
 		if getErr != nil {
 			return getErr
 		}
@@ -105,7 +105,7 @@ func (p *Profiles) Snapshot(ctx context.Context, userID string) (*core.MainProfi
 
 	var snap *core.MainProfileSnapshot
 	err := p.store.backend.Read(ctx, func(tx ReadTx) error {
-		prof, err := tx.GetProfile(ctx, userID)
+		prof, err := tx.Profile(ctx, userID)
 		if err != nil {
 			return err
 		}
@@ -148,7 +148,7 @@ func (p *Profiles) ReplaceCareerGraph(ctx context.Context, userID string, snapsh
 
 	return p.store.backend.Write(ctx, func(tx Tx) error {
 		// Execute every transaction read before issuing any write (Firestore & SQLite safe).
-		existingProf, err := tx.GetProfile(ctx, userID)
+		existingProf, err := tx.Profile(ctx, userID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}

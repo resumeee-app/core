@@ -15,18 +15,30 @@ type Presets struct {
 	store *Store
 }
 
+// builtInIDPrefix is the ID prefix reserved for built-in presets and templates.
+const builtInIDPrefix = "builtin-"
+
+// presetQueryOwners returns the distinct owner user IDs eligible when listing presets for userID.
+func presetQueryOwners(userID string) []string {
+	owners := []string{core.SystemUserID, ""}
+	if userID != "" && userID != core.SystemUserID {
+		owners = append(owners, userID)
+	}
+	return owners
+}
+
 // ListPresets returns all presets accessible to userID (built-in/system and user-owned)
 // ordered built-ins first, then alphabetically by name and ID.
 func (p *Presets) ListPresets(ctx context.Context, userID string) ([]core.Preset, error) {
 	var list []core.Preset
 	err := p.store.backend.Read(ctx, func(tx ReadTx) error {
-		raw, listErr := tx.ListPresets(ctx, userID)
+		raw, listErr := tx.ListPresets(ctx, presetQueryOwners(userID), []string{builtInIDPrefix})
 		if listErr != nil {
 			return listErr
 		}
 		list = make([]core.Preset, 0, len(raw))
 		for _, item := range raw {
-			if item.UserID == "" || item.UserID == core.SystemUserID || item.UserID == userID {
+			if presetReadableBy(&item, userID) {
 				item.Language = item.EffectiveLanguage()
 				list = append(list, cloneValue(item))
 			}
@@ -56,7 +68,7 @@ func (p *Presets) Preset(ctx context.Context, userID, id string) (*core.Preset, 
 	}
 	var out *core.Preset
 	err := p.store.backend.Read(ctx, func(tx ReadTx) error {
-		pr, getErr := tx.GetPreset(ctx, id)
+		pr, getErr := tx.Preset(ctx, id)
 		if getErr != nil {
 			return getErr
 		}
@@ -89,7 +101,7 @@ func (p *Presets) CreatePreset(ctx context.Context, preset *core.Preset) error {
 		if toSave.ID == "" {
 			toSave.ID = core.GenerateID("preset")
 		}
-		if existing, err := tx.GetPreset(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Preset(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
@@ -123,7 +135,7 @@ func (p *Presets) UpdatePreset(ctx context.Context, preset *core.Preset) error {
 	}
 
 	return p.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetPreset(ctx, preset.ID)
+		existing, err := tx.Preset(ctx, preset.ID)
 		if err != nil {
 			return err
 		}
@@ -153,7 +165,7 @@ func (p *Presets) DeletePreset(ctx context.Context, userID, id string) error {
 	}
 
 	return p.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetPreset(ctx, id)
+		existing, err := tx.Preset(ctx, id)
 		if err != nil {
 			return err
 		}

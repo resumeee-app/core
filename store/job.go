@@ -23,7 +23,7 @@ func (j *Jobs) Job(ctx context.Context, userID, jobID string) (*core.Job, error)
 	}
 	var out *core.Job
 	err := j.store.backend.Read(ctx, func(tx ReadTx) error {
-		job, err := tx.GetJob(ctx, jobID)
+		job, err := tx.Job(ctx, jobID)
 		if err != nil {
 			return err
 		}
@@ -45,41 +45,23 @@ func (j *Jobs) SubmitBranchTailor(
 	version *core.BranchVersion,
 	opts core.PendingJobOptions,
 ) ([]core.ReleasedReservation, error) {
-	if job == nil || version == nil {
-		return nil, fmt.Errorf("%w: job and version cannot be nil", core.ErrValidation)
-	}
-	if job.Status != "" && job.Status != core.JobStatusPending {
-		return nil, fmt.Errorf("%w: pending job cannot start in %s state", core.ErrValidation, job.Status)
-	}
-	if version.Status != "" && version.Status != core.VersionStatusPending {
-		return nil, fmt.Errorf("%w: pending version cannot start in %s state", core.ErrValidation, version.Status)
-	}
-	branchID := resolveTailorBranchID(job, version)
-	if branchID == "" {
-		return nil, fmt.Errorf("%w: branch id is required", core.ErrValidation)
+	branchID, err := validateTailorSubmission(job, version)
+	if err != nil {
+		return nil, err
 	}
 
 	var released []core.ReleasedReservation
-	err := j.store.backend.Write(ctx, func(tx Tx) error {
+	err = j.store.backend.Write(ctx, func(tx Tx) error {
 		released = nil
 		// Execute all reads before writing.
-		br, err := tx.GetBranch(ctx, branchID)
+		br, err := tx.Branch(ctx, branchID)
 		if err != nil {
 			return err
 		}
-		userID := job.UserID
-		if userID == "" {
-			userID = version.UserID
+		userID, err := resolveTailorUserID(job, version, br)
+		if err != nil {
+			return err
 		}
-		if userID == "" {
-			userID = br.UserID
-		} else if br.UserID != "" && br.UserID != userID {
-			return core.ErrNotFound
-		}
-		if userID == "" {
-			return fmt.Errorf("%w: user id is required", core.ErrValidation)
-		}
-
 		activeJobs, err := tx.ListActiveJobs(ctx)
 		if err != nil {
 			return err
@@ -88,134 +70,29 @@ func (j *Jobs) SubmitBranchTailor(
 		if err != nil {
 			return err
 		}
-		versionMap := make(map[string]*core.BranchVersion, len(versions))
-		for i := range versions {
-			versionMap[versions[i].ID] = &versions[i]
+		versionMap := indexBranchVersions(versions)
+		nextJob, err := prepareNewTailorJob(ctx, tx, job, activeJobs)
+		if err != nil {
+			return err
 		}
-
-		nextJob := cloneValue(job)
-		if nextJob.ID == "" {
-			nextJob.ID = core.GenerateID("job")
-		}
-		if _, exists := findJobInSlice(activeJobs, nextJob.ID); exists {
-			return core.ErrConflict
-		}
-		if existing, getErr := tx.GetJob(ctx, nextJob.ID); getErr == nil && existing != nil {
-			return core.ErrConflict
-		} else if getErr != nil && !errors.Is(getErr, core.ErrNotFound) {
-			return getErr
-		}
-
-		nextVer := cloneValue(version)
-		if nextVer.ID == "" {
-			nextVer.ID = core.GenerateID("ver")
-		}
-		if _, exists := versionMap[nextVer.ID]; exists {
-			return core.ErrConflict
-		}
-		if existing, getErr := tx.GetVersion(ctx, nextVer.ID); getErr == nil && existing != nil {
-			return core.ErrConflict
-		} else if getErr != nil && !errors.Is(getErr, core.ErrNotFound) {
-			return getErr
+		nextVer, err := prepareNewTailorVersion(ctx, tx, version, versionMap)
+		if err != nil {
+			return err
 		}
 
 		now := j.store.resolveNow(opts.Now)
-		for _, aj := range activeJobs {
-			if isJobForBranch(&aj, branchID) && aj.Status == core.JobStatusProcessing && isLeaseUnexpired(aj.LeaseExpiresAt, now) {
-				return fmt.Errorf("%w: branch %s already has an active processing job", core.ErrConflict, branchID)
-			}
+		if err := ensureNoActiveProcessingJob(activeJobs, branchID, now); err != nil {
+			return err
 		}
 		if err := checkPendingAdmission(activeJobs, userID, branchID, opts, now); err != nil {
 			return err
 		}
 
-		// Transition expired processing jobs and prior pending jobs on branchID, synced with linked versions.
-		var modifiedVersions []*core.BranchVersion
-		var modifiedJobs []*core.Job
-		for i := range activeJobs {
-			aj := &activeJobs[i]
-			if !isJobForBranch(aj, branchID) {
-				continue
-			}
-			var linkedVer *core.BranchVersion
-			if aj.Tailor != nil {
-				linkedVer = versionMap[aj.Tailor.VersionID]
-			}
-			if aj.Status == core.JobStatusProcessing && !isLeaseUnexpired(aj.LeaseExpiresAt, now) {
-				cp := cloneValue(*aj)
-				rel := failJobAndVersion(&cp, linkedVer, core.JobStatusFailed, core.VersionStatusFailed, "worker lease expired", now, false)
-				if rel != nil {
-					released = append(released, *rel)
-				}
-				modifiedJobs = append(modifiedJobs, &cp)
-				if linkedVer != nil {
-					modifiedVersions = append(modifiedVersions, linkedVer)
-				}
-			} else if aj.Status == core.JobStatusPending {
-				cp := cloneValue(*aj)
-				rel := failJobAndVersion(&cp, linkedVer, core.JobStatusCancelled, core.VersionStatusCancelled, "superseded by newer pending version", now, true)
-				if rel != nil {
-					released = append(released, *rel)
-				}
-				modifiedJobs = append(modifiedJobs, &cp)
-				if linkedVer != nil {
-					modifiedVersions = append(modifiedVersions, linkedVer)
-				}
-			}
-		}
-
-		_, _, ttl := resolvePendingLimits(opts)
-		epoch := br.Epoch
-		if epoch <= 0 {
-			epoch = 1
-		}
-
-		nextVer.UserID = userID
-		nextVer.BranchID = branchID
-		nextVer.JobID = nextJob.ID
-		nextVer.VersionNumber = nextVersionNumber(versions)
-		nextVer.BranchEpoch = epoch
-		nextVer.Status = core.VersionStatusPending
-		if nextVer.CreatedAt.IsZero() {
-			nextVer.CreatedAt = now
-		}
-		nextVer.UpdatedAt = now
-		nextVer.CompletedAt = nil
-
-		nextJob.Kind = core.JobKindBranchTailor
-		nextJob.UserID = userID
-		nextJob.Status = core.JobStatusPending
-		nextJob.Tailor = &core.BranchTailorSpec{
-			BranchID:    branchID,
-			VersionID:   nextVer.ID,
-			BranchEpoch: epoch,
-		}
-		nextJob.PDF = nil
-		if nextJob.CreatedAt.IsZero() {
-			nextJob.CreatedAt = now
-		}
-		nextJob.UpdatedAt = now
-		if nextJob.ExpiresAt == nil {
-			exp := now.Add(ttl)
-			nextJob.ExpiresAt = &exp
-		}
-		clearJobLeaseFields(nextJob)
-		nextJob.NextRetryAt = nil
-
-		for _, mv := range modifiedVersions {
-			if err := tx.PutVersion(ctx, mv); err != nil {
-				return err
-			}
-		}
-		for _, mj := range modifiedJobs {
-			if err := tx.PutJob(ctx, mj); err != nil {
-				return err
-			}
-		}
-		if err := tx.PutVersion(ctx, nextVer); err != nil {
-			return err
-		}
-		if err := tx.PutJob(ctx, nextJob); err != nil {
+		var modVersions []*core.BranchVersion
+		var modJobs []*core.Job
+		modVersions, modJobs, released = collectSupersededTailorWork(branchID, activeJobs, versionMap, now)
+		populateTailorSubmission(br, userID, branchID, versions, nextJob, nextVer, opts, now)
+		if err := persistTailorSubmission(ctx, tx, modVersions, modJobs, nextVer, nextJob); err != nil {
 			return err
 		}
 
@@ -224,6 +101,215 @@ func (j *Jobs) SubmitBranchTailor(
 		return nil
 	})
 	return released, err
+}
+
+// validateTailorSubmission validates initial tailor submission arguments and resolves the target branch ID.
+func validateTailorSubmission(job *core.Job, version *core.BranchVersion) (string, error) {
+	if job == nil || version == nil {
+		return "", fmt.Errorf("%w: job and version cannot be nil", core.ErrValidation)
+	}
+	if job.Status != "" && job.Status != core.JobStatusPending {
+		return "", fmt.Errorf("%w: pending job cannot start in %s state", core.ErrValidation, job.Status)
+	}
+	if version.Status != "" && version.Status != core.VersionStatusPending {
+		return "", fmt.Errorf("%w: pending version cannot start in %s state", core.ErrValidation, version.Status)
+	}
+	branchID := resolveTailorBranchID(job, version)
+	if branchID == "" {
+		return "", fmt.Errorf("%w: branch id is required", core.ErrValidation)
+	}
+	return branchID, nil
+}
+
+// resolveTailorUserID determines the owner user ID for a tailor submission and verifies branch ownership.
+func resolveTailorUserID(job *core.Job, version *core.BranchVersion, br *core.Branch) (string, error) {
+	userID := job.UserID
+	if userID == "" {
+		userID = version.UserID
+	}
+	if userID == "" {
+		userID = br.UserID
+	} else if br.UserID != "" && br.UserID != userID {
+		return "", core.ErrNotFound
+	}
+	if userID == "" {
+		return "", fmt.Errorf("%w: user id is required", core.ErrValidation)
+	}
+	return userID, nil
+}
+
+// indexBranchVersions indexes branch versions by ID for fast lookup within a transaction.
+func indexBranchVersions(versions []core.BranchVersion) map[string]*core.BranchVersion {
+	byID := make(map[string]*core.BranchVersion, len(versions))
+	for i := range versions {
+		byID[versions[i].ID] = &versions[i]
+	}
+	return byID
+}
+
+// prepareNewTailorJob clones job, assigns an ID when missing, and confirms no job exists with that ID.
+func prepareNewTailorJob(ctx context.Context, tx ReadTx, job *core.Job, activeJobs []core.Job) (*core.Job, error) {
+	nextJob := cloneValue(job)
+	if nextJob.ID == "" {
+		nextJob.ID = core.GenerateID("job")
+	}
+	if _, exists := findJobInSlice(activeJobs, nextJob.ID); exists {
+		return nil, core.ErrConflict
+	}
+	if existing, err := tx.Job(ctx, nextJob.ID); err == nil && existing != nil {
+		return nil, core.ErrConflict
+	} else if err != nil && !errors.Is(err, core.ErrNotFound) {
+		return nil, err
+	}
+	return nextJob, nil
+}
+
+// prepareNewTailorVersion clones version, assigns an ID when missing, and confirms no version exists with that ID.
+func prepareNewTailorVersion(ctx context.Context, tx ReadTx, version *core.BranchVersion, versionMap map[string]*core.BranchVersion) (*core.BranchVersion, error) {
+	nextVer := cloneValue(version)
+	if nextVer.ID == "" {
+		nextVer.ID = core.GenerateID("ver")
+	}
+	if _, exists := versionMap[nextVer.ID]; exists {
+		return nil, core.ErrConflict
+	}
+	if existing, err := tx.Version(ctx, nextVer.ID); err == nil && existing != nil {
+		return nil, core.ErrConflict
+	} else if err != nil && !errors.Is(err, core.ErrNotFound) {
+		return nil, err
+	}
+	return nextVer, nil
+}
+
+// ensureNoActiveProcessingJob rejects submission when branchID already has a non-expired processing job.
+func ensureNoActiveProcessingJob(activeJobs []core.Job, branchID string, now time.Time) error {
+	for _, aj := range activeJobs {
+		if isJobForBranch(&aj, branchID) && aj.Status == core.JobStatusProcessing && isLeaseUnexpired(aj.LeaseExpiresAt, now) {
+			return fmt.Errorf("%w: branch %s already has an active processing job", core.ErrConflict, branchID)
+		}
+	}
+	return nil
+}
+
+// collectSupersededTailorWork fails expired leases and cancels superseded pending jobs on branchID alongside linked versions.
+func collectSupersededTailorWork(
+	branchID string,
+	activeJobs []core.Job,
+	versionMap map[string]*core.BranchVersion,
+	now time.Time,
+) ([]*core.BranchVersion, []*core.Job, []core.ReleasedReservation) {
+	var (
+		modVersions []*core.BranchVersion
+		modJobs     []*core.Job
+		released    []core.ReleasedReservation
+	)
+	for i := range activeJobs {
+		aj := &activeJobs[i]
+		if !isJobForBranch(aj, branchID) {
+			continue
+		}
+		var (
+			jobStatus  core.JobStatus
+			verStatus  core.VersionStatus
+			reason     string
+			clearLease bool
+		)
+		switch {
+		case aj.Status == core.JobStatusProcessing && !isLeaseUnexpired(aj.LeaseExpiresAt, now):
+			jobStatus, verStatus, reason, clearLease = core.JobStatusFailed, core.VersionStatusFailed, "worker lease expired", false
+		case aj.Status == core.JobStatusPending:
+			jobStatus, verStatus, reason, clearLease = core.JobStatusCancelled, core.VersionStatusCancelled, "superseded by newer pending version", true
+		default:
+			continue
+		}
+		var linkedVer *core.BranchVersion
+		if aj.Tailor != nil {
+			linkedVer = versionMap[aj.Tailor.VersionID]
+		}
+		cp := cloneValue(*aj)
+		if rel := failJobAndVersion(&cp, linkedVer, jobStatus, verStatus, reason, now, clearLease); rel != nil {
+			released = append(released, *rel)
+		}
+		modJobs = append(modJobs, &cp)
+		if linkedVer != nil {
+			modVersions = append(modVersions, linkedVer)
+		}
+	}
+	return modVersions, modJobs, released
+}
+
+// populateTailorSubmission fills normalized pending fields on nextVer and nextJob before persistence.
+func populateTailorSubmission(
+	br *core.Branch,
+	userID, branchID string,
+	versions []core.BranchVersion,
+	nextJob *core.Job,
+	nextVer *core.BranchVersion,
+	opts core.PendingJobOptions,
+	now time.Time,
+) {
+	_, _, ttl := resolvePendingLimits(opts)
+	epoch := br.Epoch
+	if epoch <= 0 {
+		epoch = 1
+	}
+
+	nextVer.UserID = userID
+	nextVer.BranchID = branchID
+	nextVer.JobID = nextJob.ID
+	nextVer.VersionNumber = nextVersionNumber(versions)
+	nextVer.BranchEpoch = epoch
+	nextVer.Status = core.VersionStatusPending
+	if nextVer.CreatedAt.IsZero() {
+		nextVer.CreatedAt = now
+	}
+	nextVer.UpdatedAt = now
+	nextVer.CompletedAt = nil
+
+	nextJob.Kind = core.JobKindBranchTailor
+	nextJob.UserID = userID
+	nextJob.Status = core.JobStatusPending
+	nextJob.Tailor = &core.BranchTailorSpec{
+		BranchID:    branchID,
+		VersionID:   nextVer.ID,
+		BranchEpoch: epoch,
+	}
+	nextJob.PDF = nil
+	if nextJob.CreatedAt.IsZero() {
+		nextJob.CreatedAt = now
+	}
+	nextJob.UpdatedAt = now
+	if nextJob.ExpiresAt == nil {
+		exp := now.Add(ttl)
+		nextJob.ExpiresAt = &exp
+	}
+	clearJobLeaseFields(nextJob)
+	nextJob.NextRetryAt = nil
+}
+
+// persistTailorSubmission writes superseded records followed by the new pending version and job.
+func persistTailorSubmission(
+	ctx context.Context,
+	tx Tx,
+	modVersions []*core.BranchVersion,
+	modJobs []*core.Job,
+	nextVer *core.BranchVersion,
+	nextJob *core.Job,
+) error {
+	for _, mv := range modVersions {
+		if err := tx.PutVersion(ctx, mv); err != nil {
+			return err
+		}
+	}
+	for _, mj := range modJobs {
+		if err := tx.PutJob(ctx, mj); err != nil {
+			return err
+		}
+	}
+	if err := tx.PutVersion(ctx, nextVer); err != nil {
+		return err
+	}
+	return tx.PutJob(ctx, nextJob)
 }
 
 // SubmitPDFParse atomically checks raw-text size and pending admission caps and inserts a pdf_parse Job.
@@ -253,7 +339,7 @@ func (j *Jobs) SubmitPDFParse(ctx context.Context, job *core.Job, opts core.Pend
 		if toSave.ID == "" {
 			toSave.ID = core.GenerateID("pdf")
 		}
-		if existing, err := tx.GetJob(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Job(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
@@ -355,7 +441,7 @@ func (j *Jobs) CancelJob(ctx context.Context, userID, jobID, reason string) (*co
 
 	var out *core.Job
 	err := j.store.backend.Write(ctx, func(tx Tx) error {
-		job, err := tx.GetJob(ctx, jobID)
+		job, err := tx.Job(ctx, jobID)
 		if err != nil {
 			return err
 		}
@@ -368,7 +454,7 @@ func (j *Jobs) CancelJob(ctx context.Context, userID, jobID, reason string) (*co
 
 		var ver *core.BranchVersion
 		if job.Kind == core.JobKindBranchTailor && job.Tailor != nil && job.Tailor.VersionID != "" {
-			ver, err = tx.GetVersion(ctx, job.Tailor.VersionID)
+			ver, err = tx.Version(ctx, job.Tailor.VersionID)
 			if err != nil && !errors.Is(err, core.ErrNotFound) {
 				return err
 			}
@@ -401,7 +487,7 @@ func (j *Jobs) CancelBranchVersion(ctx context.Context, userID, branchID, versio
 		outJob *core.Job
 	)
 	err := j.store.backend.Write(ctx, func(tx Tx) error {
-		ver, err := tx.GetVersion(ctx, versionID)
+		ver, err := tx.Version(ctx, versionID)
 		if err != nil {
 			return err
 		}
@@ -410,7 +496,7 @@ func (j *Jobs) CancelBranchVersion(ctx context.Context, userID, branchID, versio
 		}
 		var job *core.Job
 		if ver.JobID != "" {
-			job, err = tx.GetJob(ctx, ver.JobID)
+			job, err = tx.Job(ctx, ver.JobID)
 			if err != nil && !errors.Is(err, core.ErrNotFound) {
 				return err
 			}
@@ -491,11 +577,11 @@ func (j *Jobs) ClaimNext(ctx context.Context, req core.ClaimJobRequest) (*core.J
 			ver *core.BranchVersion
 		)
 		if winner.Kind == core.JobKindBranchTailor && winner.Tailor != nil {
-			br, err = tx.GetBranch(ctx, winner.Tailor.BranchID)
+			br, err = tx.Branch(ctx, winner.Tailor.BranchID)
 			if err != nil && !errors.Is(err, core.ErrNotFound) {
 				return err
 			}
-			ver, err = tx.GetVersion(ctx, winner.Tailor.VersionID)
+			ver, err = tx.Version(ctx, winner.Tailor.VersionID)
 			if err != nil && !errors.Is(err, core.ErrNotFound) {
 				return err
 			}
@@ -545,7 +631,7 @@ func (j *Jobs) RenewLease(ctx context.Context, jobID, claimedBy string, leaseExp
 	}
 
 	return j.store.backend.Write(ctx, func(tx Tx) error {
-		job, err := tx.GetJob(ctx, jobID)
+		job, err := tx.Job(ctx, jobID)
 		if err != nil {
 			return err
 		}
@@ -566,7 +652,7 @@ func (j *Jobs) RequeueForRetry(ctx context.Context, jobID, claimedBy string, nex
 	}
 
 	return j.store.backend.Write(ctx, func(tx Tx) error {
-		job, err := tx.GetJob(ctx, jobID)
+		job, err := tx.Job(ctx, jobID)
 		if err != nil {
 			return err
 		}
@@ -580,7 +666,7 @@ func (j *Jobs) RequeueForRetry(ctx context.Context, jobID, claimedBy string, nex
 
 		var ver *core.BranchVersion
 		if job.Kind == core.JobKindBranchTailor && job.Tailor != nil && job.Tailor.VersionID != "" {
-			ver, err = tx.GetVersion(ctx, job.Tailor.VersionID)
+			ver, err = tx.Version(ctx, job.Tailor.VersionID)
 			if err != nil && !errors.Is(err, core.ErrNotFound) {
 				return err
 			}
@@ -613,7 +699,7 @@ func (j *Jobs) CompleteBranchTailor(ctx context.Context, jobID, claimedBy string
 	}
 
 	return j.store.backend.Write(ctx, func(tx Tx) error {
-		job, err := tx.GetJob(ctx, jobID)
+		job, err := tx.Job(ctx, jobID)
 		if err != nil {
 			return err
 		}
@@ -624,14 +710,14 @@ func (j *Jobs) CompleteBranchTailor(ctx context.Context, jobID, claimedBy string
 			return fmt.Errorf("%w: job %s is not actively claimed by %q", core.ErrLeaseExpired, jobID, claimedBy)
 		}
 
-		br, err := tx.GetBranch(ctx, job.Tailor.BranchID)
+		br, err := tx.Branch(ctx, job.Tailor.BranchID)
 		if err != nil {
 			return err
 		}
 		if job.Tailor.BranchEpoch != br.Epoch {
 			return fmt.Errorf("%w: branch configuration or active version changed while job %s was processing", core.ErrConflict, jobID)
 		}
-		existingVer, err := tx.GetVersion(ctx, job.Tailor.VersionID)
+		existingVer, err := tx.Version(ctx, job.Tailor.VersionID)
 		if err != nil {
 			return err
 		}
@@ -639,7 +725,7 @@ func (j *Jobs) CompleteBranchTailor(ctx context.Context, jobID, claimedBy string
 			return fmt.Errorf("%w: cannot complete terminal version %s in %s state", core.ErrConflict, existingVer.ID, existingVer.Status)
 		}
 		if br.ActiveVersionID != nil && *br.ActiveVersionID != "" && *br.ActiveVersionID != existingVer.ID {
-			activeVer, aErr := tx.GetVersion(ctx, *br.ActiveVersionID)
+			activeVer, aErr := tx.Version(ctx, *br.ActiveVersionID)
 			if aErr != nil && !errors.Is(aErr, core.ErrNotFound) {
 				return aErr
 			}
@@ -698,7 +784,7 @@ func (j *Jobs) CompletePDFParse(ctx context.Context, jobID, claimedBy string, re
 	}
 
 	return j.store.backend.Write(ctx, func(tx Tx) error {
-		job, err := tx.GetJob(ctx, jobID)
+		job, err := tx.Job(ctx, jobID)
 		if err != nil {
 			return err
 		}
@@ -727,7 +813,7 @@ func (j *Jobs) FailClaimed(ctx context.Context, jobID, claimedBy, errMsg string)
 	}
 
 	return j.store.backend.Write(ctx, func(tx Tx) error {
-		job, err := tx.GetJob(ctx, jobID)
+		job, err := tx.Job(ctx, jobID)
 		if err != nil {
 			return err
 		}
@@ -736,7 +822,7 @@ func (j *Jobs) FailClaimed(ctx context.Context, jobID, claimedBy, errMsg string)
 		}
 		var ver *core.BranchVersion
 		if job.Kind == core.JobKindBranchTailor && job.Tailor != nil && job.Tailor.VersionID != "" {
-			ver, err = tx.GetVersion(ctx, job.Tailor.VersionID)
+			ver, err = tx.Version(ctx, job.Tailor.VersionID)
 			if err != nil && !errors.Is(err, core.ErrNotFound) {
 				return err
 			}
@@ -782,7 +868,12 @@ func (j *Jobs) CleanupCompletedJobs(ctx context.Context, userID string, olderTha
 
 	return j.store.backend.Write(ctx, func(tx Tx) error {
 		cutoff := j.store.now().Add(-olderThan)
-		jobs, err := tx.ListTerminalJobsBefore(ctx, userID, cutoff)
+		statuses := []core.JobStatus{
+			core.JobStatusCompleted,
+			core.JobStatusFailed,
+			core.JobStatusCancelled,
+		}
+		jobs, err := tx.ListJobsByUser(ctx, userID, statuses)
 		if err != nil {
 			return err
 		}
@@ -831,7 +922,7 @@ func (j *Jobs) sweepJobs(
 			cp := cloneValue(activeJobs[i])
 			matched = append(matched, &cp)
 			if cp.Kind == core.JobKindBranchTailor && cp.Tailor != nil && cp.Tailor.VersionID != "" {
-				ver, err := tx.GetVersion(ctx, cp.Tailor.VersionID)
+				ver, err := tx.Version(ctx, cp.Tailor.VersionID)
 				if err != nil && !errors.Is(err, core.ErrNotFound) {
 					return err
 				}

@@ -70,7 +70,7 @@ func (c *Career) Skill(ctx context.Context, userID, id string) (*core.Skill, err
 	}
 	var out *core.Skill
 	err := c.store.backend.Read(ctx, func(tx ReadTx) error {
-		sk, err := tx.GetSkill(ctx, id)
+		sk, err := tx.Skill(ctx, id)
 		if err == nil && sk != nil {
 			if sk.IsGlobal || sk.UserID == core.SystemUserID || sk.UserID == userID {
 				out = cloneValue(sk)
@@ -118,7 +118,7 @@ func (c *Career) CreateSkill(ctx context.Context, skill *core.Skill) error {
 			toSave.Slug = core.Slugify(toSave.Name)
 		}
 
-		if existing, err := tx.GetSkill(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Skill(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
@@ -127,7 +127,7 @@ func (c *Career) CreateSkill(ctx context.Context, skill *core.Skill) error {
 		var prof *core.Profile
 		if !toSave.IsGlobal && toSave.UserID != "" && toSave.UserID != core.SystemUserID {
 			var pErr error
-			prof, pErr = tx.GetProfile(ctx, toSave.UserID)
+			prof, pErr = tx.Profile(ctx, toSave.UserID)
 			if pErr != nil && !errors.Is(pErr, core.ErrNotFound) {
 				return pErr
 			}
@@ -154,7 +154,7 @@ func (c *Career) UpdateSkill(ctx context.Context, skill *core.Skill) error {
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetSkill(ctx, skill.ID)
+		existing, err := tx.Skill(ctx, skill.ID)
 		if err != nil {
 			return err
 		}
@@ -165,7 +165,7 @@ func (c *Career) UpdateSkill(ctx context.Context, skill *core.Skill) error {
 			return core.ErrForbidden
 		}
 
-		prof, pErr := tx.GetProfile(ctx, skill.UserID)
+		prof, pErr := tx.Profile(ctx, skill.UserID)
 		if pErr != nil && !errors.Is(pErr, core.ErrNotFound) {
 			return pErr
 		}
@@ -201,7 +201,7 @@ func (c *Career) DeleteSkill(ctx context.Context, userID, id string) error {
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetSkill(ctx, id)
+		existing, err := tx.Skill(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -212,7 +212,7 @@ func (c *Career) DeleteSkill(ctx context.Context, userID, id string) error {
 			return core.ErrForbidden
 		}
 
-		prof, pErr := tx.GetProfile(ctx, userID)
+		prof, pErr := tx.Profile(ctx, userID)
 		if pErr != nil && !errors.Is(pErr, core.ErrNotFound) {
 			return pErr
 		}
@@ -287,12 +287,12 @@ func (c *Career) CreateExperience(ctx context.Context, exp *core.WorkExperience)
 		toSave := cloneValue(exp)
 		ensureEntityIDs(&toSave.ID, &toSave.ShortID, "exp", now, &toSave.CreatedAt, &toSave.UpdatedAt)
 
-		if existing, err := tx.GetExperience(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Experience(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
-		prof, err := tx.GetProfile(ctx, toSave.UserID)
+		prof, err := tx.Profile(ctx, toSave.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -334,14 +334,14 @@ func (c *Career) UpdateExperience(ctx context.Context, exp *core.WorkExperience)
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetExperience(ctx, exp.ID)
+		existing, err := tx.Experience(ctx, exp.ID)
 		if err != nil {
 			return err
 		}
 		if existing.UserID != exp.UserID {
 			return core.ErrNotFound
 		}
-		prof, err := tx.GetProfile(ctx, exp.UserID)
+		prof, err := tx.Profile(ctx, exp.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -402,14 +402,14 @@ func (c *Career) DeleteExperience(ctx context.Context, userID, id string) error 
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetExperience(ctx, id)
+		existing, err := tx.Experience(ctx, id)
 		if err != nil {
 			return err
 		}
 		if existing.UserID != userID {
 			return core.ErrNotFound
 		}
-		prof, err := tx.GetProfile(ctx, userID)
+		prof, err := tx.Profile(ctx, userID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -492,12 +492,12 @@ func (c *Career) CreateProject(ctx context.Context, proj *core.Project) error {
 		toSave := cloneValue(proj)
 		ensureEntityIDs(&toSave.ID, &toSave.ShortID, "proj", now, &toSave.CreatedAt, &toSave.UpdatedAt)
 
-		if existing, err := tx.GetProject(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Project(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
-		prof, err := tx.GetProfile(ctx, toSave.UserID)
+		prof, err := tx.Profile(ctx, toSave.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -539,14 +539,14 @@ func (c *Career) UpdateProject(ctx context.Context, proj *core.Project) error {
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetProject(ctx, proj.ID)
+		existing, err := tx.Project(ctx, proj.ID)
 		if err != nil {
 			return err
 		}
 		if existing.UserID != proj.UserID {
 			return core.ErrNotFound
 		}
-		prof, err := tx.GetProfile(ctx, proj.UserID)
+		prof, err := tx.Profile(ctx, proj.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -607,14 +607,14 @@ func (c *Career) DeleteProject(ctx context.Context, userID, id string) error {
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetProject(ctx, id)
+		existing, err := tx.Project(ctx, id)
 		if err != nil {
 			return err
 		}
 		if existing.UserID != userID {
 			return core.ErrNotFound
 		}
-		prof, err := tx.GetProfile(ctx, userID)
+		prof, err := tx.Profile(ctx, userID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -697,12 +697,12 @@ func (c *Career) CreateEducation(ctx context.Context, edu *core.Education) error
 		toSave := cloneValue(edu)
 		ensureEntityIDs(&toSave.ID, &toSave.ShortID, "edu", now, &toSave.CreatedAt, &toSave.UpdatedAt)
 
-		if existing, err := tx.GetEducation(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Education(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
-		prof, err := tx.GetProfile(ctx, toSave.UserID)
+		prof, err := tx.Profile(ctx, toSave.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -743,14 +743,14 @@ func (c *Career) UpdateEducation(ctx context.Context, edu *core.Education) error
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetEducation(ctx, edu.ID)
+		existing, err := tx.Education(ctx, edu.ID)
 		if err != nil {
 			return err
 		}
 		if existing.UserID != edu.UserID {
 			return core.ErrNotFound
 		}
-		prof, err := tx.GetProfile(ctx, edu.UserID)
+		prof, err := tx.Profile(ctx, edu.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -811,14 +811,14 @@ func (c *Career) DeleteEducation(ctx context.Context, userID, id string) error {
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetEducation(ctx, id)
+		existing, err := tx.Education(ctx, id)
 		if err != nil {
 			return err
 		}
 		if existing.UserID != userID {
 			return core.ErrNotFound
 		}
-		prof, err := tx.GetProfile(ctx, userID)
+		prof, err := tx.Profile(ctx, userID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -865,7 +865,7 @@ func (c *Career) Certification(ctx context.Context, userID, id string) (*core.Ce
 	}
 	var out *core.Certification
 	err := c.store.backend.Read(ctx, func(tx ReadTx) error {
-		cert, err := tx.GetCertification(ctx, id)
+		cert, err := tx.Certification(ctx, id)
 		if err == nil && cert != nil && cert.UserID == userID {
 			out = cloneValue(cert)
 			return nil
@@ -900,12 +900,12 @@ func (c *Career) CreateCertification(ctx context.Context, cert *core.Certificati
 		toSave := cloneValue(cert)
 		ensureEntityIDs(&toSave.ID, &toSave.ShortID, "cert", now, &toSave.CreatedAt, &toSave.UpdatedAt)
 
-		if existing, err := tx.GetCertification(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Certification(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
-		prof, err := tx.GetProfile(ctx, toSave.UserID)
+		prof, err := tx.Profile(ctx, toSave.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -928,14 +928,14 @@ func (c *Career) UpdateCertification(ctx context.Context, cert *core.Certificati
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetCertification(ctx, cert.ID)
+		existing, err := tx.Certification(ctx, cert.ID)
 		if err != nil {
 			return err
 		}
 		if existing.UserID != cert.UserID {
 			return core.ErrNotFound
 		}
-		prof, err := tx.GetProfile(ctx, cert.UserID)
+		prof, err := tx.Profile(ctx, cert.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -966,14 +966,14 @@ func (c *Career) DeleteCertification(ctx context.Context, userID, id string) err
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetCertification(ctx, id)
+		existing, err := tx.Certification(ctx, id)
 		if err != nil {
 			return err
 		}
 		if existing.UserID != userID {
 			return core.ErrNotFound
 		}
-		prof, err := tx.GetProfile(ctx, userID)
+		prof, err := tx.Profile(ctx, userID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -1009,7 +1009,7 @@ func (c *Career) Fact(ctx context.Context, userID, id string) (*core.Fact, error
 	}
 	var out *core.Fact
 	err := c.store.backend.Read(ctx, func(tx ReadTx) error {
-		f, err := tx.GetFact(ctx, id)
+		f, err := tx.Fact(ctx, id)
 		if err == nil && f != nil && f.UserID == userID {
 			out = cloneValue(f)
 			return nil
@@ -1044,7 +1044,7 @@ func (c *Career) CreateFact(ctx context.Context, fact *core.Fact) error {
 		toSave := cloneValue(fact)
 		ensureEntityIDs(&toSave.ID, &toSave.ShortID, "fact", now, &toSave.CreatedAt, &toSave.UpdatedAt)
 
-		if existing, err := tx.GetFact(ctx, toSave.ID); err == nil && existing != nil {
+		if existing, err := tx.Fact(ctx, toSave.ID); err == nil && existing != nil {
 			return core.ErrConflict
 		} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
@@ -1052,7 +1052,7 @@ func (c *Career) CreateFact(ctx context.Context, fact *core.Fact) error {
 		if err := verifyFactOwnerTx(ctx, tx, toSave.UserID, toSave.OwnerType, toSave.OwnerID); err != nil {
 			return err
 		}
-		prof, err := tx.GetProfile(ctx, toSave.UserID)
+		prof, err := tx.Profile(ctx, toSave.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -1084,7 +1084,7 @@ func (c *Career) UpdateFact(ctx context.Context, fact *core.Fact) error {
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetFact(ctx, fact.ID)
+		existing, err := tx.Fact(ctx, fact.ID)
 		if err != nil {
 			return err
 		}
@@ -1094,7 +1094,7 @@ func (c *Career) UpdateFact(ctx context.Context, fact *core.Fact) error {
 		if err := verifyFactOwnerTx(ctx, tx, fact.UserID, fact.OwnerType, fact.OwnerID); err != nil {
 			return err
 		}
-		prof, err := tx.GetProfile(ctx, fact.UserID)
+		prof, err := tx.Profile(ctx, fact.UserID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -1135,14 +1135,14 @@ func (c *Career) DeleteFact(ctx context.Context, userID, id string) error {
 	}
 
 	return c.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetFact(ctx, id)
+		existing, err := tx.Fact(ctx, id)
 		if err != nil {
 			return err
 		}
 		if existing.UserID != userID {
 			return core.ErrNotFound
 		}
-		prof, err := tx.GetProfile(ctx, userID)
+		prof, err := tx.Profile(ctx, userID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}
@@ -1262,7 +1262,7 @@ func verifyFactOwnerTx(ctx context.Context, tx ReadTx, userID string, ownerType 
 	}
 	switch ownerType {
 	case core.OwnerTypeWorkExperience:
-		exp, err := tx.GetExperience(ctx, ownerID)
+		exp, err := tx.Experience(ctx, ownerID)
 		if err != nil {
 			return err
 		}
@@ -1270,7 +1270,7 @@ func verifyFactOwnerTx(ctx context.Context, tx ReadTx, userID string, ownerType 
 			return core.ErrNotFound
 		}
 	case core.OwnerTypeProject:
-		proj, err := tx.GetProject(ctx, ownerID)
+		proj, err := tx.Project(ctx, ownerID)
 		if err != nil {
 			return err
 		}
@@ -1278,7 +1278,7 @@ func verifyFactOwnerTx(ctx context.Context, tx ReadTx, userID string, ownerType 
 			return core.ErrNotFound
 		}
 	case core.OwnerTypeEducation:
-		edu, err := tx.GetEducation(ctx, ownerID)
+		edu, err := tx.Education(ctx, ownerID)
 		if err != nil {
 			return err
 		}
@@ -1344,7 +1344,7 @@ func groupFactsByOwner(facts []core.Fact, ownerType core.OwnerType) map[string][
 
 // findOwnedExperience resolves a work experience owned by userID by ID or ShortID.
 func findOwnedExperience(ctx context.Context, tx ReadTx, userID, id string) (*core.WorkExperience, error) {
-	if exp, err := tx.GetExperience(ctx, id); err == nil && exp != nil && exp.UserID == userID {
+	if exp, err := tx.Experience(ctx, id); err == nil && exp != nil && exp.UserID == userID {
 		return cloneValue(exp), nil
 	} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 		return nil, err
@@ -1364,7 +1364,7 @@ func findOwnedExperience(ctx context.Context, tx ReadTx, userID, id string) (*co
 
 // findOwnedProject resolves a project owned by userID by ID or ShortID.
 func findOwnedProject(ctx context.Context, tx ReadTx, userID, id string) (*core.Project, error) {
-	if proj, err := tx.GetProject(ctx, id); err == nil && proj != nil && proj.UserID == userID {
+	if proj, err := tx.Project(ctx, id); err == nil && proj != nil && proj.UserID == userID {
 		return cloneValue(proj), nil
 	} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 		return nil, err
@@ -1384,7 +1384,7 @@ func findOwnedProject(ctx context.Context, tx ReadTx, userID, id string) (*core.
 
 // findOwnedEducation resolves an education record owned by userID by ID or ShortID.
 func findOwnedEducation(ctx context.Context, tx ReadTx, userID, id string) (*core.Education, error) {
-	if edu, err := tx.GetEducation(ctx, id); err == nil && edu != nil && edu.UserID == userID {
+	if edu, err := tx.Education(ctx, id); err == nil && edu != nil && edu.UserID == userID {
 		return cloneValue(edu), nil
 	} else if err != nil && !errors.Is(err, core.ErrNotFound) {
 		return nil, err

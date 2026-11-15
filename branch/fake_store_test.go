@@ -134,11 +134,11 @@ func (s *testBranchStore) seedVersionInState(ctx context.Context, v *core.Branch
 	}
 
 	return s.backend.Write(ctx, func(tx store.Tx) error {
-		savedVer, err := tx.GetVersion(ctx, verID)
+		savedVer, err := tx.Version(ctx, verID)
 		if err != nil {
 			return err
 		}
-		savedJob, err := tx.GetJob(ctx, jobID)
+		savedJob, err := tx.Job(ctx, jobID)
 		if err != nil {
 			return err
 		}

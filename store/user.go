@@ -21,7 +21,7 @@ func (u *Users) User(ctx context.Context, id string) (*core.User, error) {
 	}
 	var out *core.User
 	err := u.store.backend.Read(ctx, func(tx ReadTx) error {
-		usr, getErr := tx.GetUser(ctx, id)
+		usr, getErr := tx.User(ctx, id)
 		if getErr != nil {
 			return getErr
 		}
@@ -38,7 +38,7 @@ func (u *Users) UpsertUser(ctx context.Context, user *core.User) error {
 	}
 
 	return u.store.backend.Write(ctx, func(tx Tx) error {
-		existing, err := tx.GetUser(ctx, user.ID)
+		existing, err := tx.User(ctx, user.ID)
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
 			return err
 		}

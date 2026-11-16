@@ -27,37 +27,15 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// Default tenant quota ceilings and asynchronous job admission bounds applied when Config limits are unset.
+// Default tenant quota ceilings and asynchronous job admission bounds applied when limits are unset.
 const (
-	// defaultDailyRequestLimit caps daily LLM requests per user when Config.DailyRequestLimit is zero or negative.
+	// defaultDailyRequestLimit caps daily LLM requests per user when WithDailyRequestLimit is unset or non-positive.
 	defaultDailyRequestLimit = 50
-	// defaultMonthlyTokenLimit caps monthly LLM tokens per user when Config.MonthlyTokenLimit is zero or negative.
+	// defaultMonthlyTokenLimit caps monthly LLM tokens per user when WithMonthlyTokenLimit is unset or non-positive.
 	defaultMonthlyTokenLimit = 1000000
-	// defaultCleanupTimeout bounds detached quota-release contexts when Config.CleanupTimeout is zero or negative.
+	// defaultCleanupTimeout bounds detached quota-release contexts when WithCleanupTimeout is unset or non-positive.
 	defaultCleanupTimeout = 10 * time.Second
 )
-
-// Config defines the dependencies required to construct a branch Service.
-type Config struct {
-	Branches            Store
-	Jobs                JobStore
-	Profiles            ProfileReader
-	Presets             PresetReader
-	Templates           TemplateReader
-	Quotas              QuotaManager
-	JobNotifier         core.JobNotifier
-	Validator           ProvenanceValidator
-	Renderer            TemplateRenderer
-	Generator           Generator
-	PromptCompiler      PromptCompiler
-	Logger              *slog.Logger
-	DailyRequestLimit   int
-	MonthlyTokenLimit   int
-	MaxPendingPerTenant int
-	JobTTL              time.Duration
-	CleanupTimeout      time.Duration
-	Clock               func() time.Time
-}
 
 // Service manages resume branch lifecycles, version generation, gap analysis, and ATS scoring.
 type Service struct {
@@ -83,54 +61,23 @@ type Service struct {
 	atsInFlight         map[string]bool
 }
 
-// New constructs a branch Service with the supplied configuration and dependencies.
-func New(cfg Config) *Service {
-	dailyLimit := cfg.DailyRequestLimit
-	if dailyLimit <= 0 {
-		dailyLimit = defaultDailyRequestLimit
-	}
-	monthlyLimit := cfg.MonthlyTokenLimit
-	if monthlyLimit <= 0 {
-		monthlyLimit = defaultMonthlyTokenLimit
-	}
-	maxPending := cfg.MaxPendingPerTenant
-	if maxPending <= 0 {
-		maxPending = core.DefaultMaxPendingPerTenant
-	}
-	jobTTL := cfg.JobTTL
-	if jobTTL <= 0 {
-		jobTTL = core.DefaultJobTTL
-	}
-	cleanupTimeout := cfg.CleanupTimeout
-	if cleanupTimeout <= 0 {
-		cleanupTimeout = defaultCleanupTimeout
-	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = time.Now
-	}
-
-	return &Service{
-		branches:            cfg.Branches,
-		jobs:                cfg.Jobs,
-		profiles:            cfg.Profiles,
-		presets:             cfg.Presets,
-		templates:           cfg.Templates,
-		quotas:              cfg.Quotas,
-		jobNotifier:         cfg.JobNotifier,
-		validator:           cfg.Validator,
-		renderer:            cfg.Renderer,
-		generator:           cfg.Generator,
-		promptCompiler:      cfg.PromptCompiler,
-		logger:              cfg.Logger,
-		dailyRequestLimit:   dailyLimit,
-		monthlyTokenLimit:   monthlyLimit,
-		maxPendingPerTenant: maxPending,
-		jobTTL:              jobTTL,
-		cleanupTimeout:      cleanupTimeout,
-		clock:               clock,
+// New constructs a branch Service configured with default bounds and any supplied functional options.
+func New(opts ...Option) *Service {
+	s := &Service{
+		dailyRequestLimit:   defaultDailyRequestLimit,
+		monthlyTokenLimit:   defaultMonthlyTokenLimit,
+		maxPendingPerTenant: core.DefaultMaxPendingPerTenant,
+		jobTTL:              core.DefaultJobTTL,
+		cleanupTimeout:      defaultCleanupTimeout,
+		clock:               time.Now,
 		atsInFlight:         make(map[string]bool),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 // now returns the current UTC timestamp from the configured service clock.

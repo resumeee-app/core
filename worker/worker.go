@@ -20,17 +20,17 @@ import (
 	"github.com/resumeee-app/resumeee-core"
 )
 
-// Default pool sizing, polling, retry, lease, and shutdown bounds applied when Config omits explicit values.
+// Default pool sizing, polling, retry, lease, and shutdown bounds applied when options omit explicit values.
 const (
-	// defaultConcurrency sets the maximum simultaneous in-flight jobs when Config.Concurrency is zero or negative.
+	// defaultConcurrency sets the maximum simultaneous in-flight jobs when WithConcurrency is unset or non-positive.
 	defaultConcurrency = 4
 	// defaultMaxConcurrentPerTenant caps simultaneous in-flight jobs per tenant when unset.
 	defaultMaxConcurrentPerTenant = 2
-	// defaultPollInterval controls fallback store polling cadence when Config.PollInterval is unset.
+	// defaultPollInterval controls fallback store polling cadence when WithPollInterval is unset.
 	defaultPollInterval = 1 * time.Second
-	// defaultSweepInterval controls periodic TTL and stale lease sweeps when Config.SweepInterval is unset.
+	// defaultSweepInterval controls periodic TTL and stale lease sweeps when WithSweepInterval is unset.
 	defaultSweepInterval = 15 * time.Second
-	// defaultMaxAttempts sets total execution attempts for transient failures when Config.MaxAttempts is unset.
+	// defaultMaxAttempts sets total execution attempts for transient failures when WithMaxAttempts is unset.
 	defaultMaxAttempts = 3
 	// defaultRetryBaseDelay sets initial exponential backoff before retrying a transient failure.
 	defaultRetryBaseDelay = 250 * time.Millisecond
@@ -44,35 +44,6 @@ const (
 
 // ErrPoolClosed indicates the worker pool is nil or no longer accepting work.
 var ErrPoolClosed = errors.New("worker pool closed")
-
-// Config specifies construction parameters and dependencies for a direct-store claiming worker Pool.
-type Config struct {
-	Concurrency            int
-	MaxConcurrentPerTenant int
-	PollInterval           time.Duration
-	SweepInterval          time.Duration
-	LeaseDuration          time.Duration
-	LeaseRenewInterval     time.Duration
-	MaxAttempts            int
-	RetryBaseDelay         time.Duration
-	MaxRetryDelay          time.Duration
-	ShutdownTimeout        time.Duration
-	CleanupTimeout         time.Duration
-	WorkerID               string
-	Clock                  func() time.Time
-	Jobs                   JobStore
-	Branches               BranchReader
-	Profiles               ProfileReader
-	Presets                PresetReader
-	Templates              TemplateReader
-	Quotas                 QuotaCommitter
-	ResumeExtractor        ResumeExtractor
-	LLMTimeout             time.Duration
-	Generator              Generator
-	Validator              ProvenanceValidator
-	Renderer               TemplateRenderer
-	Logger                 *slog.Logger
-}
 
 // Pool claims persisted pending core.Job records directly from a JobStore,
 // enforcing global and per-tenant concurrency limits, lease heartbeats, bounded retries, and periodic sweeps.
@@ -129,96 +100,41 @@ type Pool struct {
 	renderer        TemplateRenderer
 }
 
-// New constructs a direct-store claiming worker Pool configured with cfg.
-func New(cfg Config) *Pool {
-	concurrency := cfg.Concurrency
-	if concurrency <= 0 {
-		concurrency = defaultConcurrency
-	}
-	maxConcurrent := cfg.MaxConcurrentPerTenant
-	if maxConcurrent <= 0 {
-		maxConcurrent = defaultMaxConcurrentPerTenant
-	}
-	pollInterval := cfg.PollInterval
-	if pollInterval <= 0 {
-		pollInterval = defaultPollInterval
-	}
-	sweepInterval := cfg.SweepInterval
-	if sweepInterval <= 0 {
-		sweepInterval = defaultSweepInterval
-	}
-	leaseDuration := cfg.LeaseDuration
-	if leaseDuration <= 0 {
-		leaseDuration = core.DefaultLeaseDuration
-	}
-	leaseRenewInterval := cfg.LeaseRenewInterval
-	if leaseRenewInterval <= 0 {
-		leaseRenewInterval = leaseDuration / 3
-		if leaseRenewInterval <= 0 {
-			leaseRenewInterval = time.Millisecond
-		}
-	}
-	maxAttempts := cfg.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = defaultMaxAttempts
-	}
-	retryBaseDelay := cfg.RetryBaseDelay
-	if retryBaseDelay <= 0 {
-		retryBaseDelay = defaultRetryBaseDelay
-	}
-	maxRetryDelay := cfg.MaxRetryDelay
-	if maxRetryDelay <= 0 {
-		maxRetryDelay = defaultMaxRetryDelay
-	}
-	shutdownTimeout := cfg.ShutdownTimeout
-	if shutdownTimeout <= 0 {
-		shutdownTimeout = defaultShutdownTimeout
-	}
-	cleanupTimeout := cfg.CleanupTimeout
-	if cleanupTimeout <= 0 {
-		cleanupTimeout = defaultCleanupTimeout
-	}
-	workerID := cfg.WorkerID
-	if workerID == "" {
-		workerID = "worker-" + uuid.NewString()[:8]
-	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = time.Now
-	}
-
-	return &Pool{
-		concurrency:            concurrency,
-		maxConcurrentPerTenant: maxConcurrent,
-		pollInterval:           pollInterval,
-		sweepInterval:          sweepInterval,
-		leaseDuration:          leaseDuration,
-		leaseRenewInterval:     leaseRenewInterval,
-		maxAttempts:            maxAttempts,
-		retryBaseDelay:         retryBaseDelay,
-		maxRetryDelay:          maxRetryDelay,
-		shutdownTimeout:        shutdownTimeout,
-		cleanupTimeout:         cleanupTimeout,
-		workerID:               workerID,
-		clock:                  clock,
+// New constructs a direct-store claiming worker Pool configured with default bounds and any supplied functional options.
+func New(opts ...Option) *Pool {
+	p := &Pool{
+		concurrency:            defaultConcurrency,
+		maxConcurrentPerTenant: defaultMaxConcurrentPerTenant,
+		pollInterval:           defaultPollInterval,
+		sweepInterval:          defaultSweepInterval,
+		leaseDuration:          core.DefaultLeaseDuration,
+		maxAttempts:            defaultMaxAttempts,
+		retryBaseDelay:         defaultRetryBaseDelay,
+		maxRetryDelay:          defaultMaxRetryDelay,
+		shutdownTimeout:        defaultShutdownTimeout,
+		cleanupTimeout:         defaultCleanupTimeout,
+		clock:                  time.Now,
 		retryTimers:            make(map[uint64]*time.Timer),
 		stoppedCh:              make(chan struct{}),
 		lastServedSeq:          make(map[string]uint64),
 		wakeupCh:               make(chan struct{}, 1),
 		slotFreedCh:            make(chan struct{}, 1),
-		logger:                 cfg.Logger,
-		jobs:                   cfg.Jobs,
-		branches:               cfg.Branches,
-		profiles:               cfg.Profiles,
-		presets:                cfg.Presets,
-		templates:              cfg.Templates,
-		quotas:                 cfg.Quotas,
-		resumeExtractor:        cfg.ResumeExtractor,
-		llmTimeout:             cfg.LLMTimeout,
-		generator:              cfg.Generator,
-		validator:              cfg.Validator,
-		renderer:               cfg.Renderer,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(p)
+		}
+	}
+	if p.leaseRenewInterval <= 0 {
+		p.leaseRenewInterval = p.leaseDuration / 3
+		if p.leaseRenewInterval <= 0 {
+			p.leaseRenewInterval = time.Millisecond
+		}
+	}
+	if p.workerID == "" {
+		p.workerID = "worker-" + uuid.NewString()[:8]
+	}
+	return p
 }
 
 // now returns the current UTC timestamp from the pool's configured clock.

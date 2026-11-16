@@ -256,12 +256,12 @@ func TestService_AnalyzeGaps_Telemetry(t *testing.T) {
 				err:     tc.genErr,
 			}
 
-			svc := branch.New(branch.Config{
-				Branches:  env.branchRepo,
-				Profiles:  env.profileRepo,
-				Quotas:    spyQuota,
-				Generator: stubLLM,
-			})
+			svc := branch.New(
+				branch.WithBranches(env.branchRepo),
+				branch.WithProfiles(env.profileRepo),
+				branch.WithQuotas(spyQuota),
+				branch.WithGenerator(stubLLM),
+			)
 
 			report, err := svc.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
 			if tc.wantErr {
@@ -506,12 +506,12 @@ func TestService_SimulateATS_Telemetry(t *testing.T) {
 				atsResp: tc.atsResp,
 				atsErr:  tc.atsErr,
 			}
-			svc := branch.New(branch.Config{
-				Branches:  branchStore,
-				Profiles:  env.profileRepo,
-				Quotas:    spyQuota,
-				Generator: sim,
-			})
+			svc := branch.New(
+				branch.WithBranches(branchStore),
+				branch.WithProfiles(env.profileRepo),
+				branch.WithQuotas(spyQuota),
+				branch.WithGenerator(sim),
+			)
 
 			score, err := svc.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 				VersionID: verID,
@@ -556,12 +556,12 @@ func TestService_GenerateVersion_PreLLMReleaseZeroTelemetry(t *testing.T) {
 	t.Run("SubmitBranchTailor failure passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 		spyQuota := &spyQuotaRepo{}
-		svc := branch.New(branch.Config{
-			Branches: env.branchRepo,
-			Jobs:     &failingSubmitBranchTailorStore{JobStore: env.jobRepo, submitErr: core.ErrPendingLimitExceeded},
-			Profiles: env.profileRepo,
-			Quotas:   spyQuota,
-		})
+		svc := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithJobs(&failingSubmitBranchTailorStore{JobStore: env.jobRepo, submitErr: core.ErrPendingLimitExceeded}),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithQuotas(spyQuota),
+		)
 
 		if _, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID); !errors.Is(err, core.ErrPendingLimitExceeded) {
 			t.Fatalf("expected ErrPendingLimitExceeded, got %v", err)
@@ -580,12 +580,12 @@ func TestService_GenerateVersion_PreLLMReleaseZeroTelemetry(t *testing.T) {
 	t.Run("CancelVersion passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 		spyQuota := &spyQuotaRepo{}
-		svc := branch.New(branch.Config{
-			Branches: env.branchRepo,
-			Jobs:     env.jobRepo,
-			Profiles: env.profileRepo,
-			Quotas:   spyQuota,
-		})
+		svc := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithJobs(env.jobRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithQuotas(spyQuota),
+		)
 
 		ver, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID)
 		if err != nil {
@@ -695,15 +695,15 @@ func runConcurrentTelemetryRace(
 	branchStore := st.Branches()
 	profileStore := st.Profiles()
 	quotaStore := st.Quotas()
-	svc := branch.New(branch.Config{
-		Branches:          branchStore,
-		Jobs:              st.Jobs(),
-		Profiles:          profileStore,
-		Quotas:            quotaStore,
-		Generator:         &concurrentTelemetryGenerator{},
-		DailyRequestLimit: 100,
-		MonthlyTokenLimit: 1000000,
-	})
+	svc := branch.New(
+		branch.WithBranches(branchStore),
+		branch.WithJobs(st.Jobs()),
+		branch.WithProfiles(profileStore),
+		branch.WithQuotas(quotaStore),
+		branch.WithGenerator(&concurrentTelemetryGenerator{}),
+		branch.WithDailyRequestLimit(100),
+		branch.WithMonthlyTokenLimit(1000000),
+	)
 
 	type workerJob struct {
 		userID     string
@@ -991,12 +991,12 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 			cancel: cancel,
 			err:    core.AttachLLMTelemetry(context.Canceled, core.LLMTelemetry{Provider: "openai", Model: "gpt-4o"}),
 		}
-		svc := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Quotas:    strictQuotas,
-			Generator: stub,
-		})
+		svc := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithQuotas(strictQuotas),
+			branch.WithGenerator(stub),
+		)
 
 		if _, err := svc.AnalyzeGaps(reqCtx, env.defaultUser, env.branchID); !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
@@ -1026,12 +1026,12 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 				},
 			},
 		}
-		svc := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Quotas:    strictQuotas,
-			Generator: stub,
-		})
+		svc := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithQuotas(strictQuotas),
+			branch.WithGenerator(stub),
+		)
 
 		if _, err := svc.AnalyzeGaps(reqCtx, env.defaultUser, env.branchID); err != nil {
 			t.Fatalf("AnalyzeGaps failed: %v", err)
@@ -1069,12 +1069,12 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 				}
 			}
 
-			svc := branch.New(branch.Config{
-				Branches:  env.branchRepo,
-				Profiles:  env.profileRepo,
-				Quotas:    strictQuotas,
-				Generator: stub,
-			})
+			svc := branch.New(
+				branch.WithBranches(env.branchRepo),
+				branch.WithProfiles(env.profileRepo),
+				branch.WithQuotas(strictQuotas),
+				branch.WithGenerator(stub),
+			)
 
 			_, err := svc.SimulateATS(reqCtx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{VersionID: "ver-ats-cancel"})
 			if shouldFail && !errors.Is(err, context.Canceled) {
@@ -1104,16 +1104,16 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 		strictQuotas := &strictContextQuotaManager{inner: quotaStore}
 		reqCtx, cancel := context.WithCancel(context.Background())
 
-		svc := branch.New(branch.Config{
-			Branches: env.branchRepo,
-			Jobs: &cancelOnSubmitBranchTailorStore{
+		svc := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithJobs(&cancelOnSubmitBranchTailorStore{
 				JobStore: env.jobRepo,
 				cancel:   cancel,
 				err:      errors.New("db connection dropped"),
-			},
-			Profiles: env.profileRepo,
-			Quotas:   strictQuotas,
-		})
+			}),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithQuotas(strictQuotas),
+		)
 
 		if _, err := svc.GenerateVersion(reqCtx, env.defaultUser, env.branchID); err == nil {
 			t.Fatal("expected error from SubmitBranchTailor")

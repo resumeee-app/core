@@ -222,17 +222,17 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 	reg.Register(transportClient)
 	svc := llm.NewService(reg)
 
-	pool := worker.New(worker.Config{
-		Concurrency: 1,
-		Jobs:        env.jobRepo,
-		Branches:    env.branchRepo,
-		Profiles:    env.profileRepo,
-		Presets:     env.presetRepo,
-		Templates:   env.templateRepo,
-		Generator:   svc,
-		Validator:   env.validator,
-		Renderer:    env.renderer,
-	})
+	pool := worker.New(
+		worker.WithConcurrency(1),
+		worker.WithJobs(env.jobRepo),
+		worker.WithBranches(env.branchRepo),
+		worker.WithProfiles(env.profileRepo),
+		worker.WithPresets(env.presetRepo),
+		worker.WithTemplates(env.templateRepo),
+		worker.WithGenerator(svc),
+		worker.WithValidator(env.validator),
+		worker.WithRenderer(env.renderer),
+	)
 
 	pool.Start(ctx)
 	defer pool.Stop()
@@ -489,18 +489,18 @@ func runSanitizerPipelineVersion(ctx context.Context, t *testing.T, env *testWor
 	reg.Register(client)
 	svc := llm.NewService(reg)
 
-	pool := worker.New(worker.Config{
-		Concurrency:  1,
-		PollInterval: 10 * time.Millisecond,
-		Jobs:         env.jobRepo,
-		Branches:     env.branchRepo,
-		Profiles:     env.profileRepo,
-		Presets:      env.presetRepo,
-		Templates:    env.templateRepo,
-		Generator:    svc,
-		Validator:    env.validator,
-		Renderer:     env.renderer,
-	})
+	pool := worker.New(
+		worker.WithConcurrency(1),
+		worker.WithPollInterval(10*time.Millisecond),
+		worker.WithJobs(env.jobRepo),
+		worker.WithBranches(env.branchRepo),
+		worker.WithProfiles(env.profileRepo),
+		worker.WithPresets(env.presetRepo),
+		worker.WithTemplates(env.templateRepo),
+		worker.WithGenerator(svc),
+		worker.WithValidator(env.validator),
+		worker.WithRenderer(env.renderer),
+	)
 
 	pool.Start(ctx)
 	defer pool.Stop()

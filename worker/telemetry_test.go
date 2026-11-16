@@ -207,20 +207,20 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			},
 		}
 
-		pool := worker.New(worker.Config{
-			Concurrency:  1,
-			PollInterval: 10 * time.Millisecond,
-			MaxAttempts:  1,
-			Jobs:         st.Jobs(),
-			Branches:     st.Branches(),
-			Profiles:     st.Profiles(),
-			Presets:      st.Presets(),
-			Templates:    st.Templates(),
-			Quotas:       st.Quotas(),
-			Generator:    gen,
-			Validator:    provenance.New(),
-			Renderer:     renderer.New(),
-		})
+		pool := worker.New(
+			worker.WithConcurrency(1),
+			worker.WithPollInterval(10*time.Millisecond),
+			worker.WithMaxAttempts(1),
+			worker.WithJobs(st.Jobs()),
+			worker.WithBranches(st.Branches()),
+			worker.WithProfiles(st.Profiles()),
+			worker.WithPresets(st.Presets()),
+			worker.WithTemplates(st.Templates()),
+			worker.WithQuotas(st.Quotas()),
+			worker.WithGenerator(gen),
+			worker.WithValidator(provenance.New()),
+			worker.WithRenderer(renderer.New()),
+		)
 		pool.Start(ctx)
 		defer pool.Stop()
 		pool.Notify()
@@ -290,20 +290,20 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			},
 		}
 
-		pool := worker.New(worker.Config{
-			Concurrency:  1,
-			PollInterval: 10 * time.Millisecond,
-			MaxAttempts:  1,
-			Jobs:         st.Jobs(),
-			Branches:     st.Branches(),
-			Profiles:     st.Profiles(),
-			Presets:      st.Presets(),
-			Templates:    st.Templates(),
-			Quotas:       st.Quotas(),
-			Generator:    gen,
-			Validator:    provenance.New(),
-			Renderer:     renderer.New(),
-		})
+		pool := worker.New(
+			worker.WithConcurrency(1),
+			worker.WithPollInterval(10*time.Millisecond),
+			worker.WithMaxAttempts(1),
+			worker.WithJobs(st.Jobs()),
+			worker.WithBranches(st.Branches()),
+			worker.WithProfiles(st.Profiles()),
+			worker.WithPresets(st.Presets()),
+			worker.WithTemplates(st.Templates()),
+			worker.WithQuotas(st.Quotas()),
+			worker.WithGenerator(gen),
+			worker.WithValidator(provenance.New()),
+			worker.WithRenderer(renderer.New()),
+		)
 		pool.Start(ctx)
 		defer pool.Stop()
 		pool.Notify()
@@ -349,20 +349,20 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 		const verID = "ver-tel-3"
 		submitTelemetryTailorJob(ctx, t, st, "user-tailor-tel-3", br.ID, verID, rec.ID, core.TemplateStandardCleanID, "", "")
 
-		pool := worker.New(worker.Config{
-			Concurrency:  1,
-			PollInterval: 10 * time.Millisecond,
-			MaxAttempts:  1,
-			Jobs:         st.Jobs(),
-			Branches:     st.Branches(),
-			Profiles:     st.Profiles(),
-			Presets:      st.Presets(),
-			Templates:    st.Templates(),
-			Quotas:       st.Quotas(),
-			Generator:    &callbackLLM{},
-			Validator:    provenance.New(),
-			Renderer:     renderer.New(),
-		})
+		pool := worker.New(
+			worker.WithConcurrency(1),
+			worker.WithPollInterval(10*time.Millisecond),
+			worker.WithMaxAttempts(1),
+			worker.WithJobs(st.Jobs()),
+			worker.WithBranches(st.Branches()),
+			worker.WithProfiles(st.Profiles()),
+			worker.WithPresets(st.Presets()),
+			worker.WithTemplates(st.Templates()),
+			worker.WithQuotas(st.Quotas()),
+			worker.WithGenerator(&callbackLLM{}),
+			worker.WithValidator(provenance.New()),
+			worker.WithRenderer(renderer.New()),
+		)
 		pool.Start(ctx)
 		defer pool.Stop()
 		pool.Notify()
@@ -454,20 +454,20 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			gen := &mockLLM{
 				failErr: core.AttachLLMTelemetry(tc.baseErr, tc.telemetry),
 			}
-			pool := worker.New(worker.Config{
-				Concurrency:  1,
-				PollInterval: 10 * time.Millisecond,
-				MaxAttempts:  1,
-				Jobs:         st.Jobs(),
-				Branches:     st.Branches(),
-				Profiles:     st.Profiles(),
-				Presets:      st.Presets(),
-				Templates:    st.Templates(),
-				Quotas:       st.Quotas(),
-				Generator:    gen,
-				Validator:    provenance.New(),
-				Renderer:     renderer.New(),
-			})
+			pool := worker.New(
+				worker.WithConcurrency(1),
+				worker.WithPollInterval(10*time.Millisecond),
+				worker.WithMaxAttempts(1),
+				worker.WithJobs(st.Jobs()),
+				worker.WithBranches(st.Branches()),
+				worker.WithProfiles(st.Profiles()),
+				worker.WithPresets(st.Presets()),
+				worker.WithTemplates(st.Templates()),
+				worker.WithQuotas(st.Quotas()),
+				worker.WithGenerator(gen),
+				worker.WithValidator(provenance.New()),
+				worker.WithRenderer(renderer.New()),
+			)
 			pool.Start(ctx)
 			defer pool.Stop()
 			pool.Notify()
@@ -525,20 +525,20 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			Latency:    55 * time.Millisecond,
 			Usage:      core.TokenUsage{PromptTokens: 200, CompletionTokens: 100},
 		}
-		pool := worker.New(worker.Config{
-			Concurrency:  1,
-			PollInterval: 10 * time.Millisecond,
-			MaxAttempts:  1,
-			Jobs:         st.Jobs(),
-			Branches:     st.Branches(),
-			Profiles:     st.Profiles(),
-			Presets:      st.Presets(),
-			Templates:    st.Templates(),
-			Quotas:       st.Quotas(),
-			Generator:    &mockLLM{telemetry: wantTel},
-			Validator:    &failingValidator{err: errors.New("hallucinated claim")},
-			Renderer:     renderer.New(),
-		})
+		pool := worker.New(
+			worker.WithConcurrency(1),
+			worker.WithPollInterval(10*time.Millisecond),
+			worker.WithMaxAttempts(1),
+			worker.WithJobs(st.Jobs()),
+			worker.WithBranches(st.Branches()),
+			worker.WithProfiles(st.Profiles()),
+			worker.WithPresets(st.Presets()),
+			worker.WithTemplates(st.Templates()),
+			worker.WithQuotas(st.Quotas()),
+			worker.WithGenerator(&mockLLM{telemetry: wantTel}),
+			worker.WithValidator(&failingValidator{err: errors.New("hallucinated claim")}),
+			worker.WithRenderer(renderer.New()),
+		)
 		pool.Start(ctx)
 		defer pool.Stop()
 		pool.Notify()
@@ -594,20 +594,20 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			StatusCode: 200,
 			Latency:    70 * time.Millisecond,
 		}
-		pool := worker.New(worker.Config{
-			Concurrency:  1,
-			PollInterval: 10 * time.Millisecond,
-			MaxAttempts:  1,
-			Jobs:         &failingCompleteBranchStore{JobStore: st.Jobs(), completeErr: errors.New("disk full")},
-			Branches:     st.Branches(),
-			Profiles:     st.Profiles(),
-			Presets:      st.Presets(),
-			Templates:    st.Templates(),
-			Quotas:       st.Quotas(),
-			Generator:    &mockLLM{telemetry: wantTel},
-			Validator:    provenance.New(),
-			Renderer:     renderer.New(),
-		})
+		pool := worker.New(
+			worker.WithConcurrency(1),
+			worker.WithPollInterval(10*time.Millisecond),
+			worker.WithMaxAttempts(1),
+			worker.WithJobs(&failingCompleteBranchStore{JobStore: st.Jobs(), completeErr: errors.New("disk full")}),
+			worker.WithBranches(st.Branches()),
+			worker.WithProfiles(st.Profiles()),
+			worker.WithPresets(st.Presets()),
+			worker.WithTemplates(st.Templates()),
+			worker.WithQuotas(st.Quotas()),
+			worker.WithGenerator(&mockLLM{telemetry: wantTel}),
+			worker.WithValidator(provenance.New()),
+			worker.WithRenderer(renderer.New()),
+		)
 		pool.Start(ctx)
 		defer pool.Stop()
 		pool.Notify()
@@ -647,20 +647,20 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 		const verID = "ver-pre-err"
 		submitTelemetryTailorJob(ctx, t, st, userID, br.ID, verID, rec.ID, "missing-template-set-id", "", "")
 
-		pool := worker.New(worker.Config{
-			Concurrency:  1,
-			PollInterval: 10 * time.Millisecond,
-			MaxAttempts:  1,
-			Jobs:         st.Jobs(),
-			Branches:     st.Branches(),
-			Profiles:     st.Profiles(),
-			Presets:      st.Presets(),
-			Templates:    st.Templates(),
-			Quotas:       st.Quotas(),
-			Generator:    &mockLLM{},
-			Validator:    provenance.New(),
-			Renderer:     renderer.New(),
-		})
+		pool := worker.New(
+			worker.WithConcurrency(1),
+			worker.WithPollInterval(10*time.Millisecond),
+			worker.WithMaxAttempts(1),
+			worker.WithJobs(st.Jobs()),
+			worker.WithBranches(st.Branches()),
+			worker.WithProfiles(st.Profiles()),
+			worker.WithPresets(st.Presets()),
+			worker.WithTemplates(st.Templates()),
+			worker.WithQuotas(st.Quotas()),
+			worker.WithGenerator(&mockLLM{}),
+			worker.WithValidator(provenance.New()),
+			worker.WithRenderer(renderer.New()),
+		)
 		pool.Start(ctx)
 		defer pool.Stop()
 		pool.Notify()
@@ -704,15 +704,15 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			result:    &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Ada Lovelace"}},
 		}
 
-		pool := worker.New(worker.Config{
-			Concurrency:     1,
-			PollInterval:    10 * time.Millisecond,
-			MaxAttempts:     1,
-			Jobs:            st.Jobs(),
-			Quotas:          st.Quotas(),
-			ResumeExtractor: ext,
-			LLMTimeout:      5 * time.Second,
-		})
+		pool := worker.New(
+			worker.WithConcurrency(1),
+			worker.WithPollInterval(10*time.Millisecond),
+			worker.WithMaxAttempts(1),
+			worker.WithJobs(st.Jobs()),
+			worker.WithQuotas(st.Quotas()),
+			worker.WithResumeExtractor(ext),
+			worker.WithLLMTimeout(5*time.Second),
+		)
 		pool.Start(ctx)
 		defer pool.Stop()
 		pool.Notify()
@@ -759,15 +759,15 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			result:    &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Alan Turing"}},
 		}
 
-		pool := worker.New(worker.Config{
-			Concurrency:     1,
-			PollInterval:    10 * time.Millisecond,
-			MaxAttempts:     1,
-			Jobs:            st.Jobs(),
-			Quotas:          st.Quotas(),
-			ResumeExtractor: ext,
-			LLMTimeout:      5 * time.Second,
-		})
+		pool := worker.New(
+			worker.WithConcurrency(1),
+			worker.WithPollInterval(10*time.Millisecond),
+			worker.WithMaxAttempts(1),
+			worker.WithJobs(st.Jobs()),
+			worker.WithQuotas(st.Quotas()),
+			worker.WithResumeExtractor(ext),
+			worker.WithLLMTimeout(5*time.Second),
+		)
 		pool.Start(ctx)
 		defer pool.Stop()
 		pool.Notify()
@@ -847,15 +847,15 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			ext := &mockResumeExtractor{
 				failErr: core.AttachLLMTelemetry(tc.err, tc.telemetry),
 			}
-			pool := worker.New(worker.Config{
-				Concurrency:     1,
-				PollInterval:    10 * time.Millisecond,
-				MaxAttempts:     1,
-				Jobs:            st.Jobs(),
-				Quotas:          st.Quotas(),
-				ResumeExtractor: ext,
-				LLMTimeout:      5 * time.Second,
-			})
+			pool := worker.New(
+				worker.WithConcurrency(1),
+				worker.WithPollInterval(10*time.Millisecond),
+				worker.WithMaxAttempts(1),
+				worker.WithJobs(st.Jobs()),
+				worker.WithQuotas(st.Quotas()),
+				worker.WithResumeExtractor(ext),
+				worker.WithLLMTimeout(5*time.Second),
+			)
 			pool.Start(ctx)
 			defer pool.Stop()
 			pool.Notify()
@@ -904,15 +904,15 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			result:    &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Grace Hopper"}},
 		}
 
-		pool := worker.New(worker.Config{
-			Concurrency:     1,
-			PollInterval:    10 * time.Millisecond,
-			MaxAttempts:     1,
-			Jobs:            &failingCompletePDFStore{JobStore: st.Jobs(), completeErr: errors.New("write failed")},
-			Quotas:          st.Quotas(),
-			ResumeExtractor: ext,
-			LLMTimeout:      5 * time.Second,
-		})
+		pool := worker.New(
+			worker.WithConcurrency(1),
+			worker.WithPollInterval(10*time.Millisecond),
+			worker.WithMaxAttempts(1),
+			worker.WithJobs(&failingCompletePDFStore{JobStore: st.Jobs(), completeErr: errors.New("write failed")}),
+			worker.WithQuotas(st.Quotas()),
+			worker.WithResumeExtractor(ext),
+			worker.WithLLMTimeout(5*time.Second),
+		)
 		pool.Start(ctx)
 		defer pool.Stop()
 		pool.Notify()
@@ -1001,23 +1001,23 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 		},
 	}
 
-	pool := worker.New(worker.Config{
-		Concurrency:            4,
-		MaxConcurrentPerTenant: 2,
-		PollInterval:           10 * time.Millisecond,
-		MaxAttempts:            1,
-		Jobs:                   st.Jobs(),
-		Branches:               st.Branches(),
-		Profiles:               st.Profiles(),
-		Presets:                st.Presets(),
-		Templates:              st.Templates(),
-		Quotas:                 st.Quotas(),
-		ResumeExtractor:        ext,
-		Generator:              gen,
-		Validator:              provenance.New(),
-		Renderer:               renderer.New(),
-		LLMTimeout:             5 * time.Second,
-	})
+	pool := worker.New(
+		worker.WithConcurrency(4),
+		worker.WithMaxConcurrentPerTenant(2),
+		worker.WithPollInterval(10*time.Millisecond),
+		worker.WithMaxAttempts(1),
+		worker.WithJobs(st.Jobs()),
+		worker.WithBranches(st.Branches()),
+		worker.WithProfiles(st.Profiles()),
+		worker.WithPresets(st.Presets()),
+		worker.WithTemplates(st.Templates()),
+		worker.WithQuotas(st.Quotas()),
+		worker.WithResumeExtractor(ext),
+		worker.WithGenerator(gen),
+		worker.WithValidator(provenance.New()),
+		worker.WithRenderer(renderer.New()),
+		worker.WithLLMTimeout(5*time.Second),
+	)
 	pool.Start(ctx)
 
 	const tenantCount = 4

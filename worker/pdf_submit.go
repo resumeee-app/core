@@ -21,18 +21,97 @@ type QuotaReleaser interface {
 	ReleaseQuota(ctx context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error
 }
 
-// PDFSubmitConfig defines stores, admission bounds, TTL, and notification dependencies for SubmitPDFJob.
-type PDFSubmitConfig struct {
-	Jobs                   JobStore
-	Quotas                 PDFQuotaReserver
-	Notifier               core.JobNotifier
-	DefaultEstimatedTokens int
-	MaxPendingPerTenant    int
-	MaxGlobalPending       int
-	MaxRawTextBytes        int
-	JobTTL                 time.Duration
-	CleanupTimeout         time.Duration
-	Clock                  func() time.Time
+// PDFSubmitOption configures optional quota reservation, admission bounds, TTL, and notification settings on SubmitPDFJob.
+type PDFSubmitOption func(*pdfSubmitOptions)
+
+// pdfSubmitOptions holds resolved optional configuration parameters for SubmitPDFJob.
+type pdfSubmitOptions struct {
+	quotas              PDFQuotaReserver
+	notifier            core.JobNotifier
+	estimatedTokens     int
+	maxPendingPerTenant int
+	maxGlobalPending    int
+	maxRawTextBytes     int
+	ttl                 time.Duration
+	cleanupTimeout      time.Duration
+	clock               func() time.Time
+}
+
+// WithPDFQuotas configures optional quota reservation and release tracking for SubmitPDFJob.
+func WithPDFQuotas(quotas PDFQuotaReserver) PDFSubmitOption {
+	return func(o *pdfSubmitOptions) {
+		o.quotas = quotas
+	}
+}
+
+// WithPDFNotifier configures an optional worker pool wakeup notifier for SubmitPDFJob.
+func WithPDFNotifier(notifier core.JobNotifier) PDFSubmitOption {
+	return func(o *pdfSubmitOptions) {
+		o.notifier = notifier
+	}
+}
+
+// WithPDFEstimatedTokens overrides the estimated quota token reservation when tokens > 0.
+func WithPDFEstimatedTokens(tokens int) PDFSubmitOption {
+	return func(o *pdfSubmitOptions) {
+		if tokens > 0 {
+			o.estimatedTokens = tokens
+		}
+	}
+}
+
+// WithPDFMaxPendingPerTenant overrides the per-tenant queued/in-flight job cap when limit > 0.
+func WithPDFMaxPendingPerTenant(limit int) PDFSubmitOption {
+	return func(o *pdfSubmitOptions) {
+		if limit > 0 {
+			o.maxPendingPerTenant = limit
+		}
+	}
+}
+
+// WithPDFMaxGlobalPending sets an optional global queued/in-flight job cap when limit > 0.
+func WithPDFMaxGlobalPending(limit int) PDFSubmitOption {
+	return func(o *pdfSubmitOptions) {
+		if limit > 0 {
+			o.maxGlobalPending = limit
+		}
+	}
+}
+
+// WithPDFMaxRawTextBytes overrides the maximum accepted raw text byte payload when limit > 0.
+func WithPDFMaxRawTextBytes(limit int) PDFSubmitOption {
+	return func(o *pdfSubmitOptions) {
+		if limit > 0 {
+			o.maxRawTextBytes = limit
+		}
+	}
+}
+
+// WithPDFJobTTL overrides the job expiration duration when ttl > 0.
+func WithPDFJobTTL(ttl time.Duration) PDFSubmitOption {
+	return func(o *pdfSubmitOptions) {
+		if ttl > 0 {
+			o.ttl = ttl
+		}
+	}
+}
+
+// WithPDFCleanupTimeout overrides the detached quota-refund cleanup timeout when timeout > 0.
+func WithPDFCleanupTimeout(timeout time.Duration) PDFSubmitOption {
+	return func(o *pdfSubmitOptions) {
+		if timeout > 0 {
+			o.cleanupTimeout = timeout
+		}
+	}
+}
+
+// WithPDFClock overrides the wall clock function used by SubmitPDFJob when clock is non-nil.
+func WithPDFClock(clock func() time.Time) PDFSubmitOption {
+	return func(o *pdfSubmitOptions) {
+		if clock != nil {
+			o.clock = clock
+		}
+	}
 }
 
 // PDFJobSubmission specifies the candidate payload and quota ceiling parameters for a new PDF parse job.
@@ -48,9 +127,22 @@ type PDFJobSubmission struct {
 
 // SubmitPDFJob validates submission inputs, reserves quota when configured, persists a pending job under
 // atomic admission caps, refunds quota via a detached context on rejection, and wakes background workers.
-func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission) (*core.Job, error) {
-	if cfg.Jobs == nil {
+func SubmitPDFJob(ctx context.Context, jobs JobStore, sub PDFJobSubmission, opts ...PDFSubmitOption) (*core.Job, error) {
+	if jobs == nil {
 		return nil, fmt.Errorf("%w: job store is required", core.ErrValidation)
+	}
+	o := pdfSubmitOptions{
+		estimatedTokens:     defaultPDFExtractionTokens,
+		maxPendingPerTenant: core.DefaultMaxPendingPerTenant,
+		maxRawTextBytes:     core.DefaultMaxPDFRawTextBytes,
+		ttl:                 core.DefaultJobTTL,
+		cleanupTimeout:      defaultCleanupTimeout,
+		clock:               time.Now,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
 	}
 	userID := strings.TrimSpace(sub.UserID)
 	if userID == "" {
@@ -59,38 +151,15 @@ func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission
 	if strings.TrimSpace(sub.RawText) == "" {
 		return nil, fmt.Errorf("%w: raw text is required", core.ErrValidation)
 	}
-	maxRawTextBytes := cfg.MaxRawTextBytes
-	if maxRawTextBytes <= 0 {
-		maxRawTextBytes = core.DefaultMaxPDFRawTextBytes
-	}
-	if len(sub.RawText) > maxRawTextBytes {
-		return nil, fmt.Errorf("%w: raw text exceeds maximum allowed size of %d bytes", core.ErrValidation, maxRawTextBytes)
+	if len(sub.RawText) > o.maxRawTextBytes {
+		return nil, fmt.Errorf("%w: raw text exceeds maximum allowed size of %d bytes", core.ErrValidation, o.maxRawTextBytes)
 	}
 
-	estimatedTokens := cfg.DefaultEstimatedTokens
-	if estimatedTokens <= 0 {
-		estimatedTokens = defaultPDFExtractionTokens
-	}
-	maxPendingPerTenant := cfg.MaxPendingPerTenant
-	if maxPendingPerTenant <= 0 {
-		maxPendingPerTenant = core.DefaultMaxPendingPerTenant
-	}
-	ttl := cfg.JobTTL
-	if ttl <= 0 {
-		ttl = core.DefaultJobTTL
-	}
-	cleanupTimeout := cfg.CleanupTimeout
-	if cleanupTimeout <= 0 {
-		cleanupTimeout = defaultCleanupTimeout
-	}
-	now := time.Now().UTC()
-	if cfg.Clock != nil {
-		now = cfg.Clock().UTC()
-	}
+	now := o.clock().UTC()
 
 	var reservationID string
-	if cfg.Quotas != nil {
-		rec, err := cfg.Quotas.ReserveQuota(ctx, userID, core.OperationPDFParse, estimatedTokens, sub.DailyLimit, sub.MonthlyLimit)
+	if o.quotas != nil {
+		rec, err := o.quotas.ReserveQuota(ctx, userID, core.OperationPDFParse, o.estimatedTokens, sub.DailyLimit, sub.MonthlyLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +168,7 @@ func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission
 		}
 	}
 
-	expiresAt := now.Add(ttl)
+	expiresAt := now.Add(o.ttl)
 	job := &core.Job{
 		ID:            core.GenerateID("pdf"),
 		Kind:          core.JobKindPDFParse,
@@ -117,24 +186,24 @@ func SubmitPDFJob(ctx context.Context, cfg PDFSubmitConfig, sub PDFJobSubmission
 		UpdatedAt: now,
 	}
 
-	err := cfg.Jobs.SubmitPDFParse(ctx, job, core.PendingJobOptions{
-		MaxPendingPerTenant: maxPendingPerTenant,
-		MaxGlobalPending:    cfg.MaxGlobalPending,
-		MaxRawTextBytes:     maxRawTextBytes,
-		TTL:                 ttl,
+	err := jobs.SubmitPDFParse(ctx, job, core.PendingJobOptions{
+		MaxPendingPerTenant: o.maxPendingPerTenant,
+		MaxGlobalPending:    o.maxGlobalPending,
+		MaxRawTextBytes:     o.maxRawTextBytes,
+		TTL:                 o.ttl,
 		Now:                 now,
 	})
 	if err != nil {
-		if cfg.Quotas != nil && reservationID != "" {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		if o.quotas != nil && reservationID != "" {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), o.cleanupTimeout)
 			defer cancel()
-			_ = cfg.Quotas.ReleaseQuota(cleanupCtx, reservationID, sanitizePDFSubmitFailureReason(err), core.LLMTelemetry{})
+			_ = o.quotas.ReleaseQuota(cleanupCtx, reservationID, sanitizePDFSubmitFailureReason(err), core.LLMTelemetry{})
 		}
 		return nil, err
 	}
 
-	if cfg.Notifier != nil {
-		cfg.Notifier.Notify()
+	if o.notifier != nil {
+		o.notifier.Notify()
 	}
 	return job, nil
 }

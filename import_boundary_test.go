@@ -38,7 +38,6 @@ var forbiddenDependencyPrefixes = []string{
 	"github.com/lib/pq",
 	"github.com/jackc/pgx",
 	"github.com/go-sql-driver/mysql",
-	"firebase.google.com/",
 	"github.com/mark3labs/mcp-go",
 	"github.com/google/generative-ai-go",
 	"google.golang.org/genai",

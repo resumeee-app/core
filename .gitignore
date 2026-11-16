@@ -1,5 +1,16 @@
 *.out
 *.test
+*.prof
 coverage.txt
+coverage.html
 .DS_Store
 .worktrees/
+.env
+.env.*
+!.env.example
+bin/
+dist/
+.vscode/
+.idea/
+.gemini/
+.claude/

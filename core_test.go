@@ -123,7 +123,7 @@ func TestCareerEntitiesAndFactPolymorphism(t *testing.T) {
 		UserID:    "user-1",
 		Name:      "Resumeee",
 		Role:      "Author",
-		URL:       "https://github.com/rrivera/resumeee",
+		URL:       "https://github.com/resumeee-app/resumeee",
 		StartDate: &startDateProj,
 		Summary:   "Self-hosted resume tailoring engine",
 		Facts: []core.Fact{

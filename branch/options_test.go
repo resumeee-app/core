@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 func TestNew_DefaultsAndOptions(t *testing.T) {

@@ -12,9 +12,9 @@ import (
 	"sync"
 	texttemplate "text/template"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/branch"
-	"github.com/resumeee-app/resumeee-core/worker"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/branch"
+	"github.com/resumeee-app/core/worker"
 )
 
 // Buffer pool sizing limits controlling preallocation and reuse retention.

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/llm"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/llm"
 )
 
 func TestResumeExtractor_Table(t *testing.T) {

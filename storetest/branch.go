@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // RunBranches verifies branch CRUD, default immutability, epoch tracking, version promotion, and reports.

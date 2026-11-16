@@ -17,9 +17,9 @@ import (
 	"google.golang.org/genai/interactions/models/operations"
 	"google.golang.org/genai/interactions/retry"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/llm/internal/httpx"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/llm"
+	"github.com/resumeee-app/core/llm/internal/httpx"
 )
 
 // defaultBaseURL is the upstream Google Generative Language API base endpoint.

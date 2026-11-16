@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Presets enforces visibility, defaulting, and built-in immutability rules for tailoring presets.

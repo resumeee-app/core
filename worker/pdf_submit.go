@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // PDFQuotaReserver reserves and releases tenant LLM quota units during PDF job submission and cancellation.

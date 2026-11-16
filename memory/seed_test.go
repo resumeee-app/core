@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/memory"
-	"github.com/resumeee-app/resumeee-core/seed"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/memory"
+	"github.com/resumeee-app/core/seed"
 )
 
 // profileOnlySeeder exposes only seed.ProfileSeeder to verify DefaultDataStores

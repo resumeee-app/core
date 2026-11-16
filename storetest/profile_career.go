@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // RunProfilesAndCareer verifies profile revisions, skill resolution, career CRUD, short IDs,

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	core "github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/llm/internal/httpx"
+	core "github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/llm"
+	"github.com/resumeee-app/core/llm/internal/httpx"
 )
 
 func TestTransportUtilities_BoundsAndStatusError(t *testing.T) {

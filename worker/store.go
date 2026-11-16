@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // BranchReader retrieves branch and version context required to execute tailoring jobs.

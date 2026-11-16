@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Quota token budgets, settlement timeouts, and error truncation limits for analysis operations.

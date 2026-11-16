@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/provenance"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/provenance"
 )
 
 func sampleSnapshot() *core.MainProfileSnapshot {

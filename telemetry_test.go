@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	core "github.com/resumeee-app/resumeee-core"
+	core "github.com/resumeee-app/core"
 )
 
 func TestTokenUsage_NormalizeAddAndWithFallback(t *testing.T) {

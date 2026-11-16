@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // claimedJobDescriptor normalizes lifecycle metadata for an active claimed core.Job.

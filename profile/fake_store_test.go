@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/profile"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/profile"
 )
 
 type fakeProfileStore struct {

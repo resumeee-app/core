@@ -28,7 +28,7 @@ var coreDomainPackageDirs = []string{
 }
 
 // llmSubpackageImportPrefix identifies vendor transport and internal HTTP helpers under llm/.
-const llmSubpackageImportPrefix = "github.com/resumeee-app/resumeee-core/llm/"
+const llmSubpackageImportPrefix = "github.com/resumeee-app/core/llm/"
 
 // forbiddenDependencyPrefixes lists external dependency import paths prohibited across core domain packages.
 var forbiddenDependencyPrefixes = []string{

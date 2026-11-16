@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Backend defines the pure persistence and transaction contract that storage backends

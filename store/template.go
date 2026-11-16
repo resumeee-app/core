@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Templates enforces template syntax validation, visibility, and built-in immutability rules.

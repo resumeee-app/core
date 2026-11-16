@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/llm"
+	"github.com/resumeee-app/core/llm"
 )
 
 // Transport timeout and response body safety bounds shared across HTTP-based LLM clients.

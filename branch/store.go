@@ -3,7 +3,7 @@ package branch
 import (
 	"context"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Store defines branch and version persistence operations required by the branch service.

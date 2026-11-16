@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/branch"
-	"github.com/resumeee-app/resumeee-core/sanitizer"
-	"github.com/resumeee-app/resumeee-core/worker"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/branch"
+	"github.com/resumeee-app/core/sanitizer"
+	"github.com/resumeee-app/core/worker"
 )
 
 // Service orchestrates prompt compilation, PII sanitization/restoration, and structured

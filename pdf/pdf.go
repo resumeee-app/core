@@ -15,7 +15,7 @@ import (
 
 	"github.com/ledongthuc/pdf"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Extractor extracts plain text content from PDF documents using ledongthuc/pdf.

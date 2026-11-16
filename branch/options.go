@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Option configures optional dependencies and runtime bounds on a branch Service.

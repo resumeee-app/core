@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // RunQuotas verifies quota initialization, window resets, atomic reservations, telemetry, and refunds.

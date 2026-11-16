@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // PromptPreview compiles the system and user prompt templates for the requested workflow against

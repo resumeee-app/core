@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // defaultTailoringQuotaTokens is reserved upfront when enqueueing an async resume tailoring job.

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 func TestProfileJSONRoundTrip(t *testing.T) {

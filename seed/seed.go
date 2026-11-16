@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/store"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/store"
 )
 
 // ProfileSeeder defines the narrow profile persistence contract required by seed routines.

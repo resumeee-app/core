@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Quotas enforces atomic tenant quota limits, window rollovers, and usage telemetry accounting.

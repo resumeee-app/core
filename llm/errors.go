@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // taggedError associates an LLM sentinel message with core classification sentinels without altering Error().

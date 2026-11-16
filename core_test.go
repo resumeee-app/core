@@ -478,14 +478,14 @@ func TestTailoringStrategyAndTargetResumeRFC005(t *testing.T) {
 func TestMultiTenancyDomainModels(t *testing.T) {
 	// 1. User entity
 	user := core.User{
-		ID:       "firebase-uid-123",
+		ID:       "tenant-uid-123",
 		Email:    "dev@example.com",
 		FullName: "Alex Dev",
 		Role:     core.UserRoleUser,
 		Tier:     "free",
 		IsActive: true,
 	}
-	if user.ID != "firebase-uid-123" || user.Role != core.UserRoleUser {
+	if user.ID != "tenant-uid-123" || user.Role != core.UserRoleUser {
 		t.Errorf("unexpected user values: %+v", user)
 	}
 

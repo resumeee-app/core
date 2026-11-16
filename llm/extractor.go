@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/worker"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/worker"
 )
 
 // CompletionRequest bundles the parameters for a capability-aware Completer invocation.

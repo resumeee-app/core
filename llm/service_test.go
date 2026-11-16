@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // gapFallbackClient is a configurable Client used to drive the

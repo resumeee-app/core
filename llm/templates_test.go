@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/llm/anthropic"
-	"github.com/resumeee-app/resumeee-core/llm/gemini"
-	"github.com/resumeee-app/resumeee-core/llm/ollama"
-	"github.com/resumeee-app/resumeee-core/llm/openai"
-	"github.com/resumeee-app/resumeee-core/llm/openaicompat"
-	"github.com/resumeee-app/resumeee-core/sanitizer"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/llm"
+	"github.com/resumeee-app/core/llm/anthropic"
+	"github.com/resumeee-app/core/llm/gemini"
+	"github.com/resumeee-app/core/llm/ollama"
+	"github.com/resumeee-app/core/llm/openai"
+	"github.com/resumeee-app/core/llm/openaicompat"
+	"github.com/resumeee-app/core/sanitizer"
 )
 
 func TestPromptTemplates_EmbeddedFilesExist(t *testing.T) {

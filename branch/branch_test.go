@@ -12,12 +12,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/branch"
-	"github.com/resumeee-app/resumeee-core/provenance"
-	"github.com/resumeee-app/resumeee-core/renderer"
-	"github.com/resumeee-app/resumeee-core/sanitizer"
-	"github.com/resumeee-app/resumeee-core/store"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/branch"
+	"github.com/resumeee-app/core/provenance"
+	"github.com/resumeee-app/core/renderer"
+	"github.com/resumeee-app/core/sanitizer"
+	"github.com/resumeee-app/core/store"
 )
 
 type testBranchEnv struct {

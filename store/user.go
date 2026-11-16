@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Users enforces domain validation and privilege invariants for user accounts.

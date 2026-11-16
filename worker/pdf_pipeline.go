@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // defaultPDFExtractionTokens is committed when an extractor succeeds with zero reported token usage.

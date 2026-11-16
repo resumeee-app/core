@@ -5,7 +5,7 @@ import (
 	"fmt"
 	htmltemplate "html/template"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // DefaultSeededProfileName identifies the default placeholder name seeded upon database initialization.

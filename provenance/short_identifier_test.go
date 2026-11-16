@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/provenance"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/provenance"
 )
 
 // snapshotWithShortIDs constructs a sample MainProfileSnapshot populated with both canonical UUIDs

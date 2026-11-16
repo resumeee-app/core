@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // TestGenerateShortID_Prefixes verifies that GenerateShortID attaches the correct entity prefixes,

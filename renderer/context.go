@@ -4,7 +4,7 @@ import (
 	htmltemplate "html/template"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // RenderContext binds the Main Profile, Tailored Content, and template styling into a unified execution context.

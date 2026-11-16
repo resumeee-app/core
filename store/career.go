@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Career manages Tier-1 career entities, skill resolution, ShortID lookups, and MainRevision bumps.

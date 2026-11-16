@@ -4,7 +4,7 @@ import (
 	_ "embed"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Embedded built-in HTML, CSS, Markdown, and plain-text template sources.

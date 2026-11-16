@@ -3,7 +3,7 @@ package llm_test
 import (
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/llm"
+	"github.com/resumeee-app/core/llm"
 )
 
 func assertNoInternalPropertiesRecursively(t *testing.T, path string, node *llm.Schema, forbidden []string) {

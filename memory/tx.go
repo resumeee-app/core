@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // readTx provides side-effect-free read queries against a Backend dataSet snapshot.

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core/store"
+	"github.com/resumeee-app/core/store"
 )
 
 // Factory creates an isolated, empty store.Store configured with the supplied clock

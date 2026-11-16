@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Branches enforces branch invariants, epoch increments, monotonic version promotion,

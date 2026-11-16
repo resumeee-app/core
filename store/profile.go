@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Profiles manages Tier-1 candidate profile roots, MainRevision bumps, and consolidated snapshots.

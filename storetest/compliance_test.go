@@ -1,11 +1,11 @@
 package storetest_test
 
 import (
-	"github.com/resumeee-app/resumeee-core/branch"
-	"github.com/resumeee-app/resumeee-core/profile"
-	"github.com/resumeee-app/resumeee-core/seed"
-	"github.com/resumeee-app/resumeee-core/store"
-	"github.com/resumeee-app/resumeee-core/worker"
+	"github.com/resumeee-app/core/branch"
+	"github.com/resumeee-app/core/profile"
+	"github.com/resumeee-app/core/seed"
+	"github.com/resumeee-app/core/store"
+	"github.com/resumeee-app/core/worker"
 )
 
 // Compile-time checks verifying store sub-stores satisfy all consumer-defined interfaces across packages.

@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/branch"
-	"github.com/resumeee-app/resumeee-core/worker"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/branch"
+	"github.com/resumeee-app/core/worker"
 )
 
 // Compile-time assertions verifying Validator satisfies branch and worker provenance interfaces.

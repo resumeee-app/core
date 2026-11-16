@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Jobs manages the unified persistent worker queue, leases, fairness, admission limits,

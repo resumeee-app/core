@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/sanitizer"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/sanitizer"
 )
 
 func sampleCandidateProfile() core.Profile {

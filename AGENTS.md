@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Idiomatic Go standards for `resumeee-core`. Run `make verify` after every change.
+Idiomatic Go standards for `core` (`github.com/resumeee-app/core`). Run `make verify` after every change.
 
 ## Documentation
 

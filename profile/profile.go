@@ -13,7 +13,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Store defines the narrow profile and career graph persistence contract required by Service.

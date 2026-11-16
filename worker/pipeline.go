@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Timeout bounds and fallback token budgets applied to LLM worker stages.

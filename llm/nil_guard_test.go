@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/worker"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/worker"
 )
 
 // failingResumeExtractor is a worker.ResumeExtractor that always fails while returning configured telemetry.

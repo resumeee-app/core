@@ -1,6 +1,6 @@
-# resumeee-core
+# core
 
-Pure Go domain core for **Resumeee** (`github.com/resumeee-app/resumeee-core`), containing all domain entities, business rules, provenance validation ("No Lies" invariant), PII obfuscation, prompt compilation & LLM orchestration, PDF text extraction, background generation worker pool, and zero-dependency in-memory storage.
+Pure Go domain core for **Resumeee** (`github.com/resumeee-app/core`), containing all domain entities, business rules, provenance validation ("No Lies" invariant), PII obfuscation, prompt compilation & LLM orchestration, PDF text extraction, background generation worker pool, and zero-dependency in-memory storage.
 
 ## Packages
 

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // ToSnapshot converts a parsed JSONResume document into a domain MainProfileSnapshot,

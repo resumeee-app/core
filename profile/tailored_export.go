@@ -1,6 +1,6 @@
 package profile
 
-import "github.com/resumeee-app/resumeee-core"
+import "github.com/resumeee-app/core"
 
 // FromTailored converts a BranchVersion's TailoredContent and base Profile into a valid JSONResume export.
 func FromTailored(profile *core.Profile, tailored *core.TailoredContent) (*core.JSONResume, error) {

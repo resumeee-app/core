@@ -3,7 +3,7 @@ package profile
 import (
 	"encoding/json"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // defaultSchemaURL is the standard JSON Resume v1.0.0 schema URI emitted on exports.

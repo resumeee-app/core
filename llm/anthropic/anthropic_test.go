@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/llm"
-	"github.com/resumeee-app/resumeee-core/llm/anthropic"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/llm"
+	"github.com/resumeee-app/core/llm/anthropic"
 )
 
 func boolPtr(v bool) *bool { return &v }

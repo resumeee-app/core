@@ -1,4 +1,4 @@
-module github.com/resumeee-app/resumeee-core
+module github.com/resumeee-app/core
 
 go 1.27.2
 

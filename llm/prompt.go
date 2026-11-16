@@ -8,9 +8,9 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/branch"
-	"github.com/resumeee-app/resumeee-core/sanitizer"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/branch"
+	"github.com/resumeee-app/core/sanitizer"
 )
 
 // templateFS embeds the built-in system and user prompt templates shipped with package llm.

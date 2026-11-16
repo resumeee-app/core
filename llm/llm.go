@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 // Supported LLM provider identifiers and default model identifiers used across registry resolution.

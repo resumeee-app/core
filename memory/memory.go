@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/seed"
-	"github.com/resumeee-app/resumeee-core/store"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/seed"
+	"github.com/resumeee-app/core/store"
 )
 
 // Compile-time interface satisfaction checks for Backend and transaction handles.

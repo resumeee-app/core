@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core/llm"
+	"github.com/resumeee-app/core/llm"
 )
 
 func recursivelyCheckDescriptions(t *testing.T, path string, node *llm.Schema) {

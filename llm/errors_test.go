@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core"
-	"github.com/resumeee-app/resumeee-core/llm"
+	"github.com/resumeee-app/core"
+	"github.com/resumeee-app/core/llm"
 )
 
 func TestSentinelErrorClassification(t *testing.T) {

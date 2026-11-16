@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 type parsedLogRecord struct {

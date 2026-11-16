@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 func TestValidateLanguage_Defaults(t *testing.T) {

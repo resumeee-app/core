@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/resumeee-app/resumeee-core"
+	"github.com/resumeee-app/core"
 )
 
 func TestBranch_DefaultBranchHelpers(t *testing.T) {

@@ -53,18 +53,18 @@ func setupTestBranchEnv(t *testing.T, _ int) *testBranchEnv {
 	rend := renderer.New()
 	notifier := &stubNotifier{}
 
-	svc := branch.New(branch.Config{
-		Branches:       branchRepo,
-		Jobs:           jobRepo,
-		Profiles:       profileRepo,
-		Presets:        presetRepo,
-		Templates:      templateRepo,
-		Quotas:         st.Quotas,
-		JobNotifier:    notifier,
-		Validator:      val,
-		Renderer:       rend,
-		PromptCompiler: &fakePromptCompiler{},
-	})
+	svc := branch.New(
+		branch.WithBranches(branchRepo),
+		branch.WithJobs(jobRepo),
+		branch.WithProfiles(profileRepo),
+		branch.WithPresets(presetRepo),
+		branch.WithTemplates(templateRepo),
+		branch.WithQuotas(st.Quotas),
+		branch.WithJobNotifier(notifier),
+		branch.WithValidator(val),
+		branch.WithRenderer(rend),
+		branch.WithPromptCompiler(&fakePromptCompiler{}),
+	)
 
 	b := &core.Branch{
 		ID:            "branch-" + uuid.New().String(),
@@ -272,21 +272,21 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 	notifier := &stubNotifier{}
 	fixedNow := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 
-	svc := branch.New(branch.Config{
-		Branches:            store,
-		Jobs:                store,
-		Profiles:            store,
-		Presets:             store,
-		Templates:           store,
-		Quotas:              spyQuota,
-		JobNotifier:         notifier,
-		Validator:           provenance.New(),
-		Renderer:            renderer.New(),
-		PromptCompiler:      &fakePromptCompiler{},
-		MaxPendingPerTenant: 1,
-		JobTTL:              15 * time.Minute,
-		Clock:               func() time.Time { return fixedNow },
-	})
+	svc := branch.New(
+		branch.WithBranches(store),
+		branch.WithJobs(store),
+		branch.WithProfiles(store),
+		branch.WithPresets(store),
+		branch.WithTemplates(store),
+		branch.WithQuotas(spyQuota),
+		branch.WithJobNotifier(notifier),
+		branch.WithValidator(provenance.New()),
+		branch.WithRenderer(renderer.New()),
+		branch.WithPromptCompiler(&fakePromptCompiler{}),
+		branch.WithMaxPendingPerTenant(1),
+		branch.WithJobTTL(15*time.Minute),
+		branch.WithClock(func() time.Time { return fixedNow }),
+	)
 
 	b1 := &core.Branch{
 		ID:            "branch-bp-1",
@@ -1058,14 +1058,14 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 
 		// Rebuild svc with stubLLM
-		svcWithLLM := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Jobs:      env.jobRepo,
-			Profiles:  env.profileRepo,
-			Validator: provenance.New(),
-			Renderer:  renderer.New(),
-			Generator: stubLLM,
-		})
+		svcWithLLM := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithJobs(env.jobRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithValidator(provenance.New()),
+			branch.WithRenderer(renderer.New()),
+			branch.WithGenerator(stubLLM),
+		)
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
 		if err != nil {
@@ -1090,15 +1090,15 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 		spyQuota := &spyQuotaRepo{}
 
-		svcWithLLM := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Jobs:      env.jobRepo,
-			Profiles:  env.profileRepo,
-			Quotas:    spyQuota,
-			Validator: provenance.New(),
-			Renderer:  renderer.New(),
-			Generator: &stubGenerator{}, // GenerateGapAnalysis returns (nil, nil)
-		})
+		svcWithLLM := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithJobs(env.jobRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithQuotas(spyQuota),
+			branch.WithValidator(provenance.New()),
+			branch.WithRenderer(renderer.New()),
+			branch.WithGenerator(&stubGenerator{}), // GenerateGapAnalysis returns (nil, nil)
+		)
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
 		if err == nil {
@@ -1137,11 +1137,11 @@ func TestService_AnalyzeGaps(t *testing.T) {
 			},
 		}
 
-		svcWithLLM := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Generator: stubLLM,
-		})
+		svcWithLLM := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithGenerator(stubLLM),
+		)
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
 		if err != nil {
@@ -1179,11 +1179,11 @@ func TestService_AnalyzeGaps(t *testing.T) {
 			},
 		}
 
-		svcWithLLM := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Generator: stubLLM,
-		})
+		svcWithLLM := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithGenerator(stubLLM),
+		)
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, created.ID)
 		if err != nil {
@@ -1236,11 +1236,11 @@ func TestService_AnalyzeGaps(t *testing.T) {
 			},
 		}
 
-		svcWithLLM := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Generator: stubLLM,
-		})
+		svcWithLLM := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithGenerator(stubLLM),
+		)
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
 		if err != nil {
@@ -1279,11 +1279,11 @@ func TestService_AnalyzeGaps(t *testing.T) {
 			},
 		}
 
-		svcWithLLM := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Generator: stubLLM,
-		})
+		svcWithLLM := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithGenerator(stubLLM),
+		)
 
 		report, err := svcWithLLM.AnalyzeGaps(ctx, env.defaultUser, env.branchID)
 		if err != nil {
@@ -1402,14 +1402,14 @@ func TestService_GetPromptPreview_UnconfiguredCompiler(t *testing.T) {
 		t.Fatalf("failed to create branch: %v", err)
 	}
 
-	svc := branch.New(branch.Config{
-		Branches:       store,
-		Profiles:       store,
-		Presets:        store,
-		Templates:      store,
-		Quotas:         store,
-		PromptCompiler: nil,
-	})
+	svc := branch.New(
+		branch.WithBranches(store),
+		branch.WithProfiles(store),
+		branch.WithPresets(store),
+		branch.WithTemplates(store),
+		branch.WithQuotas(store),
+		branch.WithPromptCompiler(nil),
+	)
 
 	_, err := svc.PromptPreview(ctx, "user-no-compiler", b.ID, nil)
 	if !errors.Is(err, core.ErrValidation) {
@@ -1681,14 +1681,14 @@ func TestService_PromptPreview_RejectsCrossTenantPreset(t *testing.T) {
 		t.Fatalf("CreateBranch failed: %v", err)
 	}
 	otherPresetID := "preset-other-tenant"
-	svc := branch.New(branch.Config{
-		Branches:       store,
-		Profiles:       store,
-		Presets:        &crossTenantPresetReader{preset: core.Preset{ID: otherPresetID, UserID: "other-user", SystemInstructions: "SECRET"}},
-		Templates:      store,
-		Quotas:         store,
-		PromptCompiler: &fakePromptCompiler{},
-	})
+	svc := branch.New(
+		branch.WithBranches(store),
+		branch.WithProfiles(store),
+		branch.WithPresets(&crossTenantPresetReader{preset: core.Preset{ID: otherPresetID, UserID: "other-user", SystemInstructions: "SECRET"}}),
+		branch.WithTemplates(store),
+		branch.WithQuotas(store),
+		branch.WithPromptCompiler(&fakePromptCompiler{}),
+	)
 
 	_, err := svc.PromptPreview(ctx, "user-preset", b.ID, &core.PromptPreviewOptions{
 		PresetID: &otherPresetID,
@@ -1827,17 +1827,17 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 	t.Run("Custom limits propagated across GenerateVersion, SyncBranches, AnalyzeGaps, and SimulateATS", func(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
 
-		svc := branch.New(branch.Config{
-			Branches:          store,
-			Jobs:              store,
-			Profiles:          store,
-			Presets:           store,
-			Templates:         store,
-			Quotas:            spyQuota,
-			Generator:         stubLLM,
-			DailyRequestLimit: 25,
-			MonthlyTokenLimit: 250000,
-		})
+		svc := branch.New(
+			branch.WithBranches(store),
+			branch.WithJobs(store),
+			branch.WithProfiles(store),
+			branch.WithPresets(store),
+			branch.WithTemplates(store),
+			branch.WithQuotas(spyQuota),
+			branch.WithGenerator(stubLLM),
+			branch.WithDailyRequestLimit(25),
+			branch.WithMonthlyTokenLimit(250000),
+		)
 
 		// 1. GenerateVersion
 		_, err := svc.GenerateVersion(ctx, defaultUser, b.ID)
@@ -1883,17 +1883,17 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 	t.Run("Fallback default limits 50 and 1000000 applied when limits are <= 0", func(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
 
-		svcDefault := branch.New(branch.Config{
-			Branches:          store,
-			Jobs:              store,
-			Profiles:          store,
-			Presets:           store,
-			Templates:         store,
-			Quotas:            spyQuota,
-			Generator:         stubLLM,
-			DailyRequestLimit: 0,
-			MonthlyTokenLimit: -100,
-		})
+		svcDefault := branch.New(
+			branch.WithBranches(store),
+			branch.WithJobs(store),
+			branch.WithProfiles(store),
+			branch.WithPresets(store),
+			branch.WithTemplates(store),
+			branch.WithQuotas(spyQuota),
+			branch.WithGenerator(stubLLM),
+			branch.WithDailyRequestLimit(0),
+			branch.WithMonthlyTokenLimit(-100),
+		)
 
 		_, err := svcDefault.GenerateVersion(ctx, defaultUser, b.ID)
 		if err != nil {
@@ -2069,13 +2069,13 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 
 		sim := &stubATSSimulator{}
-		svc := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Templates: env.templateRepo,
-			Renderer:  renderer.New(),
-			Generator: sim,
-		})
+		svc := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithTemplates(env.templateRepo),
+			branch.WithRenderer(renderer.New()),
+			branch.WithGenerator(sim),
+		)
 
 		// First trigger on v1 succeeds
 		score, err := svc.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
@@ -2165,14 +2165,14 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 
 		sim := &stubATSSimulator{}
-		svcSnapErr := branch.New(branch.Config{
-			Branches: env.branchRepo,
-			Profiles: &failingSnapshotProfileRepo{
+		svcSnapErr := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(&failingSnapshotProfileRepo{
 				ProfileReader: env.profileRepo,
 				snapErr:       errors.New("db connection lost"),
-			},
-			Generator: sim,
-		})
+			}),
+			branch.WithGenerator(sim),
+		)
 
 		_, err := svcSnapErr.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vSnap.ID,
@@ -2207,12 +2207,12 @@ func TestService_SimulateATS(t *testing.T) {
 				Usage: core.TokenUsage{TotalTokens: 0},
 			},
 		}
-		svcQuota := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Quotas:    spyQuota,
-			Generator: simZeroTokens,
-		})
+		svcQuota := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithQuotas(spyQuota),
+			branch.WithGenerator(simZeroTokens),
+		)
 
 		if _, err := svcQuota.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vQuotaCommit.ID,
@@ -2236,12 +2236,12 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 
 		simErr := &stubATSSimulator{atsErr: errors.New("upstream llm failure")}
-		svcQuotaFail := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Quotas:    spyQuota,
-			Generator: simErr,
-		})
+		svcQuotaFail := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithQuotas(spyQuota),
+			branch.WithGenerator(simErr),
+		)
 
 		if _, err := svcQuotaFail.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vQuotaFail.ID,
@@ -2271,13 +2271,13 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 
 		sim := &stubATSSimulator{}
-		svcRender := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Templates: env.templateRepo,
-			Renderer:  renderer.New(),
-			Generator: sim,
-		})
+		svcRender := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithTemplates(env.templateRepo),
+			branch.WithRenderer(renderer.New()),
+			branch.WithGenerator(sim),
+		)
 
 		score, err := svcRender.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vPartial.ID,
@@ -2322,11 +2322,11 @@ func TestService_SimulateATS(t *testing.T) {
 			t.Fatalf("seedCompletedVersion failed: %v", err)
 		}
 
-		svcDet := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Generator: nil,
-		})
+		svcDet := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithGenerator(nil),
+		)
 
 		score, err := svcDet.SimulateATS(ctx, env.defaultUser, env.branchID, &core.ATSSimulationOptions{
 			VersionID: vDet.ID,
@@ -2357,11 +2357,11 @@ func TestService_SimulateATS(t *testing.T) {
 		simSlow := &stubATSSimulator{
 			delay: 80 * time.Millisecond,
 		}
-		svcConc := branch.New(branch.Config{
-			Branches:  env.branchRepo,
-			Profiles:  env.profileRepo,
-			Generator: simSlow,
-		})
+		svcConc := branch.New(
+			branch.WithBranches(env.branchRepo),
+			branch.WithProfiles(env.profileRepo),
+			branch.WithGenerator(simSlow),
+		)
 
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
@@ -2568,22 +2568,22 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 				}
 			}
 
-			cfg := branch.Config{
-				Branches:            baseStore,
-				Jobs:                jobs,
-				Profiles:            baseStore,
-				Presets:             baseStore,
-				Templates:           baseStore,
-				Quotas:              quotaSpy,
-				MaxPendingPerTenant: tc.maxPending,
-				JobTTL:              tc.jobTTL,
-				CleanupTimeout:      tc.cleanupTimeout,
-				Clock:               func() time.Time { return fixedNow },
+			opts := []branch.Option{
+				branch.WithBranches(baseStore),
+				branch.WithJobs(jobs),
+				branch.WithProfiles(baseStore),
+				branch.WithPresets(baseStore),
+				branch.WithTemplates(baseStore),
+				branch.WithQuotas(quotaSpy),
+				branch.WithMaxPendingPerTenant(tc.maxPending),
+				branch.WithJobTTL(tc.jobTTL),
+				branch.WithCleanupTimeout(tc.cleanupTimeout),
+				branch.WithClock(func() time.Time { return fixedNow }),
 			}
 			if tc.useNotifier {
-				cfg.JobNotifier = notifier
+				opts = append(opts, branch.WithJobNotifier(notifier))
 			}
-			svc := branch.New(cfg)
+			svc := branch.New(opts...)
 
 			for i := 0; i < tc.preSeedPending; i++ {
 				extraBranch := &core.Branch{
@@ -2715,16 +2715,16 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 			quotaSpy := &contextCapturingQuotaRepo{inner: store}
 			notifier := &stubNotifier{}
 
-			svc := branch.New(branch.Config{
-				Branches:            store,
-				Jobs:                store,
-				Profiles:            store,
-				Presets:             store,
-				Templates:           store,
-				Quotas:              quotaSpy,
-				JobNotifier:         notifier,
-				MaxPendingPerTenant: tc.maxPending,
-			})
+			svc := branch.New(
+				branch.WithBranches(store),
+				branch.WithJobs(store),
+				branch.WithProfiles(store),
+				branch.WithPresets(store),
+				branch.WithTemplates(store),
+				branch.WithQuotas(quotaSpy),
+				branch.WithJobNotifier(notifier),
+				branch.WithMaxPendingPerTenant(tc.maxPending),
+			)
 
 			b := &core.Branch{
 				ID:            "branch-sup-" + uuid.New().String(),
@@ -2808,17 +2808,17 @@ func TestService_SyncBranchesPartialBatchAndDefaultHandling(t *testing.T) {
 	quotaSpy := &contextCapturingQuotaRepo{inner: store}
 	notifier := &stubNotifier{}
 
-	svc := branch.New(branch.Config{
-		Branches:            store,
-		Jobs:                store,
-		Profiles:            store,
-		Presets:             store,
-		Templates:           store,
-		Quotas:              quotaSpy,
-		JobNotifier:         notifier,
-		Renderer:            renderer.New(),
-		MaxPendingPerTenant: 1,
-	})
+	svc := branch.New(
+		branch.WithBranches(store),
+		branch.WithJobs(store),
+		branch.WithProfiles(store),
+		branch.WithPresets(store),
+		branch.WithTemplates(store),
+		branch.WithQuotas(quotaSpy),
+		branch.WithJobNotifier(notifier),
+		branch.WithRenderer(renderer.New()),
+		branch.WithMaxPendingPerTenant(1),
+	)
 
 	b1 := &core.Branch{ID: "br-sync-1", UserID: userID, Name: "Sync 1", TemplateSetID: core.TemplateStandardCleanID}
 	b2 := &core.Branch{ID: "br-sync-2", UserID: userID, Name: "Sync 2", TemplateSetID: core.TemplateStandardCleanID}
@@ -2914,15 +2914,15 @@ func TestService_CancelVersion(t *testing.T) {
 			owner := "owner-user"
 			store := newSeededBranchStore(ctx, owner)
 			quotaSpy := &contextCapturingQuotaRepo{inner: store}
-			svc := branch.New(branch.Config{
-				Branches:       store,
-				Jobs:           store,
-				Profiles:       store,
-				Presets:        store,
-				Templates:      store,
-				Quotas:         quotaSpy,
-				CleanupTimeout: 2 * time.Second,
-			})
+			svc := branch.New(
+				branch.WithBranches(store),
+				branch.WithJobs(store),
+				branch.WithProfiles(store),
+				branch.WithPresets(store),
+				branch.WithTemplates(store),
+				branch.WithQuotas(quotaSpy),
+				branch.WithCleanupTimeout(2*time.Second),
+			)
 
 			b := &core.Branch{
 				ID:            "branch-cancel-" + uuid.New().String(),
@@ -3054,18 +3054,18 @@ func TestService_MutationSupersedence(t *testing.T) {
 			quotaSpy := &contextCapturingQuotaRepo{inner: store}
 			notifier := &stubNotifier{}
 
-			svc := branch.New(branch.Config{
-				Branches:       store,
-				Jobs:           store,
-				Profiles:       store,
-				Presets:        store,
-				Templates:      store,
-				Quotas:         quotaSpy,
-				JobNotifier:    notifier,
-				Validator:      provenance.New(),
-				Renderer:       renderer.New(),
-				PromptCompiler: &fakePromptCompiler{},
-			})
+			svc := branch.New(
+				branch.WithBranches(store),
+				branch.WithJobs(store),
+				branch.WithProfiles(store),
+				branch.WithPresets(store),
+				branch.WithTemplates(store),
+				branch.WithQuotas(quotaSpy),
+				branch.WithJobNotifier(notifier),
+				branch.WithValidator(provenance.New()),
+				branch.WithRenderer(renderer.New()),
+				branch.WithPromptCompiler(&fakePromptCompiler{}),
+			)
 
 			// Create a completed v2 so rollback back to v1 is distinct
 			v1, err := svc.Version(ctx, env.branchID, env.v1ID)
@@ -3134,14 +3134,14 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 	spyStore := &spyAbortStore{testBranchStore: baseStore}
 	quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
 
-	svc := branch.New(branch.Config{
-		Branches:  baseStore,
-		Jobs:      spyStore,
-		Profiles:  baseStore,
-		Presets:   baseStore,
-		Templates: baseStore,
-		Quotas:    quotaSpy,
-	})
+	svc := branch.New(
+		branch.WithBranches(baseStore),
+		branch.WithJobs(spyStore),
+		branch.WithProfiles(baseStore),
+		branch.WithPresets(baseStore),
+		branch.WithTemplates(baseStore),
+		branch.WithQuotas(quotaSpy),
+	)
 
 	bPending := &core.Branch{
 		ID:            "branch-delete-abort-pending",
@@ -3389,15 +3389,15 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		userID := "user-epoch-" + uuid.New().String()
 		baseStore := newSeededBranchStore(ctx, userID)
 		quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
-		svc := branch.New(branch.Config{
-			Branches:       baseStore,
-			Jobs:           baseStore,
-			Profiles:       baseStore,
-			Presets:        baseStore,
-			Templates:      baseStore,
-			Quotas:         quotaSpy,
-			CleanupTimeout: 2 * time.Second,
-		})
+		svc := branch.New(
+			branch.WithBranches(baseStore),
+			branch.WithJobs(baseStore),
+			branch.WithProfiles(baseStore),
+			branch.WithPresets(baseStore),
+			branch.WithTemplates(baseStore),
+			branch.WithQuotas(quotaSpy),
+			branch.WithCleanupTimeout(2*time.Second),
+		)
 
 		b, err := svc.CreateBranch(ctx, &core.Branch{
 			ID:                 "branch-epoch-" + uuid.New().String(),
@@ -3469,15 +3469,15 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 			testBranchStore: baseStore,
 			cancelCtxFn:     cancel,
 		}
-		svcWithCancel := branch.New(branch.Config{
-			Branches:       baseStore,
-			Jobs:           spyStore,
-			Profiles:       baseStore,
-			Presets:        baseStore,
-			Templates:      baseStore,
-			Quotas:         quotaSpy,
-			CleanupTimeout: 2 * time.Second,
-		})
+		svcWithCancel := branch.New(
+			branch.WithBranches(baseStore),
+			branch.WithJobs(spyStore),
+			branch.WithProfiles(baseStore),
+			branch.WithPresets(baseStore),
+			branch.WithTemplates(baseStore),
+			branch.WithQuotas(quotaSpy),
+			branch.WithCleanupTimeout(2*time.Second),
+		)
 
 		b.ActiveVersionID = &v1.ID
 		updated, err := svcWithCancel.UpdateBranch(callCtx, b)
@@ -3656,17 +3656,17 @@ func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
 		t.Fatalf("CreateFact failed: %v", err)
 	}
 
-	svc := branch.New(branch.Config{
-		Branches:  store,
-		Jobs:      store,
-		Profiles:  store,
-		Presets:   store,
-		Templates: store,
-		Quotas:    store,
-		Validator: provenance.New(),
-		Renderer:  renderer.New(),
-		Clock:     func() time.Time { return fixedNow },
-	})
+	svc := branch.New(
+		branch.WithBranches(store),
+		branch.WithJobs(store),
+		branch.WithProfiles(store),
+		branch.WithPresets(store),
+		branch.WithTemplates(store),
+		branch.WithQuotas(store),
+		branch.WithValidator(provenance.New()),
+		branch.WithRenderer(renderer.New()),
+		branch.WithClock(func() time.Time { return fixedNow }),
+	)
 
 	tailored, err := svc.CreateBranch(ctx, &core.Branch{
 		ID:                 "branch-clock-" + uuid.New().String(),
@@ -3747,15 +3747,15 @@ func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
 		t.Errorf("SimulateATS deterministic EvaluatedAt = %v, want %v", score.EvaluatedAt, fixedNow)
 	}
 
-	svcWithGen := branch.New(branch.Config{
-		Branches:  store,
-		Profiles:  store,
-		Templates: store,
-		Quotas:    store,
-		Renderer:  renderer.New(),
-		Generator: &stubATSSimulator{},
-		Clock:     func() time.Time { return fixedNow },
-	})
+	svcWithGen := branch.New(
+		branch.WithBranches(store),
+		branch.WithProfiles(store),
+		branch.WithTemplates(store),
+		branch.WithQuotas(store),
+		branch.WithRenderer(renderer.New()),
+		branch.WithGenerator(&stubATSSimulator{}),
+		branch.WithClock(func() time.Time { return fixedNow }),
+	)
 	genScore, err := svcWithGen.SimulateATS(ctx, userID, tailored.ID, &core.ATSSimulationOptions{
 		VersionID: v1.ID,
 	})
@@ -3826,15 +3826,15 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 		if withProfiles {
 			profiles = store
 		}
-		svc := branch.New(branch.Config{
-			Branches:    branchStore,
-			Jobs:        store,
-			Profiles:    profiles,
-			Presets:     store,
-			Templates:   store,
-			Quotas:      quotaSpy,
-			JobNotifier: notifier,
-		})
+		svc := branch.New(
+			branch.WithBranches(branchStore),
+			branch.WithJobs(store),
+			branch.WithProfiles(profiles),
+			branch.WithPresets(store),
+			branch.WithTemplates(store),
+			branch.WithQuotas(quotaSpy),
+			branch.WithJobNotifier(notifier),
+		)
 		return ctx, store, quotaSpy, notifier, svc, victimBranch, victimPending
 	}
 
@@ -4018,16 +4018,16 @@ func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testi
 		t.Fatalf("seed pending: %v", err)
 	}
 
-	svc := branch.New(branch.Config{
-		Branches:       permStore,
-		Jobs:           baseStore,
-		Profiles:       baseStore,
-		Presets:        baseStore,
-		Templates:      baseStore,
-		Quotas:         quotaSpy,
-		Generator:      &stubATSSimulator{stubGenerator: stubGenerator{gapReport: &core.GapReport{OverallMatchSummary: "ok"}}},
-		PromptCompiler: &fakePromptCompiler{},
-	})
+	svc := branch.New(
+		branch.WithBranches(permStore),
+		branch.WithJobs(baseStore),
+		branch.WithProfiles(baseStore),
+		branch.WithPresets(baseStore),
+		branch.WithTemplates(baseStore),
+		branch.WithQuotas(quotaSpy),
+		branch.WithGenerator(&stubATSSimulator{stubGenerator: stubGenerator{gapReport: &core.GapReport{OverallMatchSummary: "ok"}}}),
+		branch.WithPromptCompiler(&fakePromptCompiler{}),
+	)
 
 	editPayload := core.TailoredContent{Summary: "Updated"}
 

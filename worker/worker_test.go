@@ -928,7 +928,7 @@ func TestPool_LLMErrorTransition(t *testing.T) {
 		t.Errorf("expected error message on failed version")
 	}
 	job := jobForVersion(ctx, t, env.jobRepo, env.defaultUser, ver)
-	if st := reservationStatus(ctx, t, env.store, env.defaultUser, job.ReservationID); st != core.ReservationStatusReleased {
+	if st := waitForReservationStatus(ctx, t, env.store, env.defaultUser, job.ReservationID, 2*time.Second, core.ReservationStatusReleased); st != core.ReservationStatusReleased {
 		t.Errorf("expected reservation released on LLM failure, got %s", st)
 	}
 }
@@ -1146,7 +1146,7 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 		t.Errorf("expected raw panic details redacted from persisted ErrorMessage, got %q", failed.ErrorMessage)
 	}
 	panicJob := jobForVersion(ctx, t, env.jobRepo, env.defaultUser, verPanic)
-	if st := reservationStatus(ctx, t, env.store, env.defaultUser, panicJob.ReservationID); st != core.ReservationStatusReleased {
+	if st := waitForReservationStatus(ctx, t, env.store, env.defaultUser, panicJob.ReservationID, 2*time.Second, core.ReservationStatusReleased); st != core.ReservationStatusReleased {
 		t.Errorf("expected quota released on worker panic, got %s", st)
 	}
 	quotaAfterPanic, err := env.quotaRepo.Quota(ctx, env.defaultUser)
@@ -1652,7 +1652,7 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 	if done1.PDF == nil || done1.PDF.RawText != "" {
 		t.Errorf("expected RawText pruned on panic failure, got %+v", done1.PDF)
 	}
-	if status := reservationStatus(ctx, t, st, tenantID, j1.ReservationID); status != core.ReservationStatusReleased {
+	if status := waitForReservationStatus(ctx, t, st, tenantID, j1.ReservationID, 2*time.Second, core.ReservationStatusReleased); status != core.ReservationStatusReleased {
 		t.Errorf("expected quota released on PDF panic, got %s", status)
 	}
 
@@ -2796,7 +2796,7 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 				if attempts.Load() != 1 || verJob.AttemptCount != 1 {
 					t.Fatalf("expected 1 fail-fast version attempt, got calls=%d attemptCount=%d", attempts.Load(), verJob.AttemptCount)
 				}
-				if st := reservationStatus(ctx, t, env.store, env.defaultUser, verJob.ReservationID); st != core.ReservationStatusReleased {
+				if st := waitForReservationStatus(ctx, t, env.store, env.defaultUser, verJob.ReservationID, 2*time.Second, core.ReservationStatusReleased); st != core.ReservationStatusReleased {
 					t.Errorf("expected version quota released, got %s", st)
 				}
 
@@ -2810,7 +2810,7 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 				if failedPDF.PDF == nil || failedPDF.PDF.RawText != "" {
 					t.Errorf("expected PDF RawText pruned on fail-fast, got %+v", failedPDF.PDF)
 				}
-				if st := reservationStatus(ctx, t, env.store, "user-ff-pdf", pdfJob.ReservationID); st != core.ReservationStatusReleased {
+				if st := waitForReservationStatus(ctx, t, env.store, "user-ff-pdf", pdfJob.ReservationID, 2*time.Second, core.ReservationStatusReleased); st != core.ReservationStatusReleased {
 					t.Errorf("expected PDF quota released, got %s", st)
 				}
 			})
@@ -2964,7 +2964,7 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 		if verJob.AttemptCount != 3 || attempts.Load() != 3 {
 			t.Fatalf("expected 3 exhausted attempts, got AttemptCount=%d calls=%d", verJob.AttemptCount, attempts.Load())
 		}
-		if st := reservationStatus(ctx, t, env.store, env.defaultUser, verJob.ReservationID); st != core.ReservationStatusReleased {
+		if st := waitForReservationStatus(ctx, t, env.store, env.defaultUser, verJob.ReservationID, 2*time.Second, core.ReservationStatusReleased); st != core.ReservationStatusReleased {
 			t.Errorf("expected quota released after retry exhaustion, got %s", st)
 		}
 	})
@@ -3019,7 +3019,7 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 		if attempts.Load() != 1 || verJob.AttemptCount != 1 {
 			t.Fatalf("expected immediate failure when retry exceeds TTL, got calls=%d attemptCount=%d", attempts.Load(), verJob.AttemptCount)
 		}
-		if st := reservationStatus(ctx, t, env.store, env.defaultUser, verJob.ReservationID); st != core.ReservationStatusReleased {
+		if st := waitForReservationStatus(ctx, t, env.store, env.defaultUser, verJob.ReservationID, 2*time.Second, core.ReservationStatusReleased); st != core.ReservationStatusReleased {
 			t.Errorf("expected quota released when retry bounded by TTL, got %s", st)
 		}
 	})

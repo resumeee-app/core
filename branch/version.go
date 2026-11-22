@@ -16,7 +16,7 @@ const defaultTailoringQuotaTokens = 2000
 
 // ListVersions returns all generated and edited versions belonging to branchID.
 func (s *Service) ListVersions(ctx context.Context, branchID string) ([]core.BranchVersion, error) {
-	versions, err := s.branches.ListVersions(ctx, branchID)
+	versions, err := s.store.ListVersions(ctx, branchID)
 	if err != nil {
 		return nil, err
 	}
@@ -29,12 +29,12 @@ func (s *Service) ListVersions(ctx context.Context, branchID string) ([]core.Bra
 // Version resolves a version by either sequential version number (1, 2, ...) or version UUID.
 func (s *Service) Version(ctx context.Context, branchID, versionNumOrID string) (*core.BranchVersion, error) {
 	if num, err := strconv.Atoi(versionNumOrID); err == nil && num > 0 {
-		ver, err := s.branches.VersionByNumber(ctx, branchID, num)
+		ver, err := s.store.VersionByNumber(ctx, branchID, num)
 		if err == nil {
 			return ver, nil
 		}
 	}
-	return s.branches.Version(ctx, branchID, versionNumOrID)
+	return s.store.Version(ctx, branchID, versionNumOrID)
 }
 
 // GenerateVersion enqueues an asynchronous generation job or synchronously renders default branch versions.
@@ -42,7 +42,7 @@ func (s *Service) GenerateVersion(ctx context.Context, userID, branchID string) 
 	if err := requireUserID(userID); err != nil {
 		return nil, err
 	}
-	branch, err := s.branches.Branch(ctx, userID, branchID)
+	branch, err := s.store.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
 	}
@@ -54,8 +54,8 @@ func (s *Service) GenerateVersion(ctx context.Context, userID, branchID string) 
 	}
 
 	var mainRevision int64 = 1
-	if s.profiles != nil {
-		prof, err := s.profiles.Profile(ctx, userID)
+	if s.store != nil {
+		prof, err := s.store.Profile(ctx, userID)
 		if err == nil && prof != nil {
 			mainRevision = prof.MainRevision
 		}
@@ -70,8 +70,8 @@ func (s *Service) SyncBranches(ctx context.Context, userID string, branchIDs []s
 		return nil, err
 	}
 	var mainRevision int64 = 1
-	if s.profiles != nil {
-		prof, err := s.profiles.Profile(ctx, userID)
+	if s.store != nil {
+		prof, err := s.store.Profile(ctx, userID)
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +109,7 @@ func (s *Service) resolveSyncTargets(ctx context.Context, userID string, branchI
 	if len(branchIDs) > 0 {
 		targets := make([]core.Branch, 0, len(branchIDs))
 		for _, bID := range branchIDs {
-			b, err := s.branches.Branch(ctx, userID, bID)
+			b, err := s.store.Branch(ctx, userID, bID)
 			if err != nil {
 				return nil, err
 			}
@@ -121,7 +121,7 @@ func (s *Service) resolveSyncTargets(ctx context.Context, userID string, branchI
 		return targets, nil
 	}
 
-	allBranches, err := s.branches.ListBranches(ctx, userID)
+	allBranches, err := s.store.ListBranches(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -134,8 +134,8 @@ func (s *Service) resolveSyncTargets(ctx context.Context, userID string, branchI
 	return stale, nil
 }
 
-// enqueueBranchGeneration reserves quota, atomically persists a pending version under admission caps,
-// releases any superseded or rejected reservations, and notifies background workers.
+// enqueueBranchGeneration atomically checks admission caps, reserves quota, persists a pending version,
+// supersedes prior pending work with quota settlement, and notifies background workers.
 func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b *core.Branch, mainRevision int64) (*core.BranchVersion, error) {
 	if err := requireUserID(userID); err != nil {
 		return nil, err
@@ -146,19 +146,8 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 	if b.UserID != userID {
 		return nil, core.ErrNotFound
 	}
-	if s.jobs == nil {
-		return nil, fmt.Errorf("%w: job store is required", core.ErrValidation)
-	}
-
-	var reservationID string
-	if s.quotas != nil {
-		rec, qErr := s.quotas.ReserveQuota(ctx, userID, core.OperationResumeTailoring, defaultTailoringQuotaTokens, s.dailyRequestLimit, s.monthlyTokenLimit)
-		if qErr != nil {
-			return nil, qErr
-		}
-		if rec != nil {
-			reservationID = rec.ID
-		}
+	if s.store == nil {
+		return nil, fmt.Errorf("%w: store is required", core.ErrValidation)
 	}
 
 	now := s.now()
@@ -175,12 +164,11 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 	jobID := "job-" + uuid.New().String()
 	verID := "ver-" + uuid.New().String()
 	job := &core.Job{
-		ID:            jobID,
-		Kind:          core.JobKindBranchTailor,
-		UserID:        userID,
-		Status:        core.JobStatusPending,
-		ReservationID: reservationID,
-		ExpiresAt:     &expiresAt,
+		ID:        jobID,
+		Kind:      core.JobKindBranchTailor,
+		UserID:    userID,
+		Status:    core.JobStatusPending,
+		ExpiresAt: &expiresAt,
 		Tailor: &core.BranchTailorSpec{
 			BranchID:  b.ID,
 			VersionID: verID,
@@ -204,45 +192,23 @@ func (s *Service) enqueueBranchGeneration(ctx context.Context, userID string, b 
 		UpdatedAt:         now,
 	}
 
-	superseded, err := s.jobs.SubmitBranchTailor(ctx, job, ver, core.PendingJobOptions{
+	if err := s.store.SubmitBranchTailor(ctx, job, ver, core.PendingJobOptions{
 		MaxPendingPerTenant: maxPending,
 		TTL:                 ttl,
 		Now:                 now,
-	})
-	if err != nil {
-		s.releaseReservationWithDetachedContext(reservationID, formatQuotaErrorMessage(err))
+		Quota: &core.QuotaReservationSpec{
+			Operation:       core.OperationResumeTailoring,
+			EstimatedTokens: defaultTailoringQuotaTokens,
+			DailyLimit:      s.dailyRequestLimit,
+			MonthlyLimit:    s.monthlyTokenLimit,
+		},
+	}); err != nil {
 		return nil, err
 	}
-	s.releaseReservationsWithDetachedContext(superseded)
 
 	s.notifyJob()
 
 	return ver, nil
-}
-
-// CancelVersion cancels a queued pending branch version owned by userID and releases its reserved quota.
-func (s *Service) CancelVersion(ctx context.Context, userID, branchID, versionID string) (*core.BranchVersion, error) {
-	if err := requireUserID(userID); err != nil {
-		return nil, err
-	}
-	if s.jobs == nil {
-		return nil, fmt.Errorf("%w: job store is required", core.ErrValidation)
-	}
-	br, err := s.branches.Branch(ctx, userID, branchID)
-	if err != nil {
-		return nil, err
-	}
-	if br.UserID != userID {
-		return nil, core.ErrNotFound
-	}
-	cancelled, cancelledJob, err := s.jobs.CancelBranchVersion(ctx, userID, branchID, versionID, "cancelled by user")
-	if err != nil {
-		return nil, err
-	}
-	if cancelledJob != nil && cancelledJob.ReservationID != "" {
-		s.releaseReservationWithDetachedContext(cancelledJob.ReservationID, "cancelled by user")
-	}
-	return cancelled, nil
 }
 
 // EditVersion applies provenance validation to manual edits, renders templates, and appends a new immutable version.
@@ -250,7 +216,7 @@ func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	if err := requireUserID(userID); err != nil {
 		return nil, err
 	}
-	branch, err := s.branches.Branch(ctx, userID, branchID)
+	branch, err := s.store.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
 	}
@@ -265,15 +231,15 @@ func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 	if err != nil {
 		return nil, err
 	}
-	snapshot, err := s.profiles.Snapshot(ctx, userID)
+	snapshot, err := s.store.Snapshot(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	prof, err := s.profiles.Profile(ctx, userID)
+	prof, err := s.store.Profile(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	tmpl, err := s.templates.Template(ctx, userID, branch.TemplateSetID)
+	tmpl, err := s.store.Template(ctx, userID, branch.TemplateSetID)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +275,7 @@ func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 		CreatedAt:         s.now(),
 	}
 
-	if err := s.branches.SaveCompletedVersion(ctx, newVer); err != nil {
+	if err := s.store.SaveCompletedVersion(ctx, newVer); err != nil {
 		return nil, err
 	}
 	s.supersedePendingVersions(ctx, branchID, "superseded by manual edit")
@@ -318,14 +284,14 @@ func (s *Service) EditVersion(ctx context.Context, userID, branchID, parentVersi
 
 // renderDefaultBranchVersion synchronously renders a resume version for the default branch directly from the main profile.
 func (s *Service) renderDefaultBranchVersion(ctx context.Context, userID string, branch *core.Branch) (*core.BranchVersion, error) {
-	if s.profiles == nil {
-		return nil, errors.New("profile store required for default branch rendering")
+	if s.store == nil {
+		return nil, errors.New("store required for default branch rendering")
 	}
-	snapshot, err := s.profiles.Snapshot(ctx, userID)
+	snapshot, err := s.store.Snapshot(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("getting profile snapshot for default branch: %w", err)
 	}
-	prof, err := s.profiles.Profile(ctx, userID)
+	prof, err := s.store.Profile(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("getting profile for default branch: %w", err)
 	}
@@ -335,10 +301,7 @@ func (s *Service) renderDefaultBranchVersion(ctx context.Context, userID string,
 		tmplID = core.TemplateStandardCleanID
 		branch.TemplateSetID = tmplID
 	}
-	if s.templates == nil {
-		return nil, errors.New("template store required for default branch rendering")
-	}
-	tmpl, err := s.templates.Template(ctx, userID, tmplID)
+	tmpl, err := s.store.Template(ctx, userID, tmplID)
 	if err != nil {
 		return nil, fmt.Errorf("getting template %s for default branch: %w", tmplID, err)
 	}
@@ -369,7 +332,7 @@ func (s *Service) renderDefaultBranchVersion(ctx context.Context, userID string,
 		CompletedAt:       &now,
 	}
 
-	if err := s.branches.SaveCompletedVersion(ctx, ver); err != nil {
+	if err := s.store.SaveCompletedVersion(ctx, ver); err != nil {
 		return nil, fmt.Errorf("saving default branch version: %w", err)
 	}
 

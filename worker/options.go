@@ -125,45 +125,10 @@ func WithClock(clock func() time.Time) Option {
 	}
 }
 
-// WithJobs sets the JobStore used to claim, heartbeat, complete, fail, and sweep jobs on Pool.
-func WithJobs(jobs JobStore) Option {
+// WithStore sets the cohesive persistence and quota Store on Pool.
+func WithStore(store Store) Option {
 	return func(p *Pool) {
-		p.jobs = jobs
-	}
-}
-
-// WithBranches sets the BranchReader on Pool.
-func WithBranches(branches BranchReader) Option {
-	return func(p *Pool) {
-		p.branches = branches
-	}
-}
-
-// WithProfiles sets the ProfileReader on Pool.
-func WithProfiles(profiles ProfileReader) Option {
-	return func(p *Pool) {
-		p.profiles = profiles
-	}
-}
-
-// WithPresets sets the PresetReader on Pool.
-func WithPresets(presets PresetReader) Option {
-	return func(p *Pool) {
-		p.presets = presets
-	}
-}
-
-// WithTemplates sets the TemplateReader on Pool.
-func WithTemplates(templates TemplateReader) Option {
-	return func(p *Pool) {
-		p.templates = templates
-	}
-}
-
-// WithQuotas sets the QuotaCommitter on Pool.
-func WithQuotas(quotas QuotaCommitter) Option {
-	return func(p *Pool) {
-		p.quotas = quotas
+		p.store = store
 	}
 }
 

@@ -113,16 +113,16 @@ func TestNew_DefaultsAndOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("SubmitPDFJob rejects nil job store even with options", func(t *testing.T) {
-		_, err := SubmitPDFJob(
+	t.Run("PDFCoordinator SubmitAsync rejects nil store even with config", func(t *testing.T) {
+		coord := NewPDFCoordinator(nil, nil, nil, PDFCoordinatorConfig{
+			MaxRawTextBytes: 1024,
+		})
+		_, err := coord.SubmitAsync(
 			t.Context(),
-			nil,
-			PDFJobSubmission{UserID: "u1", RawText: "resume"},
-			nil,
-			WithPDFMaxRawTextBytes(1024),
+			PDFParseRequest{UserID: "u1", RawText: "resume"},
 		)
 		if !errors.Is(err, core.ErrValidation) {
-			t.Fatalf("expected ErrValidation for nil JobStore, got %v", err)
+			t.Fatalf("expected ErrValidation for nil store, got %v", err)
 		}
 	})
 }

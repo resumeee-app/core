@@ -11,6 +11,7 @@ import (
 	"github.com/resumeee-app/core"
 	"github.com/resumeee-app/core/llm"
 	"github.com/resumeee-app/core/sanitizer"
+	"github.com/resumeee-app/core/store"
 	"github.com/resumeee-app/core/worker"
 )
 
@@ -224,11 +225,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 
 	pool := worker.New(
 		worker.WithConcurrency(1),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(svc),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -257,7 +254,7 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 			VersionID: ver.ID,
 		},
 	}
-	if _, err := env.jobRepo.SubmitBranchTailor(ctx, &job, &ver, core.PendingJobOptions{}); err != nil {
+	if err := env.jobRepo.SubmitBranchTailor(ctx, &job, &ver, core.PendingJobOptions{}); err != nil {
 		t.Fatalf("failed to submit pending version: %v", err)
 	}
 	pool.Notify()
@@ -402,11 +399,11 @@ func TestWorkerPool_TailoringPipeline_SanitizerDeobfuscation(t *testing.T) {
 }
 
 // awaitCompletedVersion polls store until versionID reaches a terminal completed status or fails the test.
-func awaitCompletedVersion(ctx context.Context, t *testing.T, store worker.BranchReader, branchID, versionID string) *core.BranchVersion {
+func awaitCompletedVersion(ctx context.Context, t *testing.T, brStore *store.Branches, branchID, versionID string) *core.BranchVersion {
 	t.Helper()
 	for range 50 {
 		time.Sleep(20 * time.Millisecond)
-		v, err := store.Version(ctx, branchID, versionID)
+		v, err := brStore.Version(ctx, branchID, versionID)
 		if err == nil && (v.Status == core.VersionStatusCompleted || v.Status == core.VersionStatusCompletedWithWarnings || v.Status == core.VersionStatusFailed) {
 			if v.Status == core.VersionStatusFailed {
 				t.Fatalf("expected version completed or completed_with_warnings, got failed: %+v", v)
@@ -492,11 +489,7 @@ func runSanitizerPipelineVersion(ctx context.Context, t *testing.T, env *testWor
 	pool := worker.New(
 		worker.WithConcurrency(1),
 		worker.WithPollInterval(10*time.Millisecond),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(svc),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -525,7 +518,7 @@ func runSanitizerPipelineVersion(ctx context.Context, t *testing.T, env *testWor
 			VersionID: ver.ID,
 		},
 	}
-	if _, err := env.jobRepo.SubmitBranchTailor(ctx, &job, &ver, core.PendingJobOptions{}); err != nil {
+	if err := env.jobRepo.SubmitBranchTailor(ctx, &job, &ver, core.PendingJobOptions{}); err != nil {
 		t.Fatalf("failed to submit pending version: %v", err)
 	}
 	pool.Notify()

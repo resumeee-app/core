@@ -39,12 +39,8 @@ const (
 
 // Service manages resume branch lifecycles, version generation, gap analysis, and ATS scoring.
 type Service struct {
-	branches            Store
-	jobs                JobStore
-	profiles            ProfileReader
-	presets             PresetReader
-	templates           TemplateReader
-	quotas              QuotaManager
+	store               Store
+	quotaScope          *core.QuotaScope
 	jobNotifier         core.JobNotifier
 	validator           ProvenanceValidator
 	renderer            TemplateRenderer
@@ -77,6 +73,14 @@ func New(opts ...Option) *Service {
 			opt(s)
 		}
 	}
+	if s.store != nil {
+		s.quotaScope = core.NewQuotaScope(
+			s.store,
+			core.WithQuotaScopeLimits(s.dailyRequestLimit, s.monthlyTokenLimit),
+			core.WithQuotaScopeSettleTimeout(s.cleanupTimeout),
+			core.WithQuotaScopeLogger(s.logger),
+		)
+	}
 	return s
 }
 
@@ -101,61 +105,27 @@ func (s *Service) cleanupContext(ctx context.Context) (context.Context, context.
 	return context.WithTimeout(context.WithoutCancel(base), timeout)
 }
 
-// releaseReservationWithDetachedContext refunds a single quota reservation using a bounded detached context
-// so caller context cancellation cannot leak reserved tenant quota.
-func (s *Service) releaseReservationWithDetachedContext(reservationID, reason string) {
-	if s.quotas == nil || reservationID == "" {
-		return
-	}
-	cleanupCtx, cancel := s.cleanupContext(context.Background())
-	defer cancel()
-	if err := s.quotas.ReleaseQuota(cleanupCtx, reservationID, reason, core.LLMTelemetry{}); err != nil && s.logger != nil {
-		s.logger.Warn("failed to release quota reservation", "reservation_id", reservationID, "reason", reason, "err", err)
-	}
-}
-
-// releaseReservationsWithDetachedContext refunds quota reservations for superseded, aborted,
-// expired, or cancelled versions using bounded detached contexts.
-func (s *Service) releaseReservationsWithDetachedContext(released []core.ReleasedReservation) {
-	if s.quotas == nil || len(released) == 0 {
-		return
-	}
-	for _, r := range released {
-		if r.ReservationID == "" {
-			continue
-		}
-		s.releaseReservationWithDetachedContext(r.ReservationID, r.Reason)
-	}
-}
-
-// supersedePendingVersions cancels queued pending versions on branchID and releases their quota reservations.
+// supersedePendingVersions atomically cancels queued pending versions and settles their quota reservations.
 func (s *Service) supersedePendingVersions(ctx context.Context, branchID, reason string) {
-	if s.jobs == nil {
+	if s.store == nil {
 		return
 	}
-	released, err := s.jobs.SupersedeBranchTailor(ctx, branchID, reason)
-	if err != nil {
-		if s.logger != nil {
-			s.logger.Warn("failed to supersede pending versions", "branch_id", branchID, "reason", reason, "err", err)
-		}
-		return
+	if err := s.store.SupersedeBranchTailor(ctx, branchID, reason); err != nil && s.logger != nil {
+		s.logger.Warn("failed to supersede pending versions", "branch_id", branchID, "reason", reason, "err", err)
 	}
-	s.releaseReservationsWithDetachedContext(released)
 }
 
-// abortBranchVersions cancels pending and processing versions on branchID and releases their quota reservations.
+// abortBranchVersions atomically cancels pending and processing versions and settles their quota reservations.
 func (s *Service) abortBranchVersions(ctx context.Context, branchID, reason string) error {
-	if s.jobs == nil {
+	if s.store == nil {
 		return nil
 	}
-	released, err := s.jobs.AbortBranchJobs(ctx, branchID, reason)
-	if err != nil {
+	if err := s.store.AbortBranchJobs(ctx, branchID, reason); err != nil {
 		if s.logger != nil {
 			s.logger.Warn("failed to abort branch versions", "branch_id", branchID, "reason", reason, "err", err)
 		}
 		return err
 	}
-	s.releaseReservationsWithDetachedContext(released)
 	return nil
 }
 
@@ -176,8 +146,11 @@ func (s *Service) notifyJob() {
 
 // validateBranchReferences verifies that template and preset IDs referenced by branch exist and belong to the tenant.
 func (s *Service) validateBranchReferences(ctx context.Context, branch *core.Branch) error {
-	if s.templates != nil && branch.TemplateSetID != "" {
-		tmpl, err := s.templates.Template(ctx, branch.UserID, branch.TemplateSetID)
+	if s.store == nil {
+		return nil
+	}
+	if branch.TemplateSetID != "" {
+		tmpl, err := s.store.Template(ctx, branch.UserID, branch.TemplateSetID)
 		if err != nil {
 			return fmt.Errorf("%w: referenced template set %s: %v", core.ErrValidation, branch.TemplateSetID, err)
 		}
@@ -186,8 +159,8 @@ func (s *Service) validateBranchReferences(ctx context.Context, branch *core.Bra
 		}
 	}
 	presetID := branch.PresetID
-	if s.presets != nil && presetID != nil && *presetID != "" {
-		preset, err := s.presets.Preset(ctx, branch.UserID, *presetID)
+	if presetID != nil && *presetID != "" {
+		preset, err := s.store.Preset(ctx, branch.UserID, *presetID)
 		if err != nil {
 			return fmt.Errorf("%w: referenced preset %s: %v", core.ErrValidation, *presetID, err)
 		}
@@ -257,10 +230,10 @@ func (s *Service) populateBranchActiveMetrics(ctx context.Context, branch *core.
 	if branch.ATSScore != nil {
 		branch.ATSScore.Normalize()
 	}
-	if (hasGapReport && branch.ATSScore != nil) || branch.ActiveVersionID == nil || *branch.ActiveVersionID == "" || s.branches == nil {
+	if (hasGapReport && branch.ATSScore != nil) || branch.ActiveVersionID == nil || *branch.ActiveVersionID == "" || s.store == nil {
 		return
 	}
-	ver, err := s.branches.Version(ctx, branch.ID, *branch.ActiveVersionID)
+	ver, err := s.store.Version(ctx, branch.ID, *branch.ActiveVersionID)
 	if err == nil && ver != nil {
 		hydrateBranchFromActiveVersion(branch, ver, false)
 	}
@@ -271,7 +244,7 @@ func (s *Service) ListBranches(ctx context.Context, userID string, staleOnly boo
 	if err := requireUserID(userID); err != nil {
 		return nil, err
 	}
-	branches, err := s.branches.ListBranches(ctx, userID)
+	branches, err := s.store.ListBranches(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -314,10 +287,10 @@ func (s *Service) hydrateBranchListMetrics(ctx context.Context, branches []core.
 		}
 	}
 
-	if len(missingActiveVersionIDs) == 0 || s.branches == nil {
+	if len(missingActiveVersionIDs) == 0 || s.store == nil {
 		return
 	}
-	activeVersions, err := s.branches.VersionsByIDs(ctx, missingActiveVersionIDs)
+	activeVersions, err := s.store.VersionsByIDs(ctx, missingActiveVersionIDs)
 	if err != nil {
 		return
 	}
@@ -339,7 +312,7 @@ func (s *Service) Branch(ctx context.Context, userID, id string) (*core.Branch, 
 	if err := requireUserID(userID); err != nil {
 		return nil, err
 	}
-	branch, err := s.branches.Branch(ctx, userID, id)
+	branch, err := s.store.Branch(ctx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -366,18 +339,18 @@ func (s *Service) CreateBranch(ctx context.Context, branch *core.Branch) (*core.
 		branch.ID = "branch-" + uuid.New().String()
 	}
 
-	if s.profiles != nil {
-		prof, err := s.profiles.Profile(ctx, branch.UserID)
+	if s.store != nil {
+		prof, err := s.store.Profile(ctx, branch.UserID)
 		if err == nil && prof != nil {
 			branch.LastSyncedMainRevision = prof.MainRevision
 		}
 	}
 
-	if err := s.branches.CreateBranch(ctx, branch); err != nil {
+	if err := s.store.CreateBranch(ctx, branch); err != nil {
 		return nil, err
 	}
 
-	return s.branches.Branch(ctx, branch.UserID, branch.ID)
+	return s.store.Branch(ctx, branch.UserID, branch.ID)
 }
 
 // UpdateBranch modifies branch configuration while preserving default branch immutability invariants.
@@ -392,7 +365,7 @@ func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.
 		return nil, err
 	}
 
-	existing, err := s.branches.Branch(ctx, branch.UserID, branch.ID)
+	existing, err := s.store.Branch(ctx, branch.UserID, branch.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +383,7 @@ func (s *Service) UpdateBranch(ctx context.Context, branch *core.Branch) (*core.
 		}
 	}
 
-	if err := s.branches.UpdateBranch(ctx, branch); err != nil {
+	if err := s.store.UpdateBranch(ctx, branch); err != nil {
 		return nil, err
 	}
 	postCommitCtx, cancelPostCommit := s.cleanupContext(ctx)
@@ -438,13 +411,13 @@ func (s *Service) updateDefaultBranch(ctx context.Context, branch, existing *cor
 	branch.Name = core.DefaultBranchName
 
 	templateChanged := branch.TemplateSetID != "" && branch.TemplateSetID != existing.TemplateSetID
-	if templateChanged && s.templates != nil {
-		if _, err := s.templates.Template(ctx, branch.UserID, branch.TemplateSetID); err != nil {
+	if templateChanged && s.store != nil {
+		if _, err := s.store.Template(ctx, branch.UserID, branch.TemplateSetID); err != nil {
 			return nil, err
 		}
 	}
 
-	if err := s.branches.UpdateBranch(ctx, branch); err != nil {
+	if err := s.store.UpdateBranch(ctx, branch); err != nil {
 		return nil, err
 	}
 
@@ -459,7 +432,7 @@ func (s *Service) updateDefaultBranch(ctx context.Context, branch, existing *cor
 
 // validateActiveVersion verifies that the target active version exists, belongs to branch, and completed.
 func (s *Service) validateActiveVersion(ctx context.Context, branch *core.Branch) error {
-	ver, err := s.branches.Version(ctx, "", *branch.ActiveVersionID)
+	ver, err := s.store.Version(ctx, "", *branch.ActiveVersionID)
 	if err != nil {
 		if errors.Is(err, core.ErrNotFound) {
 			return fmt.Errorf("%w: active version %s not found", core.ErrValidation, *branch.ActiveVersionID)
@@ -476,12 +449,12 @@ func (s *Service) validateActiveVersion(ctx context.Context, branch *core.Branch
 	return nil
 }
 
-// DeleteBranch aborts active versions, releases reserved quota, and removes a non-default branch.
+// DeleteBranch aborts active versions, settles reserved quota, and removes a non-default branch.
 func (s *Service) DeleteBranch(ctx context.Context, userID, id string) error {
 	if err := requireUserID(userID); err != nil {
 		return err
 	}
-	branch, err := s.branches.Branch(ctx, userID, id)
+	branch, err := s.store.Branch(ctx, userID, id)
 	if err != nil {
 		return err
 	}
@@ -494,5 +467,5 @@ func (s *Service) DeleteBranch(ctx context.Context, userID, id string) error {
 	if err := s.abortBranchVersions(ctx, id, "branch deleted"); err != nil {
 		return err
 	}
-	return s.branches.DeleteBranch(ctx, userID, id)
+	return s.store.DeleteBranch(ctx, userID, id)
 }

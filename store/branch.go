@@ -329,12 +329,12 @@ func (b *Branches) SaveCompletedVersion(ctx context.Context, version *core.Branc
 				}
 			}
 		}
-		activeJobs, err := tx.ListActiveJobs(ctx)
+		branchJobs, err := tx.ListJobsByBranch(ctx, br.ID)
 		if err != nil {
 			return err
 		}
 		hasProcessingJob := false
-		for _, j := range activeJobs {
+		for _, j := range branchJobs {
 			if j.Kind == core.JobKindBranchTailor && j.Tailor != nil && j.Tailor.BranchID == br.ID && j.Status == core.JobStatusProcessing {
 				hasProcessingJob = true
 				break

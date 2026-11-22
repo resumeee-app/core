@@ -25,7 +25,7 @@ func (v *failingValidator) Validate(_ *core.TailoredContent, _ *core.MainProfile
 }
 
 type failingCompleteBranchStore struct {
-	worker.JobStore
+	worker.Store
 	completeErr error
 }
 
@@ -34,7 +34,7 @@ func (s *failingCompleteBranchStore) CompleteBranchTailor(_ context.Context, _, 
 }
 
 type failingCompletePDFStore struct {
-	worker.JobStore
+	worker.Store
 	completeErr error
 }
 
@@ -42,7 +42,7 @@ func (s *failingCompletePDFStore) CompletePDFParse(_ context.Context, _, _ strin
 	return s.completeErr
 }
 
-func waitForVersionTerminal(ctx context.Context, t *testing.T, brReader worker.BranchReader, branchID, versionID string) *core.BranchVersion {
+func waitForVersionTerminal(ctx context.Context, t *testing.T, brReader *store.Branches, branchID, versionID string) *core.BranchVersion {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -57,7 +57,7 @@ func waitForVersionTerminal(ctx context.Context, t *testing.T, brReader worker.B
 	}
 }
 
-func waitForPDFJobTerminal(ctx context.Context, t *testing.T, jobs worker.JobStore, userID, jobID string) *core.Job {
+func waitForPDFJobTerminal(ctx context.Context, t *testing.T, jobs *store.Jobs, userID, jobID string) *core.Job {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -117,7 +117,7 @@ func submitTelemetryTailorJob(ctx context.Context, t *testing.T, st *store.Store
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if _, err := st.Jobs().SubmitBranchTailor(ctx, job, ver, core.PendingJobOptions{}); err != nil {
+	if err := st.Jobs().SubmitBranchTailor(ctx, job, ver, core.PendingJobOptions{}); err != nil {
 		t.Fatalf("SubmitBranchTailor failed: %v", err)
 	}
 }
@@ -211,12 +211,7 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(10*time.Millisecond),
 			worker.WithMaxAttempts(1),
-			worker.WithJobs(st.Jobs()),
-			worker.WithBranches(st.Branches()),
-			worker.WithProfiles(st.Profiles()),
-			worker.WithPresets(st.Presets()),
-			worker.WithTemplates(st.Templates()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(st),
 			worker.WithGenerator(gen),
 			worker.WithValidator(provenance.New()),
 			worker.WithRenderer(renderer.New()),
@@ -294,12 +289,7 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(10*time.Millisecond),
 			worker.WithMaxAttempts(1),
-			worker.WithJobs(st.Jobs()),
-			worker.WithBranches(st.Branches()),
-			worker.WithProfiles(st.Profiles()),
-			worker.WithPresets(st.Presets()),
-			worker.WithTemplates(st.Templates()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(st),
 			worker.WithGenerator(gen),
 			worker.WithValidator(provenance.New()),
 			worker.WithRenderer(renderer.New()),
@@ -353,12 +343,7 @@ func TestPool_TailoringPipeline_TelemetryCommitAndVersionMetadata(t *testing.T) 
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(10*time.Millisecond),
 			worker.WithMaxAttempts(1),
-			worker.WithJobs(st.Jobs()),
-			worker.WithBranches(st.Branches()),
-			worker.WithProfiles(st.Profiles()),
-			worker.WithPresets(st.Presets()),
-			worker.WithTemplates(st.Templates()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(st),
 			worker.WithGenerator(&callbackLLM{}),
 			worker.WithValidator(provenance.New()),
 			worker.WithRenderer(renderer.New()),
@@ -458,12 +443,7 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 				worker.WithConcurrency(1),
 				worker.WithPollInterval(10*time.Millisecond),
 				worker.WithMaxAttempts(1),
-				worker.WithJobs(st.Jobs()),
-				worker.WithBranches(st.Branches()),
-				worker.WithProfiles(st.Profiles()),
-				worker.WithPresets(st.Presets()),
-				worker.WithTemplates(st.Templates()),
-				worker.WithQuotas(st.Quotas()),
+				worker.WithStore(st),
 				worker.WithGenerator(gen),
 				worker.WithValidator(provenance.New()),
 				worker.WithRenderer(renderer.New()),
@@ -529,12 +509,7 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(10*time.Millisecond),
 			worker.WithMaxAttempts(1),
-			worker.WithJobs(st.Jobs()),
-			worker.WithBranches(st.Branches()),
-			worker.WithProfiles(st.Profiles()),
-			worker.WithPresets(st.Presets()),
-			worker.WithTemplates(st.Templates()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(st),
 			worker.WithGenerator(&mockLLM{telemetry: wantTel}),
 			worker.WithValidator(&failingValidator{err: errors.New("hallucinated claim")}),
 			worker.WithRenderer(renderer.New()),
@@ -598,12 +573,7 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(10*time.Millisecond),
 			worker.WithMaxAttempts(1),
-			worker.WithJobs(&failingCompleteBranchStore{JobStore: st.Jobs(), completeErr: errors.New("disk full")}),
-			worker.WithBranches(st.Branches()),
-			worker.WithProfiles(st.Profiles()),
-			worker.WithPresets(st.Presets()),
-			worker.WithTemplates(st.Templates()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(&failingCompleteBranchStore{Store: st, completeErr: errors.New("disk full")}),
 			worker.WithGenerator(&mockLLM{telemetry: wantTel}),
 			worker.WithValidator(provenance.New()),
 			worker.WithRenderer(renderer.New()),
@@ -651,12 +621,7 @@ func TestPool_TailoringPipeline_TelemetryReleaseOnErrors(t *testing.T) {
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(10*time.Millisecond),
 			worker.WithMaxAttempts(1),
-			worker.WithJobs(st.Jobs()),
-			worker.WithBranches(st.Branches()),
-			worker.WithProfiles(st.Profiles()),
-			worker.WithPresets(st.Presets()),
-			worker.WithTemplates(st.Templates()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(st),
 			worker.WithGenerator(&mockLLM{}),
 			worker.WithValidator(provenance.New()),
 			worker.WithRenderer(renderer.New()),
@@ -708,8 +673,7 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(10*time.Millisecond),
 			worker.WithMaxAttempts(1),
-			worker.WithJobs(st.Jobs()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(st),
 			worker.WithResumeExtractor(ext),
 			worker.WithLLMTimeout(5*time.Second),
 		)
@@ -763,8 +727,7 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(10*time.Millisecond),
 			worker.WithMaxAttempts(1),
-			worker.WithJobs(st.Jobs()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(st),
 			worker.WithResumeExtractor(ext),
 			worker.WithLLMTimeout(5*time.Second),
 		)
@@ -851,8 +814,7 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 				worker.WithConcurrency(1),
 				worker.WithPollInterval(10*time.Millisecond),
 				worker.WithMaxAttempts(1),
-				worker.WithJobs(st.Jobs()),
-				worker.WithQuotas(st.Quotas()),
+				worker.WithStore(st),
 				worker.WithResumeExtractor(ext),
 				worker.WithLLMTimeout(5*time.Second),
 			)
@@ -908,8 +870,7 @@ func TestPool_PDFParseJob_Telemetry(t *testing.T) {
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(10*time.Millisecond),
 			worker.WithMaxAttempts(1),
-			worker.WithJobs(&failingCompletePDFStore{JobStore: st.Jobs(), completeErr: errors.New("write failed")}),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(&failingCompletePDFStore{Store: st, completeErr: errors.New("write failed")}),
 			worker.WithResumeExtractor(ext),
 			worker.WithLLMTimeout(5*time.Second),
 		)
@@ -1006,12 +967,7 @@ func TestPool_ConcurrentMixedTelemetry_Race(t *testing.T) {
 		worker.WithMaxConcurrentPerTenant(2),
 		worker.WithPollInterval(10*time.Millisecond),
 		worker.WithMaxAttempts(1),
-		worker.WithJobs(st.Jobs()),
-		worker.WithBranches(st.Branches()),
-		worker.WithProfiles(st.Profiles()),
-		worker.WithPresets(st.Presets()),
-		worker.WithTemplates(st.Templates()),
-		worker.WithQuotas(st.Quotas()),
+		worker.WithStore(st),
 		worker.WithResumeExtractor(ext),
 		worker.WithGenerator(gen),
 		worker.WithValidator(provenance.New()),

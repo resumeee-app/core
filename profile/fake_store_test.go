@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/resumeee-app/core"
 	"github.com/resumeee-app/core/profile"
@@ -97,9 +96,6 @@ func (s *fakeProfileStore) ReplaceCareerGraph(_ context.Context, userID string, 
 	return nil
 }
 
-func (s *fakeProfileStore) ListSkills(_ context.Context, _ string) ([]core.Skill, error) {
-	return nil, nil
-}
 func (s *fakeProfileStore) ListGlobalSkills(_ context.Context) ([]core.Skill, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -107,70 +103,6 @@ func (s *fakeProfileStore) ListGlobalSkills(_ context.Context) ([]core.Skill, er
 	copy(res, s.globalSkills)
 	return res, nil
 }
-func (s *fakeProfileStore) Skill(_ context.Context, _, _ string) (*core.Skill, error) {
-	return nil, core.ErrNotFound
-}
-func (s *fakeProfileStore) CreateSkill(_ context.Context, _ *core.Skill) error { return nil }
-func (s *fakeProfileStore) UpdateSkill(_ context.Context, _ *core.Skill) error { return nil }
-func (s *fakeProfileStore) DeleteSkill(_ context.Context, _, _ string) error   { return nil }
-
-func (s *fakeProfileStore) ListExperiences(_ context.Context, _ string) ([]core.WorkExperience, error) {
-	return nil, nil
-}
-func (s *fakeProfileStore) Experience(_ context.Context, _, _ string) (*core.WorkExperience, error) {
-	return nil, core.ErrNotFound
-}
-func (s *fakeProfileStore) CreateExperience(_ context.Context, _ *core.WorkExperience) error {
-	return nil
-}
-func (s *fakeProfileStore) UpdateExperience(_ context.Context, _ *core.WorkExperience) error {
-	return nil
-}
-func (s *fakeProfileStore) DeleteExperience(_ context.Context, _, _ string) error { return nil }
-
-func (s *fakeProfileStore) ListProjects(_ context.Context, _ string) ([]core.Project, error) {
-	return nil, nil
-}
-func (s *fakeProfileStore) Project(_ context.Context, _, _ string) (*core.Project, error) {
-	return nil, core.ErrNotFound
-}
-func (s *fakeProfileStore) CreateProject(_ context.Context, _ *core.Project) error { return nil }
-func (s *fakeProfileStore) UpdateProject(_ context.Context, _ *core.Project) error { return nil }
-func (s *fakeProfileStore) DeleteProject(_ context.Context, _, _ string) error     { return nil }
-
-func (s *fakeProfileStore) ListEducation(_ context.Context, _ string) ([]core.Education, error) {
-	return nil, nil
-}
-func (s *fakeProfileStore) Education(_ context.Context, _, _ string) (*core.Education, error) {
-	return nil, core.ErrNotFound
-}
-func (s *fakeProfileStore) CreateEducation(_ context.Context, _ *core.Education) error { return nil }
-func (s *fakeProfileStore) UpdateEducation(_ context.Context, _ *core.Education) error { return nil }
-func (s *fakeProfileStore) DeleteEducation(_ context.Context, _, _ string) error       { return nil }
-
-func (s *fakeProfileStore) ListCertifications(_ context.Context, _ string) ([]core.Certification, error) {
-	return nil, nil
-}
-func (s *fakeProfileStore) Certification(_ context.Context, _, _ string) (*core.Certification, error) {
-	return nil, core.ErrNotFound
-}
-func (s *fakeProfileStore) CreateCertification(_ context.Context, _ *core.Certification) error {
-	return nil
-}
-func (s *fakeProfileStore) UpdateCertification(_ context.Context, _ *core.Certification) error {
-	return nil
-}
-func (s *fakeProfileStore) DeleteCertification(_ context.Context, _, _ string) error { return nil }
-
-func (s *fakeProfileStore) ListFactsByOwner(_ context.Context, _, _, _ string) ([]core.Fact, error) {
-	return nil, nil
-}
-func (s *fakeProfileStore) Fact(_ context.Context, _, _ string) (*core.Fact, error) {
-	return nil, core.ErrNotFound
-}
-func (s *fakeProfileStore) CreateFact(_ context.Context, _ *core.Fact) error { return nil }
-func (s *fakeProfileStore) UpdateFact(_ context.Context, _ *core.Fact) error { return nil }
-func (s *fakeProfileStore) DeleteFact(_ context.Context, _, _ string) error  { return nil }
 
 // BranchStore methods
 
@@ -221,62 +153,6 @@ func (s *fakeProfileStore) DeleteBranch(_ context.Context, userID, id string) er
 	return nil
 }
 
-func (s *fakeProfileStore) CreateVersion(_ context.Context, version *core.BranchVersion) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.versions[version.ID] = version
-	return nil
-}
-
-func (s *fakeProfileStore) SubmitPendingVersion(_ context.Context, version *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
-	if version != nil && version.ID != "" {
-		s.mu.Lock()
-		s.versions[version.ID] = version
-		s.mu.Unlock()
-	}
-	return nil, nil
-}
-
-func (s *fakeProfileStore) SupersedePendingVersions(_ context.Context, _, _ string) ([]core.ReleasedReservation, error) {
-	return nil, nil
-}
-
-func (s *fakeProfileStore) AbortBranchVersions(_ context.Context, _, _ string) ([]core.ReleasedReservation, error) {
-	return nil, nil
-}
-
-func (s *fakeProfileStore) CancelVersion(_ context.Context, _, _, _, _ string) (*core.BranchVersion, error) {
-	return nil, core.ErrNotFound
-}
-
-func (s *fakeProfileStore) ClaimNextVersion(_ context.Context, _ core.ClaimJobRequest) (*core.BranchVersion, error) {
-	return nil, nil
-}
-
-func (s *fakeProfileStore) RenewVersionLease(_ context.Context, _, _ string, _ time.Time) error {
-	return nil
-}
-
-func (s *fakeProfileStore) RequeueVersionForRetry(_ context.Context, _, _ string, _ time.Time, _ string) error {
-	return nil
-}
-
-func (s *fakeProfileStore) FailClaimedVersion(_ context.Context, _, _, _ string) error {
-	return nil
-}
-
-func (s *fakeProfileStore) ExpirePendingVersions(_ context.Context, _ time.Time, _ string) ([]core.ReleasedReservation, error) {
-	return nil, nil
-}
-
-func (s *fakeProfileStore) FailExpiredVersionLeases(_ context.Context, _ time.Time, _ string) ([]core.ReleasedReservation, error) {
-	return nil, nil
-}
-
-func (s *fakeProfileStore) RecoverInterruptedVersions(_ context.Context, _ string) ([]core.ReleasedReservation, error) {
-	return nil, nil
-}
-
 func (s *fakeProfileStore) Version(_ context.Context, _, versionID string) (*core.BranchVersion, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -285,34 +161,6 @@ func (s *fakeProfileStore) Version(_ context.Context, _, versionID string) (*cor
 		return nil, fmt.Errorf("%w: version %s", core.ErrNotFound, versionID)
 	}
 	return v, nil
-}
-
-func (s *fakeProfileStore) VersionByNumber(_ context.Context, _ string, _ int) (*core.BranchVersion, error) {
-	return nil, core.ErrNotFound
-}
-
-func (s *fakeProfileStore) VersionsByIDs(_ context.Context, _ []string) ([]core.BranchVersion, error) {
-	return nil, nil
-}
-
-func (s *fakeProfileStore) ListVersions(_ context.Context, _ string) ([]core.BranchVersion, error) {
-	return nil, nil
-}
-
-func (s *fakeProfileStore) UpdateVersionStatus(_ context.Context, _ string, _ core.VersionStatus, _ string) error {
-	return nil
-}
-
-func (s *fakeProfileStore) CompleteVersion(_ context.Context, _ *core.BranchVersion) error {
-	return nil
-}
-
-func (s *fakeProfileStore) UpdateVersionATSScore(_ context.Context, _ string, _ *core.ATSScore) error {
-	return nil
-}
-
-func (s *fakeProfileStore) FailInterruptedVersions(_ context.Context, _ string) error {
-	return nil
 }
 
 // Compile-time interface assertions ensuring fakeProfileStore satisfies the store contracts required by profile.Service tests.

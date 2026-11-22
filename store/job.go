@@ -36,23 +36,21 @@ func (j *Jobs) Job(ctx context.Context, userID, jobID string) (*core.Job, error)
 	return out, err
 }
 
-// SubmitBranchTailor atomically creates a pending BranchVersion and queued branch_tailor Job,
-// failing any expired active lease on the branch, superseding prior pending jobs on the branch,
-// enforcing single-active-per-branch exclusivity and tenant/global pending caps.
+// SubmitBranchTailor atomically checks admission caps, optionally reserves tenant quota,
+// creates a pending BranchVersion and queued branch_tailor Job, and supersedes prior
+// pending work or expired active leases on the branch alongside their quota reservations.
 func (j *Jobs) SubmitBranchTailor(
 	ctx context.Context,
 	job *core.Job,
 	version *core.BranchVersion,
 	opts core.PendingJobOptions,
-) ([]core.ReleasedReservation, error) {
+) error {
 	branchID, err := validateTailorSubmission(job, version)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	var released []core.ReleasedReservation
-	err = j.store.backend.Write(ctx, func(tx Tx) error {
-		released = nil
+	return j.store.backend.Write(ctx, func(tx Tx) error {
 		// Execute all reads before writing.
 		br, err := tx.Branch(ctx, branchID)
 		if err != nil {
@@ -88,9 +86,33 @@ func (j *Jobs) SubmitBranchTailor(
 			return err
 		}
 
-		var modVersions []*core.BranchVersion
-		var modJobs []*core.Job
-		modVersions, modJobs, released = collectSupersededTailorWork(branchID, activeJobs, versionMap, now)
+		modVersions, modJobs := collectSupersededTailorWork(branchID, activeJobs, versionMap, now)
+		ledger := newQuotaTxLedger(now)
+		if err := ledger.loadPendingReleaseTargets(ctx, tx, modJobs); err != nil {
+			return err
+		}
+		if opts.Quota != nil {
+			if _, err := ledger.loadQuota(ctx, tx, userID, opts.Quota.DailyLimit, opts.Quota.MonthlyLimit, true); err != nil {
+				return err
+			}
+		}
+
+		for _, mj := range modJobs {
+			if mj.ReservationID != "" {
+				ledger.release(mj.ReservationID, mj.ErrorMessage, core.LLMTelemetry{})
+			}
+		}
+		if opts.Quota != nil {
+			rec, err := ledger.reserve(userID, *opts.Quota)
+			if err != nil {
+				return err
+			}
+			nextJob.ReservationID = rec.ID
+		}
+
+		if err := ledger.flush(ctx, tx); err != nil {
+			return err
+		}
 		populateTailorSubmission(br, userID, branchID, versions, nextJob, nextVer, opts, now)
 		if err := persistTailorSubmission(ctx, tx, modVersions, modJobs, nextVer, nextJob); err != nil {
 			return err
@@ -100,7 +122,6 @@ func (j *Jobs) SubmitBranchTailor(
 		*job = *cloneValue(nextJob)
 		return nil
 	})
-	return released, err
 }
 
 // validateTailorSubmission validates initial tailor submission arguments and resolves the target branch ID.
@@ -197,11 +218,10 @@ func collectSupersededTailorWork(
 	activeJobs []core.Job,
 	versionMap map[string]*core.BranchVersion,
 	now time.Time,
-) ([]*core.BranchVersion, []*core.Job, []core.ReleasedReservation) {
+) ([]*core.BranchVersion, []*core.Job) {
 	var (
 		modVersions []*core.BranchVersion
 		modJobs     []*core.Job
-		released    []core.ReleasedReservation
 	)
 	for i := range activeJobs {
 		aj := &activeJobs[i]
@@ -227,15 +247,13 @@ func collectSupersededTailorWork(
 			linkedVer = versionMap[aj.Tailor.VersionID]
 		}
 		cp := cloneValue(*aj)
-		if rel := failJobAndVersion(&cp, linkedVer, jobStatus, verStatus, reason, now, clearLease); rel != nil {
-			released = append(released, *rel)
-		}
+		failJobAndVersion(&cp, linkedVer, jobStatus, verStatus, reason, now, clearLease)
 		modJobs = append(modJobs, &cp)
 		if linkedVer != nil {
 			modVersions = append(modVersions, linkedVer)
 		}
 	}
-	return modVersions, modJobs, released
+	return modVersions, modJobs
 }
 
 // populateTailorSubmission fills normalized pending fields on nextVer and nextJob before persistence.
@@ -312,7 +330,8 @@ func persistTailorSubmission(
 	return tx.PutJob(ctx, nextJob)
 }
 
-// SubmitPDFParse atomically checks raw-text size and pending admission caps and inserts a pdf_parse Job.
+// SubmitPDFParse atomically checks raw-text size and pending admission caps, optionally reserves tenant quota,
+// and inserts a pdf_parse Job.
 func (j *Jobs) SubmitPDFParse(ctx context.Context, job *core.Job, opts core.PendingJobOptions) error {
 	if job == nil {
 		return fmt.Errorf("%w: job cannot be nil", core.ErrValidation)
@@ -354,6 +373,22 @@ func (j *Jobs) SubmitPDFParse(ctx context.Context, job *core.Job, opts core.Pend
 			return err
 		}
 
+		var ledger *quotaTxLedger
+		if opts.Quota != nil {
+			ledger = newQuotaTxLedger(now)
+			if _, err := ledger.loadQuota(ctx, tx, toSave.UserID, opts.Quota.DailyLimit, opts.Quota.MonthlyLimit, true); err != nil {
+				return err
+			}
+			rec, err := ledger.reserve(toSave.UserID, *opts.Quota)
+			if err != nil {
+				return err
+			}
+			toSave.ReservationID = rec.ID
+			if err := ledger.flush(ctx, tx); err != nil {
+				return err
+			}
+		}
+
 		_, _, ttl := resolvePendingLimits(opts)
 		toSave.Kind = core.JobKindPDFParse
 		toSave.Status = core.JobStatusPending
@@ -377,15 +412,24 @@ func (j *Jobs) SubmitPDFParse(ctx context.Context, job *core.Job, opts core.Pend
 	})
 }
 
-// SupersedeBranchTailor cancels all pending branch_tailor jobs for branchID and returns released reservations.
-func (j *Jobs) SupersedeBranchTailor(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error) {
+// SupersedeBranchTailor atomically cancels pending branch_tailor jobs for branchID and refunds held quota reservations.
+func (j *Jobs) SupersedeBranchTailor(ctx context.Context, branchID, reason string) error {
+	return j.cancelBranchJobs(ctx, branchID, false, reason)
+}
+
+// AbortBranchJobs atomically cancels both pending and processing branch_tailor jobs for branchID
+// and refunds held quota reservations.
+func (j *Jobs) AbortBranchJobs(ctx context.Context, branchID, reason string) error {
+	return j.cancelBranchJobs(ctx, branchID, true, reason)
+}
+
+// cancelBranchJobs atomically cancels matching active branch_tailor jobs and refunds their held quota reservations.
+func (j *Jobs) cancelBranchJobs(ctx context.Context, branchID string, includeProcessing bool, reason string) error {
 	if strings.TrimSpace(branchID) == "" {
-		return nil, fmt.Errorf("%w: branch id cannot be empty", core.ErrValidation)
+		return fmt.Errorf("%w: branch id cannot be empty", core.ErrValidation)
 	}
 
-	var released []core.ReleasedReservation
-	err := j.store.backend.Write(ctx, func(tx Tx) error {
-		released = nil
+	return j.store.backend.Write(ctx, func(tx Tx) error {
 		activeJobs, err := tx.ListActiveJobs(ctx)
 		if err != nil {
 			return err
@@ -399,137 +443,56 @@ func (j *Jobs) SupersedeBranchTailor(ctx context.Context, branchID, reason strin
 			versionMap[versions[i].ID] = &versions[i]
 		}
 
+		var matchedJobs []*core.Job
+		var matchedVersions []*core.BranchVersion
 		now := j.store.now()
-		return cancelBranchJobsTx(ctx, tx, activeJobs, versionMap, branchID, false, reason, now, &released)
-	})
-	return released, err
-}
-
-// AbortBranchJobs cancels both pending and processing branch_tailor jobs for branchID and returns released reservations.
-func (j *Jobs) AbortBranchJobs(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error) {
-	if strings.TrimSpace(branchID) == "" {
-		return nil, fmt.Errorf("%w: branch id cannot be empty", core.ErrValidation)
-	}
-
-	var released []core.ReleasedReservation
-	err := j.store.backend.Write(ctx, func(tx Tx) error {
-		released = nil
-		activeJobs, err := tx.ListActiveJobs(ctx)
-		if err != nil {
-			return err
-		}
-		versions, err := tx.ListVersionsByBranch(ctx, branchID)
-		if err != nil {
-			return err
-		}
-		versionMap := make(map[string]*core.BranchVersion, len(versions))
-		for i := range versions {
-			versionMap[versions[i].ID] = &versions[i]
-		}
-
-		now := j.store.now()
-		return cancelBranchJobsTx(ctx, tx, activeJobs, versionMap, branchID, true, reason, now, &released)
-	})
-	return released, err
-}
-
-// CancelJob cancels an owned pending job by ID, pruning transient PDF input and syncing any linked BranchVersion.
-func (j *Jobs) CancelJob(ctx context.Context, userID, jobID, reason string) (*core.Job, error) {
-	if strings.TrimSpace(userID) == "" || strings.TrimSpace(jobID) == "" {
-		return nil, fmt.Errorf("%w: user id and job id are required", core.ErrValidation)
-	}
-
-	var out *core.Job
-	err := j.store.backend.Write(ctx, func(tx Tx) error {
-		job, err := tx.Job(ctx, jobID)
-		if err != nil {
-			return err
-		}
-		if job.UserID != userID {
-			return core.ErrNotFound
-		}
-		if job.Status != core.JobStatusPending {
-			return fmt.Errorf("%w: cannot cancel job in %s state", core.ErrConflict, job.Status)
-		}
-
-		var ver *core.BranchVersion
-		if job.Kind == core.JobKindBranchTailor && job.Tailor != nil && job.Tailor.VersionID != "" {
-			ver, err = tx.Version(ctx, job.Tailor.VersionID)
-			if err != nil && !errors.Is(err, core.ErrNotFound) {
-				return err
+		for i := range activeJobs {
+			aj := &activeJobs[i]
+			if !isJobForBranch(aj, branchID) {
+				continue
+			}
+			if !includeProcessing && aj.Status != core.JobStatusPending {
+				continue
+			}
+			if includeProcessing && aj.Status.IsTerminal() {
+				continue
+			}
+			cp := cloneValue(*aj)
+			var ver *core.BranchVersion
+			if cp.Tailor != nil {
+				ver = versionMap[cp.Tailor.VersionID]
+			}
+			failJobAndVersion(&cp, ver, core.JobStatusCancelled, core.VersionStatusCancelled, reason, now, true)
+			matchedJobs = append(matchedJobs, &cp)
+			if ver != nil {
+				matchedVersions = append(matchedVersions, ver)
 			}
 		}
 
-		now := j.store.now()
-		failJobAndVersion(job, ver, core.JobStatusCancelled, core.VersionStatusCancelled, reason, now, true)
-		if ver != nil {
+		ledger := newQuotaTxLedger(now)
+		if err := ledger.loadPendingReleaseTargets(ctx, tx, matchedJobs); err != nil {
+			return err
+		}
+		for _, mj := range matchedJobs {
+			if mj.ReservationID != "" {
+				ledger.release(mj.ReservationID, reason, core.LLMTelemetry{})
+			}
+		}
+		if err := ledger.flush(ctx, tx); err != nil {
+			return err
+		}
+		for _, ver := range matchedVersions {
 			if err := tx.PutVersion(ctx, ver); err != nil {
 				return err
 			}
 		}
-		if err := tx.PutJob(ctx, job); err != nil {
-			return err
-		}
-		out = cloneValue(job)
-		return nil
-	})
-	return out, err
-}
-
-// CancelBranchVersion cancels an owned pending BranchVersion along with its linked queue Job.
-func (j *Jobs) CancelBranchVersion(ctx context.Context, userID, branchID, versionID, reason string) (*core.BranchVersion, *core.Job, error) {
-	if strings.TrimSpace(userID) == "" || strings.TrimSpace(versionID) == "" {
-		return nil, nil, fmt.Errorf("%w: user id and version id are required", core.ErrValidation)
-	}
-
-	var (
-		outVer *core.BranchVersion
-		outJob *core.Job
-	)
-	err := j.store.backend.Write(ctx, func(tx Tx) error {
-		ver, err := tx.Version(ctx, versionID)
-		if err != nil {
-			return err
-		}
-		if ver.UserID != userID || (branchID != "" && ver.BranchID != branchID) {
-			return core.ErrNotFound
-		}
-		var job *core.Job
-		if ver.JobID != "" {
-			job, err = tx.Job(ctx, ver.JobID)
-			if err != nil && !errors.Is(err, core.ErrNotFound) {
+		for _, mj := range matchedJobs {
+			if err := tx.PutJob(ctx, mj); err != nil {
 				return err
 			}
 		}
-
-		if ver.Status != core.VersionStatusPending {
-			return fmt.Errorf("%w: cannot cancel version in %s state", core.ErrConflict, ver.Status)
-		}
-		if job != nil && job.Status != core.JobStatusPending {
-			return fmt.Errorf("%w: cannot cancel job in %s state", core.ErrConflict, job.Status)
-		}
-
-		now := j.store.now()
-		if job != nil {
-			failJobAndVersion(job, ver, core.JobStatusCancelled, core.VersionStatusCancelled, reason, now, true)
-			if err := tx.PutJob(ctx, job); err != nil {
-				return err
-			}
-			outJob = cloneValue(job)
-		} else {
-			ver.Status = core.VersionStatusCancelled
-			ver.ErrorMessage = reason
-			completedAt := now
-			ver.CompletedAt = &completedAt
-			ver.UpdatedAt = now
-		}
-		if err := tx.PutVersion(ctx, ver); err != nil {
-			return err
-		}
-		outVer = cloneValue(ver)
 		return nil
 	})
-	return outVer, outJob, err
 }
 
 // ClaimNext atomically selects and claims the fairest eligible pending job across all workloads.
@@ -806,19 +769,19 @@ func (j *Jobs) CompletePDFParse(ctx context.Context, jobID, claimedBy string, re
 }
 
 // FailClaimed transitions an actively claimed processing job to failed, syncs any linked
-// BranchVersion to failed, and prunes transient PDF RawText.
-func (j *Jobs) FailClaimed(ctx context.Context, jobID, claimedBy, errMsg string) error {
-	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(claimedBy) == "" {
+// BranchVersion to failed, prunes transient PDF RawText, and idempotently releases any pending quota reservation.
+func (j *Jobs) FailClaimed(ctx context.Context, req core.FailClaimedRequest) error {
+	if strings.TrimSpace(req.JobID) == "" || strings.TrimSpace(req.ClaimedBy) == "" {
 		return fmt.Errorf("%w: job id and claimed_by are required", core.ErrValidation)
 	}
 
 	return j.store.backend.Write(ctx, func(tx Tx) error {
-		job, err := tx.Job(ctx, jobID)
+		job, err := tx.Job(ctx, req.JobID)
 		if err != nil {
 			return err
 		}
-		if job.Status != core.JobStatusProcessing || job.ClaimedBy != claimedBy {
-			return fmt.Errorf("%w: job %s is not actively claimed by %q", core.ErrLeaseExpired, jobID, claimedBy)
+		if job.Status != core.JobStatusProcessing || job.ClaimedBy != req.ClaimedBy {
+			return fmt.Errorf("%w: job %s is not actively claimed by %q", core.ErrLeaseExpired, req.JobID, req.ClaimedBy)
 		}
 		var ver *core.BranchVersion
 		if job.Kind == core.JobKindBranchTailor && job.Tailor != nil && job.Tailor.VersionID != "" {
@@ -828,7 +791,20 @@ func (j *Jobs) FailClaimed(ctx context.Context, jobID, claimedBy, errMsg string)
 			}
 		}
 
-		failJobAndVersion(job, ver, core.JobStatusFailed, core.VersionStatusFailed, errMsg, j.store.now(), false)
+		now := j.store.now()
+		var ledger *quotaTxLedger
+		if req.RefundQuota && job.ReservationID != "" {
+			ledger = newQuotaTxLedger(now)
+			if err := ledger.loadPendingReleaseTargets(ctx, tx, []*core.Job{job}); err != nil {
+				return err
+			}
+			ledger.release(job.ReservationID, req.ErrMsg, req.Telemetry)
+			if err := ledger.flush(ctx, tx); err != nil {
+				return err
+			}
+		}
+
+		failJobAndVersion(job, ver, core.JobStatusFailed, core.VersionStatusFailed, req.ErrMsg, now, false)
 		if ver != nil {
 			if err := tx.PutVersion(ctx, ver); err != nil {
 				return err
@@ -838,23 +814,25 @@ func (j *Jobs) FailClaimed(ctx context.Context, jobID, claimedBy, errMsg string)
 	})
 }
 
-// ExpirePending fails pending jobs whose ExpiresAt deadline has passed at now and returns released reservations.
-func (j *Jobs) ExpirePending(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error) {
+// ExpirePending atomically fails expired pending jobs at now, settles their quota reservations,
+// and returns the count of transitioned jobs.
+func (j *Jobs) ExpirePending(ctx context.Context, now time.Time, reason string) (int, error) {
 	return j.sweepJobs(ctx, now, reason, true, func(item *core.Job, ts time.Time) bool {
 		return item.Status == core.JobStatusPending && !isPendingUnexpired(item.ExpiresAt, ts)
 	})
 }
 
-// FailExpiredLeases fails processing jobs whose worker lease has expired at now and returns released reservations.
-func (j *Jobs) FailExpiredLeases(ctx context.Context, now time.Time, reason string) ([]core.ReleasedReservation, error) {
+// FailExpiredLeases atomically fails processing jobs whose worker lease has expired at now,
+// settles their quota reservations, and returns the count of transitioned jobs.
+func (j *Jobs) FailExpiredLeases(ctx context.Context, now time.Time, reason string) (int, error) {
 	return j.sweepJobs(ctx, now, reason, false, func(item *core.Job, ts time.Time) bool {
 		return item.Status == core.JobStatusProcessing && !isLeaseUnexpired(item.LeaseExpiresAt, ts)
 	})
 }
 
-// RecoverInterrupted fails all in-flight processing jobs and expired pending jobs following restart,
-// preserving unexpired pending work and returning released quota reservations.
-func (j *Jobs) RecoverInterrupted(ctx context.Context, reason string) ([]core.ReleasedReservation, error) {
+// RecoverInterrupted atomically fails in-flight processing jobs and expired pending jobs following restart,
+// settles their quota reservations, preserves unexpired pending work, and returns the count of transitioned jobs.
+func (j *Jobs) RecoverInterrupted(ctx context.Context, reason string) (int, error) {
 	return j.sweepJobs(ctx, time.Time{}, reason, false, func(item *core.Job, ts time.Time) bool {
 		return item.Status == core.JobStatusProcessing || (item.Status == core.JobStatusPending && !isPendingUnexpired(item.ExpiresAt, ts))
 	})
@@ -895,24 +873,24 @@ func (j *Jobs) CleanupCompletedJobs(ctx context.Context, userID string, olderTha
 	})
 }
 
-// sweepJobs atomically transitions every active job matching predicate to failed and returns released reservations.
+// sweepJobs atomically transitions every active job matching predicate to failed and settles held quota reservations.
 func (j *Jobs) sweepJobs(
 	ctx context.Context,
 	explicitNow time.Time,
 	reason string,
 	clearClaim bool,
 	match func(*core.Job, time.Time) bool,
-) ([]core.ReleasedReservation, error) {
-	var released []core.ReleasedReservation
+) (int, error) {
+	var transitioned int
 	err := j.store.backend.Write(ctx, func(tx Tx) error {
-		released = nil
+		transitioned = 0
 		ts := j.store.resolveNow(explicitNow)
 		activeJobs, err := tx.ListActiveJobs(ctx)
 		if err != nil {
 			return err
 		}
 
-		// Read every referenced BranchVersion before performing writes.
+		// Read every referenced BranchVersion and pending UsageRecord before performing writes.
 		versionsByID := make(map[string]*core.BranchVersion)
 		var matched []*core.Job
 		for i := range activeJobs {
@@ -932,69 +910,40 @@ func (j *Jobs) sweepJobs(
 			}
 		}
 
+		ledger := newQuotaTxLedger(ts)
+		if err := ledger.loadPendingReleaseTargets(ctx, tx, matched); err != nil {
+			return err
+		}
 		for _, mj := range matched {
 			var linkedVer *core.BranchVersion
 			if mj.Kind == core.JobKindBranchTailor && mj.Tailor != nil {
 				linkedVer = versionsByID[mj.Tailor.VersionID]
 			}
-			if rel := failJobAndVersion(mj, linkedVer, core.JobStatusFailed, core.VersionStatusFailed, reason, ts, clearClaim); rel != nil {
-				released = append(released, *rel)
+			failJobAndVersion(mj, linkedVer, core.JobStatusFailed, core.VersionStatusFailed, reason, ts, clearClaim)
+			if mj.ReservationID != "" {
+				ledger.release(mj.ReservationID, reason, core.LLMTelemetry{})
 			}
-			if linkedVer != nil {
-				if err := tx.PutVersion(ctx, linkedVer); err != nil {
-					return err
+		}
+		if err := ledger.flush(ctx, tx); err != nil {
+			return err
+		}
+
+		for _, mj := range matched {
+			if mj.Kind == core.JobKindBranchTailor && mj.Tailor != nil {
+				if linkedVer := versionsByID[mj.Tailor.VersionID]; linkedVer != nil {
+					if err := tx.PutVersion(ctx, linkedVer); err != nil {
+						return err
+					}
 				}
 			}
 			if err := tx.PutJob(ctx, mj); err != nil {
 				return err
 			}
 		}
+		transitioned = len(matched)
 		return nil
 	})
-	return released, err
-}
-
-// cancelBranchJobsTx cancels active branch_tailor jobs for branchID matching pending or all non-terminal states.
-func cancelBranchJobsTx(
-	ctx context.Context,
-	tx Tx,
-	activeJobs []core.Job,
-	versionMap map[string]*core.BranchVersion,
-	branchID string,
-	includeProcessing bool,
-	reason string,
-	now time.Time,
-	released *[]core.ReleasedReservation,
-) error {
-	for i := range activeJobs {
-		aj := &activeJobs[i]
-		if !isJobForBranch(aj, branchID) {
-			continue
-		}
-		if !includeProcessing && aj.Status != core.JobStatusPending {
-			continue
-		}
-		if includeProcessing && aj.Status.IsTerminal() {
-			continue
-		}
-		var ver *core.BranchVersion
-		if aj.Tailor != nil {
-			ver = versionMap[aj.Tailor.VersionID]
-		}
-		cp := cloneValue(*aj)
-		if rel := failJobAndVersion(&cp, ver, core.JobStatusCancelled, core.VersionStatusCancelled, reason, now, true); rel != nil {
-			*released = append(*released, *rel)
-		}
-		if ver != nil {
-			if err := tx.PutVersion(ctx, ver); err != nil {
-				return err
-			}
-		}
-		if err := tx.PutJob(ctx, &cp); err != nil {
-			return err
-		}
-	}
-	return nil
+	return transitioned, err
 }
 
 // resolveTailorBranchID extracts the branch ID specified on job or version.
@@ -1030,8 +979,7 @@ func clearJobLeaseFields(job *core.Job) {
 	job.LeaseExpiresAt = nil
 }
 
-// failJobAndVersion marks job and optional linked BranchVersion terminal, prunes PDF RawText,
-// and emits any Held ReservationID release record.
+// failJobAndVersion marks job and optional linked BranchVersion terminal and prunes PDF RawText.
 func failJobAndVersion(
 	job *core.Job,
 	ver *core.BranchVersion,
@@ -1040,7 +988,7 @@ func failJobAndVersion(
 	reason string,
 	now time.Time,
 	clearClaim bool,
-) *core.ReleasedReservation {
+) {
 	job.Status = jobStatus
 	job.ErrorMessage = reason
 	job.UpdatedAt = now
@@ -1061,16 +1009,6 @@ func failJobAndVersion(
 		ver.ErrorMessage = reason
 		ver.CompletedAt = &completedAt
 		ver.UpdatedAt = now
-	}
-
-	if job.ReservationID == "" || jobStatus == core.JobStatusCompleted {
-		return nil
-	}
-	return &core.ReleasedReservation{
-		JobID:         job.ID,
-		UserID:        job.UserID,
-		ReservationID: job.ReservationID,
-		Reason:        reason,
 	}
 }
 

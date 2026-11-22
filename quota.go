@@ -1,10 +1,13 @@
 package core
 
 import (
+	"context"
+	"log/slog"
+	"strings"
 	"time"
 )
 
-// Default tenant quota ceilings and usage history query bounds.
+// Default tenant quota ceilings, settlement timeout, and usage history query bounds.
 const (
 	// DefaultDailyRequestLimit caps daily LLM requests for newly provisioned tenants.
 	DefaultDailyRequestLimit = 50
@@ -14,7 +17,190 @@ const (
 
 	// DefaultUsageListLimit bounds usage history queries when callers omit a positive limit.
 	DefaultUsageListLimit = 50
+
+	// defaultQuotaSettleTimeout bounds detached quota commit and release calls regardless of caller cancellation.
+	defaultQuotaSettleTimeout = 10 * time.Second
+
+	// maxQuotaErrorMessageRunes bounds sanitized diagnostic strings written onto released usage records.
+	maxQuotaErrorMessageRunes = 256
+
+	// panicQuotaReleaseReason records why a reservation was refunded when a scoped callback panics or aborts.
+	panicQuotaReleaseReason = "operation panicked"
 )
+
+// QuotaReservationSpec carries the parameters required to atomically reserve quota for an AI operation.
+type QuotaReservationSpec struct {
+	Operation       LLMOperationType
+	EstimatedTokens int
+	DailyLimit      int
+	MonthlyLimit    int
+}
+
+// QuotaManager reserves, commits, and releases tenant LLM quota reservations and call telemetry.
+type QuotaManager interface {
+	ReserveQuota(ctx context.Context, userID string, op LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*LLMUsageRecord, error)
+	CommitUsage(ctx context.Context, reservationID string, telemetry LLMTelemetry) error
+	ReleaseQuota(ctx context.Context, reservationID, reason string, telemetry LLMTelemetry) error
+}
+
+// QuotaScopeOption configures optional settlement behavior on a QuotaScope.
+type QuotaScopeOption func(*QuotaScope)
+
+// WithQuotaScopeLimits sets positive daily request and monthly token ceilings enforced by QuotaScope reservations.
+func WithQuotaScopeLimits(dailyLimit, monthlyLimit int) QuotaScopeOption {
+	return func(s *QuotaScope) {
+		if dailyLimit > 0 {
+			s.dailyLimit = dailyLimit
+		}
+		if monthlyLimit > 0 {
+			s.monthlyLimit = monthlyLimit
+		}
+	}
+}
+
+// WithQuotaScopeSettleTimeout sets the detached timeout budget used when settling reservations.
+func WithQuotaScopeSettleTimeout(timeout time.Duration) QuotaScopeOption {
+	return func(s *QuotaScope) {
+		if timeout > 0 {
+			s.settleTimeout = timeout
+		}
+	}
+}
+
+// WithQuotaScopeLogger configures structured diagnostic logging for QuotaScope settlement failures.
+func WithQuotaScopeLogger(logger *slog.Logger) QuotaScopeOption {
+	return func(s *QuotaScope) {
+		s.logger = logger
+	}
+}
+
+// QuotaScope manages reserve, detached commit, and detached release lifecycles for synchronous AI operations.
+type QuotaScope struct {
+	quotas        QuotaManager
+	dailyLimit    int
+	monthlyLimit  int
+	settleTimeout time.Duration
+	logger        *slog.Logger
+}
+
+// NewQuotaScope constructs a QuotaScope backed by quotas (may be nil to skip quota enforcement).
+func NewQuotaScope(quotas QuotaManager, opts ...QuotaScopeOption) *QuotaScope {
+	s := &QuotaScope{
+		quotas:        quotas,
+		dailyLimit:    DefaultDailyRequestLimit,
+		monthlyLimit:  DefaultMonthlyTokenLimit,
+		settleTimeout: defaultQuotaSettleTimeout,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
+}
+
+// FormatQuotaErrorMessage flattens whitespace and bounds failure diagnostics stored on released usage records.
+func FormatQuotaErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	clean := strings.Join(strings.Fields(err.Error()), " ")
+	runes := []rune(clean)
+	if len(runes) > maxQuotaErrorMessageRunes {
+		return string(runes[:maxQuotaErrorMessageRunes]) + "..."
+	}
+	return clean
+}
+
+// Run reserves quota before invoking fn (when QuotaManager is configured) and settles the reservation
+// using a bounded detached context so caller timeouts or panics never leak quota.
+func (s *QuotaScope) Run(
+	ctx context.Context,
+	userID string,
+	op LLMOperationType,
+	estimatedTokens int,
+	fallbackTokens int,
+	releaseReason func(error) string,
+	fn func(context.Context) (LLMTelemetry, error),
+) error {
+	if fn == nil {
+		return nil
+	}
+	if s == nil || s.quotas == nil {
+		_, err := fn(ctx)
+		return err
+	}
+
+	reserveCtx := ctx
+	if reserveCtx == nil {
+		reserveCtx = context.Background()
+	}
+	rec, err := s.quotas.ReserveQuota(reserveCtx, userID, op, estimatedTokens, s.dailyLimit, s.monthlyLimit)
+	if err != nil {
+		return err
+	}
+
+	settled := false
+	if rec != nil && rec.ID != "" {
+		// Guard against panics or runtime.Goexit inside fn (or releaseReason) before normal settlement runs.
+		defer func() {
+			if !settled {
+				s.release(reserveCtx, rec.ID, panicQuotaReleaseReason, LLMTelemetry{})
+			}
+		}()
+	}
+
+	telemetry, retErr := fn(reserveCtx)
+	if rec == nil || rec.ID == "" {
+		return retErr
+	}
+
+	normalized := ResolveTelemetry(telemetry, retErr)
+	if retErr != nil {
+		reason := FormatQuotaErrorMessage(retErr)
+		if releaseReason != nil {
+			if custom := strings.TrimSpace(releaseReason(retErr)); custom != "" {
+				reason = custom
+			}
+		}
+		settled = true
+		s.release(reserveCtx, rec.ID, reason, normalized)
+		return retErr
+	}
+
+	if fallbackTokens > 0 {
+		normalized.Usage = normalized.Usage.WithFallback(fallbackTokens)
+	}
+	settled = true
+	settleCtx, cancel := s.settleContext(reserveCtx)
+	defer cancel()
+	if cErr := s.quotas.CommitUsage(settleCtx, rec.ID, normalized); cErr != nil && s.logger != nil {
+		s.logger.Error("failed to commit quota usage", "reservation_id", rec.ID, "err", cErr)
+	}
+	return nil
+}
+
+// release refunds reservationID under a detached bounded context and logs any persistence failure.
+func (s *QuotaScope) release(parent context.Context, reservationID, reason string, telemetry LLMTelemetry) {
+	settleCtx, cancel := s.settleContext(parent)
+	defer cancel()
+	if rErr := s.quotas.ReleaseQuota(settleCtx, reservationID, reason, telemetry); rErr != nil && s.logger != nil {
+		s.logger.Error("failed to release quota reservation", "reservation_id", reservationID, "reason", reason, "err", rErr)
+	}
+}
+
+// settleContext returns a detached bounded context derived from parent for post-operation quota settlement.
+func (s *QuotaScope) settleContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := s.settleTimeout
+	if timeout <= 0 {
+		timeout = defaultQuotaSettleTimeout
+	}
+	base := parent
+	if base == nil {
+		base = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(base), timeout)
+}
 
 // LLMOperationType identifies the category of LLM generation task for quota enforcement.
 type LLMOperationType string

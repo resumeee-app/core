@@ -831,9 +831,9 @@ func TestProfileService_ExportJSONResume_WithVersionID(t *testing.T) {
 			},
 		},
 	}
-	if err := branchRepo.CreateVersion(ctx, version); err != nil {
-		t.Fatalf("failed to create branch version: %v", err)
-	}
+	branchRepo.mu.Lock()
+	branchRepo.versions[version.ID] = version
+	branchRepo.mu.Unlock()
 
 	// 4. Export Mode B: When version_id is provided, exports tailored content
 	verID := "ver-tailored-1"

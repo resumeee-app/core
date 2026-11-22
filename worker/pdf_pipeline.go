@@ -36,7 +36,7 @@ func (p *Pool) safeProcessPDFJob(job *core.Job) {
 
 // processClaimedPDFJob coordinates asynchronous LLM parsing of persisted raw resume text into JSONResume.
 func (p *Pool) processClaimedPDFJob(job *core.Job) {
-	if p.jobs == nil || job == nil {
+	if p.store == nil || job == nil {
 		return
 	}
 
@@ -103,7 +103,7 @@ func (p *Pool) processClaimedPDFJob(job *core.Job) {
 	p.commitUsageDetached(job.ReservationID, telemetry)
 
 	stopHeartbeat()
-	if err := p.jobs.CompletePDFParse(attemptCtx, job.ID, claimedBy, extracted); err != nil {
+	if err := p.store.CompletePDFParse(attemptCtx, job.ID, claimedBy, extracted); err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to complete claimed pdf job",
 				"job_id", job.ID,

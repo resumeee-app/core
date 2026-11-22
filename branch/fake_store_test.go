@@ -3,6 +3,7 @@ package branch_test
 import (
 	"context"
 	"fmt"
+	"testing"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,13 +18,6 @@ import (
 
 type testBranchStore struct {
 	*store.Store
-	*store.Branches
-	*store.Profiles
-	*store.Presets
-	*store.Templates
-	*store.Quotas
-	*store.Career
-	*store.Jobs
 	backend *memory.Backend
 }
 
@@ -42,15 +36,8 @@ func newSeededBranchStoreWithClock(ctx context.Context, defaultUserID string, cl
 		panic(fmt.Sprintf("seed.DefaultData failed: %v", err))
 	}
 	return &testBranchStore{
-		Store:     st,
-		Branches:  st.Branches(),
-		Profiles:  st.Profiles(),
-		Presets:   st.Presets(),
-		Templates: st.Templates(),
-		Quotas:    st.Quotas(),
-		Career:    st.Career(),
-		Jobs:      st.Jobs(),
-		backend:   backend,
+		Store:   st,
+		backend: backend,
 	}
 }
 
@@ -120,7 +107,7 @@ func (s *testBranchStore) seedVersionInState(ctx context.Context, v *core.Branch
 		UpdatedAt: now,
 	}
 
-	if _, err := s.SubmitBranchTailor(ctx, pendingJob, &pendingVer, core.PendingJobOptions{
+	if err := s.SubmitBranchTailor(ctx, pendingJob, &pendingVer, core.PendingJobOptions{
 		MaxPendingPerTenant: 100,
 		TTL:                 core.DefaultJobTTL,
 		Now:                 now,
@@ -247,12 +234,47 @@ func (f *fakePromptCompiler) CompileATSMatchingPrompt(b core.Branch, profile *co
 	}, nil
 }
 
+type quotaOverrideStore struct {
+	branch.Store
+	quotas core.QuotaManager
+}
+
+func (s *quotaOverrideStore) ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error) {
+	return s.quotas.ReserveQuota(ctx, userID, op, estimatedTokens, dailyLimit, monthlyLimit)
+}
+
+func (s *quotaOverrideStore) CommitUsage(ctx context.Context, reservationID string, telemetry core.LLMTelemetry) error {
+	return s.quotas.CommitUsage(ctx, reservationID, telemetry)
+}
+
+func (s *quotaOverrideStore) ReleaseQuota(ctx context.Context, reservationID, reason string, telemetry core.LLMTelemetry) error {
+	return s.quotas.ReleaseQuota(ctx, reservationID, reason, telemetry)
+}
+
+func assertReservationState(ctx context.Context, t *testing.T, st *testBranchStore, userID, resID string, wantStatus core.ReservationStatus, wantReason string) {
+	t.Helper()
+	records, err := st.ListUsageRecords(ctx, userID, 50)
+	if err != nil {
+		t.Fatalf("ListUsageRecords(%s): %v", userID, err)
+	}
+	for _, rec := range records {
+		if rec.ID != resID {
+			continue
+		}
+		if rec.Status != wantStatus {
+			t.Errorf("reservation %s status = %s, want %s", resID, rec.Status, wantStatus)
+		}
+		if wantReason != "" && rec.ErrorMessage != wantReason {
+			t.Errorf("reservation %s ErrorMessage = %q, want %q", resID, rec.ErrorMessage, wantReason)
+		}
+		return
+	}
+	t.Fatalf("reservation %s not found in %d records for user %s", resID, len(records), userID)
+}
+
 var (
 	_ branch.Store          = (*testBranchStore)(nil)
-	_ branch.JobStore       = (*testBranchStore)(nil)
-	_ branch.ProfileReader  = (*testBranchStore)(nil)
-	_ branch.PresetReader   = (*testBranchStore)(nil)
-	_ branch.TemplateReader = (*testBranchStore)(nil)
-	_ branch.QuotaManager   = (*testBranchStore)(nil)
+	_ branch.Store          = (*quotaOverrideStore)(nil)
+	_ core.QuotaManager     = (*testBranchStore)(nil)
 	_ branch.PromptCompiler = (*fakePromptCompiler)(nil)
 )

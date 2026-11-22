@@ -112,13 +112,15 @@ func (f JobNotifierFunc) Notify() {
 	}
 }
 
-// PendingJobOptions configures atomic admission control, payload limits, and expiration TTL when queuing pending jobs.
+// PendingJobOptions configures atomic admission control, payload limits, optional quota reservation,
+// and expiration TTL when queuing pending jobs.
 type PendingJobOptions struct {
 	MaxPendingPerTenant int
 	MaxGlobalPending    int
 	MaxRawTextBytes     int
 	TTL                 time.Duration
 	Now                 time.Time
+	Quota               *QuotaReservationSpec
 }
 
 // ClaimJobRequest configures atomic direct-store claiming, lease ownership, fairness, and tenant caps.
@@ -131,10 +133,11 @@ type ClaimJobRequest struct {
 	PreferredKind          JobKind
 }
 
-// ReleasedReservation identifies a failed, expired, cancelled, or superseded job whose quota reservation should be released.
-type ReleasedReservation struct {
-	JobID         string
-	UserID        string
-	ReservationID string
-	Reason        string
+// FailClaimedRequest configures atomic failure transitions and optional quota refund settlement on a claimed job.
+type FailClaimedRequest struct {
+	JobID       string
+	ClaimedBy   string
+	ErrMsg      string
+	RefundQuota bool
+	Telemetry   LLMTelemetry
 }

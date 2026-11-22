@@ -1,11 +1,11 @@
-// Package worker provides a direct-store claiming worker pool and execution pipelines
-// for asynchronous resume generation and PDF resume extraction.
+// Package worker provides a direct-store claiming worker pool, execution pipelines,
+// and PDF resume extraction coordination for asynchronous and synchronous AI workloads.
 //
 // Key components include:
 //   - Pool: Concurrent worker pool managing direct-store claiming, lease heartbeats,
-//     bounded retries, TTL/lease expiration sweeps, and graceful shutdown
-//   - SubmitPDFJob and CancelPDFJob: Admission-bounded helpers for persisting and cancelling
-//     asynchronous PDF parse jobs with atomic quota lifecycle management
+//     bounded retries, TTL/lease expiration sweeps with atomic quota settlement, and graceful shutdown
+//   - PDFCoordinator: Coordinated synchronous and admission-bounded asynchronous PDF
+//     extraction over a unified store and quota lifecycle seam
 package worker
 
 import (
@@ -45,7 +45,7 @@ const (
 // ErrPoolClosed indicates the worker pool is nil or no longer accepting work.
 var ErrPoolClosed = errors.New("worker pool closed")
 
-// Pool claims persisted pending core.Job records directly from a JobStore,
+// Pool claims persisted pending core.Job records directly from a Store,
 // enforcing global and per-tenant concurrency limits, lease heartbeats, bounded retries, and periodic sweeps.
 type Pool struct {
 	concurrency            int
@@ -87,12 +87,7 @@ type Pool struct {
 	jobWG       sync.WaitGroup
 	logger      *slog.Logger
 
-	jobs            JobStore
-	branches        BranchReader
-	profiles        ProfileReader
-	presets         PresetReader
-	templates       TemplateReader
-	quotas          QuotaCommitter
+	store           Store
 	resumeExtractor ResumeExtractor
 	llmTimeout      time.Duration
 	generator       Generator
@@ -285,18 +280,16 @@ func (p *Pool) StopWithContext(ctx context.Context) error {
 	return stopErr
 }
 
-// RecoverStaleJobs fails interrupted processing jobs across the unified queue,
-// releasing all returned quota reservations via bounded detached cleanup contexts.
+// RecoverStaleJobs atomically fails interrupted processing jobs across the unified queue and settles quota.
 func (p *Pool) RecoverStaleJobs(ctx context.Context, reason string) error {
-	if p == nil || p.jobs == nil {
+	if p == nil || p.store == nil {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	released, err := p.jobs.RecoverInterrupted(ctx, reason)
-	p.releaseReservationsDetached(released)
+	_, err := p.store.RecoverInterrupted(ctx, reason)
 	return err
 }
 
@@ -352,7 +345,7 @@ func (p *Pool) tryClaimAndLaunch() bool {
 	p.claimMu.Lock()
 	defer p.claimMu.Unlock()
 
-	if p.jobs == nil {
+	if p.store == nil {
 		return false
 	}
 	if p.claimCtx != nil && p.claimCtx.Err() != nil {
@@ -373,7 +366,7 @@ func (p *Pool) tryClaimAndLaunch() bool {
 	}
 	p.preferPDFNext = !p.preferPDFNext
 
-	job, err := p.jobs.ClaimNext(p.claimCtx, core.ClaimJobRequest{
+	job, err := p.store.ClaimNext(p.claimCtx, core.ClaimJobRequest{
 		WorkerID:               p.workerID,
 		Now:                    p.now(),
 		LeaseDuration:          p.leaseDuration,
@@ -454,30 +447,29 @@ func (p *Pool) sweepLoop(ctx context.Context) {
 
 // runSweep executes one TTL and lease expiration sweep across the unified job queue.
 func (p *Pool) runSweep(ctx context.Context) {
-	if p.jobs == nil {
+	if p.store == nil {
 		return
 	}
 	now := p.now()
-	var released []core.ReleasedReservation
+	var transitioned int
 
-	if rel, err := p.jobs.ExpirePending(ctx, now, core.ErrJobExpired.Error()); err != nil {
+	if count, err := p.store.ExpirePending(ctx, now, core.ErrJobExpired.Error()); err != nil {
 		if p.logger != nil && ctx.Err() == nil {
 			p.logger.Warn("failed to expire pending jobs", "err", err)
 		}
 	} else {
-		released = append(released, rel...)
+		transitioned += count
 	}
 
-	if rel, err := p.jobs.FailExpiredLeases(ctx, now, core.ErrLeaseExpired.Error()); err != nil {
+	if count, err := p.store.FailExpiredLeases(ctx, now, core.ErrLeaseExpired.Error()); err != nil {
 		if p.logger != nil && ctx.Err() == nil {
 			p.logger.Warn("failed to expire stale job leases", "err", err)
 		}
 	} else {
-		released = append(released, rel...)
+		transitioned += count
 	}
 
-	if len(released) > 0 {
-		p.releaseReservationsDetached(released)
+	if transitioned > 0 {
 		p.Notify()
 	}
 }
@@ -516,31 +508,6 @@ func (p *Pool) stopRetryTimers() {
 		delete(p.retryTimers, id)
 	}
 	p.mu.Unlock()
-}
-
-// releaseReservationDetached refunds a single quota reservation using a bounded detached context.
-func (p *Pool) releaseReservationDetached(reservationID, reason string) {
-	if p.quotas == nil || reservationID == "" {
-		return
-	}
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), p.cleanupDuration())
-	defer cancel()
-	if err := p.quotas.ReleaseQuota(cleanupCtx, reservationID, reason, core.LLMTelemetry{}); err != nil && p.logger != nil {
-		p.logger.Warn("failed to release quota reservation", "reservation_id", reservationID, "reason", reason, "err", err)
-	}
-}
-
-// releaseReservationsDetached refunds all quota reservations returned by sweep or crash-recovery calls.
-func (p *Pool) releaseReservationsDetached(released []core.ReleasedReservation) {
-	if p.quotas == nil || len(released) == 0 {
-		return
-	}
-	for _, res := range released {
-		if res.ReservationID == "" {
-			continue
-		}
-		p.releaseReservationDetached(res.ReservationID, res.Reason)
-	}
 }
 
 // copySeqMap returns a non-nil shallow copy of a string-to-uint64 sequence map.

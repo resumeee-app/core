@@ -78,7 +78,7 @@ func (p *Pool) routeAttemptError(
 	errClass := core.ClassifyError(err)
 	userErrMsg := mapUserErr(err, errClass)
 
-	if errClass == core.ErrorClassTransient && p.jobs != nil {
+	if errClass == core.ErrorClassTransient && p.store != nil {
 		attempt := job.attemptCount
 		if attempt <= 0 {
 			attempt = 1
@@ -88,7 +88,7 @@ func (p *Pool) routeAttemptError(
 			nextRetryAt := p.now().Add(delay)
 			if job.expiresAt == nil || nextRetryAt.Before(*job.expiresAt) {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), p.cleanupDuration())
-				reqErr := p.jobs.RequeueForRetry(cleanupCtx, job.id, job.claimedBy, nextRetryAt, userErrMsg)
+				reqErr := p.store.RequeueForRetry(cleanupCtx, job.id, job.claimedBy, nextRetryAt, userErrMsg)
 				cancel()
 
 				if reqErr == nil {
@@ -119,9 +119,9 @@ func (p *Pool) routeAttemptError(
 	p.failClaimedJob(job, userErrMsg, true, telemetry)
 }
 
-// failClaimedJob records terminal failure for a claimed job using a bounded detached context and optionally releases reserved quota.
+// failClaimedJob atomically records terminal failure and optional quota refund settlement using a bounded detached context.
 func (p *Pool) failClaimedJob(job claimedJobDescriptor, errMsg string, refundQuota bool, telemetry core.LLMTelemetry) {
-	if job.id == "" || p.jobs == nil {
+	if job.id == "" || p.store == nil {
 		return
 	}
 	if p.logger != nil {
@@ -137,7 +137,13 @@ func (p *Pool) failClaimedJob(job claimedJobDescriptor, errMsg string, refundQuo
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), p.cleanupDuration())
 	defer cancel()
 
-	if err := p.jobs.FailClaimed(cleanupCtx, job.id, job.claimedBy, errMsg); err != nil {
+	if err := p.store.FailClaimed(cleanupCtx, core.FailClaimedRequest{
+		JobID:       job.id,
+		ClaimedBy:   job.claimedBy,
+		ErrMsg:      errMsg,
+		RefundQuota: refundQuota,
+		Telemetry:   telemetry.Normalize(),
+	}); err != nil {
 		if p.logger != nil && !isLeaseLossOrMissing(err) {
 			p.logger.Error("failed to record claimed job failure in store",
 				"kind", job.kind,
@@ -145,32 +151,18 @@ func (p *Pool) failClaimedJob(job claimedJobDescriptor, errMsg string, refundQuo
 				"error", err,
 			)
 		}
-		return
-	}
-	if refundQuota {
-		p.releaseJobQuota(cleanupCtx, job.reservationID, errMsg, telemetry)
 	}
 }
 
 // commitUsageDetached commits token usage and LLM call telemetry for reservationID using a bounded detached cleanup context.
 func (p *Pool) commitUsageDetached(reservationID string, telemetry core.LLMTelemetry) {
-	if p.quotas == nil || reservationID == "" {
+	if p.store == nil || reservationID == "" {
 		return
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), p.cleanupDuration())
 	defer cancel()
-	if err := p.quotas.CommitUsage(cleanupCtx, reservationID, telemetry.Normalize()); err != nil && p.logger != nil {
+	if err := p.store.CommitUsage(cleanupCtx, reservationID, telemetry.Normalize()); err != nil && p.logger != nil {
 		p.logger.Warn("failed to commit quota usage", "reservation_id", reservationID, "err", err)
-	}
-}
-
-// releaseJobQuota releases reserved tenant quota units alongside optional failure telemetry when a job fails prior to commitment.
-func (p *Pool) releaseJobQuota(ctx context.Context, reservationID, reason string, telemetry core.LLMTelemetry) {
-	if p.quotas == nil || reservationID == "" {
-		return
-	}
-	if err := p.quotas.ReleaseQuota(ctx, reservationID, reason, telemetry.Normalize()); err != nil && p.logger != nil {
-		p.logger.Warn("failed to release job quota", "reservation_id", reservationID, "reason", reason, "err", err)
 	}
 }
 
@@ -186,7 +178,7 @@ func (p *Pool) startLeaseHeartbeat(
 	if interval <= 0 {
 		interval = p.leaseDuration / 3
 	}
-	if interval <= 0 || p.jobs == nil {
+	if interval <= 0 || p.store == nil {
 		return func() {}
 	}
 
@@ -207,7 +199,7 @@ func (p *Pool) startLeaseHeartbeat(
 				return
 			case <-ticker.C:
 				renewCtx, cancel := context.WithTimeout(parentCtx, p.cleanupDuration())
-				err := p.jobs.RenewLease(renewCtx, jobID, claimedBy, p.now().Add(p.leaseDuration))
+				err := p.store.RenewLease(renewCtx, jobID, claimedBy, p.now().Add(p.leaseDuration))
 				cancel()
 				if err != nil {
 					if isLeaseLossOrMissing(err) {

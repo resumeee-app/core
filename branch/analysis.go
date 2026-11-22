@@ -10,7 +10,7 @@ import (
 	"github.com/resumeee-app/core"
 )
 
-// Quota token budgets, settlement timeouts, and error truncation limits for analysis operations.
+// Quota token budgets and post-LLM persistence timeout limits for analysis operations.
 const (
 	// gapAnalysisEstimatedTokens is reserved before dispatching gap analysis to the LLM.
 	gapAnalysisEstimatedTokens = 1000
@@ -20,68 +20,19 @@ const (
 	atsSimulationEstimatedTokens = 1500
 	// atsSimulationFallbackTokens is committed when ATS simulation reports zero token usage.
 	atsSimulationFallbackTokens = 800
-	// quotaSettleTimeout bounds quota settlement writes when the caller context is already done.
-	quotaSettleTimeout = 5 * time.Second
-	// maxQuotaErrorMessageRunes bounds persisted failure diagnostics on released quota records.
-	maxQuotaErrorMessageRunes = 256
+	// postLLMPersistTimeout bounds non-quota persistence writes when the caller context is already done.
+	postLLMPersistTimeout = 5 * time.Second
 )
 
-// detachedQuotaContext ensures quota settlement runs under an uncancelled bounded context when ctx is done.
-func detachedQuotaContext(ctx context.Context) (context.Context, context.CancelFunc) {
+// detachedPersistContext ensures post-LLM persistence runs under a bounded context when ctx is done.
+func detachedPersistContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
-		return context.WithTimeout(context.Background(), quotaSettleTimeout)
+		return context.WithTimeout(context.Background(), postLLMPersistTimeout)
 	}
 	if ctx.Err() == nil {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(context.WithoutCancel(ctx), quotaSettleTimeout)
-}
-
-// formatQuotaErrorMessage collapses line breaks and bounds failure error messages persisted on quota records.
-func formatQuotaErrorMessage(err error) string {
-	if err == nil {
-		return ""
-	}
-	clean := strings.Join(strings.Fields(err.Error()), " ")
-	runes := []rune(clean)
-	if len(runes) > maxQuotaErrorMessageRunes {
-		return string(runes[:maxQuotaErrorMessageRunes]) + "..."
-	}
-	return clean
-}
-
-// reserveOperationQuota reserves quota for op and returns a completion callback to commit or release it.
-func (s *Service) reserveOperationQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, fallbackTokens int) (func(core.LLMTelemetry, error), error) {
-	if s.generator == nil || s.quotas == nil {
-		return func(core.LLMTelemetry, error) {}, nil
-	}
-	rec, err := s.quotas.ReserveQuota(ctx, userID, op, estimatedTokens, s.dailyRequestLimit, s.monthlyTokenLimit)
-	if err != nil {
-		return nil, err
-	}
-	return s.newQuotaFinalizer(ctx, rec, fallbackTokens), nil
-}
-
-// newQuotaFinalizer builds a deferred callback that releases or commits a quota reservation with normalized call telemetry.
-func (s *Service) newQuotaFinalizer(ctx context.Context, rec *core.LLMUsageRecord, fallbackTokens int) func(core.LLMTelemetry, error) {
-	return func(telemetry core.LLMTelemetry, retErr error) {
-		if rec == nil {
-			return
-		}
-		telemetry = core.ResolveTelemetry(telemetry, retErr)
-		quotaCtx, cancel := detachedQuotaContext(ctx)
-		defer cancel()
-		if retErr != nil {
-			if err := s.quotas.ReleaseQuota(quotaCtx, rec.ID, formatQuotaErrorMessage(retErr), telemetry); err != nil && s.logger != nil {
-				s.logger.Error("failed to release quota reservation", "reservation_id", rec.ID, "err", err)
-			}
-			return
-		}
-		telemetry.Usage = telemetry.Usage.WithFallback(fallbackTokens)
-		if err := s.quotas.CommitUsage(quotaCtx, rec.ID, telemetry); err != nil && s.logger != nil {
-			s.logger.Error("failed to commit quota usage", "reservation_id", rec.ID, "err", err)
-		}
-	}
+	return context.WithTimeout(context.WithoutCancel(ctx), postLLMPersistTimeout)
 }
 
 // tryAcquireATSInFlight records an active ATS simulation for versionID unless one is already running.
@@ -107,36 +58,31 @@ func (s *Service) AnalyzeGaps(ctx context.Context, userID, branchID string) (*co
 	if err := requireUserID(userID); err != nil {
 		return nil, err
 	}
-	branch, err := s.branches.Branch(ctx, userID, branchID)
+	branch, err := s.store.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
 	}
 	if branch.UserID != userID {
 		return nil, core.ErrNotFound
 	}
-	snapshot, err := s.profiles.Snapshot(ctx, userID)
+	snapshot, err := s.store.Snapshot(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-
-	var (
-		retErr    error
-		telemetry core.LLMTelemetry
-	)
-	finishQuota, err := s.reserveOperationQuota(ctx, userID, core.OperationGapAnalysis, gapAnalysisEstimatedTokens, gapAnalysisFallbackTokens)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		finishQuota(telemetry, retErr)
-	}()
 
 	activeVer := s.loadOptionalActiveVersion(ctx, branch, "could not fetch active version for gap analysis")
-	report, callTel, err := s.computeGapReport(ctx, branch, snapshot, activeVer)
-	telemetry = callTel
+	var report *core.GapReport
+	if s.generator != nil && s.quotaScope != nil {
+		err = s.quotaScope.Run(ctx, userID, core.OperationGapAnalysis, gapAnalysisEstimatedTokens, gapAnalysisFallbackTokens, nil, func(callCtx context.Context) (core.LLMTelemetry, error) {
+			rep, callTel, callErr := s.computeGapReport(callCtx, branch, snapshot, activeVer)
+			report = rep
+			return callTel, callErr
+		})
+	} else {
+		report, _, err = s.computeGapReport(ctx, branch, snapshot, activeVer)
+	}
 	if err != nil {
-		retErr = err
-		return nil, retErr
+		return nil, err
 	}
 
 	// Normalization MUST occur before scoring so identified_gaps populate missing_requirements.
@@ -159,7 +105,7 @@ func (s *Service) loadOptionalActiveVersion(ctx context.Context, branch *core.Br
 	if branch.ActiveVersionID == nil || *branch.ActiveVersionID == "" {
 		return nil
 	}
-	v, err := s.branches.Version(ctx, branch.ID, *branch.ActiveVersionID)
+	v, err := s.store.Version(ctx, branch.ID, *branch.ActiveVersionID)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Warn(warnMsg, "branch_id", branch.ID, "version_id", *branch.ActiveVersionID, "err", err)
@@ -202,17 +148,17 @@ func (s *Service) computeGapReport(ctx context.Context, branch *core.Branch, sna
 
 // persistGapReport saves report onto activeVer (mirroring onto the branch) or directly onto branch when no active version exists.
 func (s *Service) persistGapReport(ctx context.Context, branch *core.Branch, activeVer *core.BranchVersion, report *core.GapReport) {
-	persistCtx, cancel := detachedQuotaContext(ctx)
+	persistCtx, cancel := detachedPersistContext(ctx)
 	defer cancel()
 	branch.GapReport = report
 	if activeVer != nil {
 		activeVer.GapReport = report
-		if err := s.branches.SetVersionGapReport(persistCtx, activeVer.ID, report); err != nil && s.logger != nil {
+		if err := s.store.SetVersionGapReport(persistCtx, activeVer.ID, report); err != nil && s.logger != nil {
 			s.logger.Error("failed to persist gap report on active version", "branch_id", branch.ID, "version_id", activeVer.ID, "err", err)
 		}
 		return
 	}
-	if err := s.branches.UpdateBranch(persistCtx, branch); err != nil && s.logger != nil {
+	if err := s.store.UpdateBranch(persistCtx, branch); err != nil && s.logger != nil {
 		s.logger.Error("failed to persist gap report on branch", "branch_id", branch.ID, "err", err)
 	}
 }
@@ -244,30 +190,34 @@ func (s *Service) SimulateATS(ctx context.Context, userID, branchID string, opts
 		return nil, err
 	}
 
-	var (
-		retErr    error
-		telemetry core.LLMTelemetry
-	)
-	finishQuota, err := s.reserveOperationQuota(ctx, userID, core.OperationATSSimulation, atsSimulationEstimatedTokens, atsSimulationFallbackTokens)
+	runSimulation := func(callCtx context.Context) (*core.ATSScore, core.LLMTelemetry, error) {
+		atsScore, callTel, callErr := s.executeATSSimulation(callCtx, branch, snapshot, resumeText, formatUsed)
+		if callErr != nil {
+			return nil, callTel, callErr
+		}
+		persistCtx, cancelPersist := detachedPersistContext(callCtx)
+		defer cancelPersist()
+		if pErr := s.store.SetVersionATSScore(persistCtx, ver.ID, atsScore); pErr != nil {
+			return nil, callTel, pErr
+		}
+		return atsScore, callTel, nil
+	}
+
+	if s.generator != nil && s.quotaScope != nil {
+		var atsScore *core.ATSScore
+		if err := s.quotaScope.Run(ctx, userID, core.OperationATSSimulation, atsSimulationEstimatedTokens, atsSimulationFallbackTokens, nil, func(callCtx context.Context) (core.LLMTelemetry, error) {
+			score, callTel, callErr := runSimulation(callCtx)
+			atsScore = score
+			return callTel, callErr
+		}); err != nil {
+			return nil, err
+		}
+		return atsScore, nil
+	}
+
+	atsScore, _, err := runSimulation(ctx)
 	if err != nil {
 		return nil, err
-	}
-	defer func() {
-		finishQuota(telemetry, retErr)
-	}()
-
-	atsScore, callTel, err := s.executeATSSimulation(ctx, branch, snapshot, resumeText, formatUsed)
-	telemetry = callTel
-	if err != nil {
-		retErr = err
-		return nil, retErr
-	}
-
-	persistCtx, cancelPersist := detachedQuotaContext(ctx)
-	defer cancelPersist()
-	if err := s.branches.SetVersionATSScore(persistCtx, ver.ID, atsScore); err != nil {
-		retErr = err
-		return nil, retErr
 	}
 	return atsScore, nil
 }
@@ -282,7 +232,7 @@ func normalizeATSOptionFormat(opts *core.ATSSimulationOptions) (string, error) {
 
 // resolveATSTarget validates branch preconditions and returns the eligible completed version for ATS scoring.
 func (s *Service) resolveATSTarget(ctx context.Context, userID, branchID string, opts *core.ATSSimulationOptions) (*core.Branch, *core.BranchVersion, error) {
-	branch, err := s.branches.Branch(ctx, userID, branchID)
+	branch, err := s.store.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -340,8 +290,8 @@ func (s *Service) resolveCompletedVersion(ctx context.Context, b *core.Branch, e
 // loadATSSimulationInputs loads the candidate snapshot (failing closed if configured) and resolves resume text.
 func (s *Service) loadATSSimulationInputs(ctx context.Context, userID string, branch *core.Branch, ver *core.BranchVersion, requestedFormat string) (*core.MainProfileSnapshot, string, string, error) {
 	var snapshot *core.MainProfileSnapshot
-	if s.profiles != nil {
-		snap, err := s.profiles.Snapshot(ctx, userID)
+	if s.store != nil {
+		snap, err := s.store.Snapshot(ctx, userID)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("failed to load profile snapshot for ATS sanitizer session: %w", err)
 		}
@@ -405,7 +355,7 @@ func (s *Service) renderMissingVersionOutputs(ctx context.Context, userID string
 	htmlOut := ver.HTMLOutput
 	mdOut := ver.MarkdownOutput
 	txtOut := ver.PlainTextOutput
-	if (htmlOut != "" && mdOut != "" && txtOut != "") || ver.TailoredContent == nil || s.renderer == nil || s.templates == nil {
+	if (htmlOut != "" && mdOut != "" && txtOut != "") || ver.TailoredContent == nil || s.renderer == nil || s.store == nil {
 		return htmlOut, mdOut, txtOut
 	}
 
@@ -416,7 +366,7 @@ func (s *Service) renderMissingVersionOutputs(ctx context.Context, userID string
 	if tmplID == "" {
 		return htmlOut, mdOut, txtOut
 	}
-	tmpl, err := s.templates.Template(ctx, userID, tmplID)
+	tmpl, err := s.store.Template(ctx, userID, tmplID)
 	if err != nil || tmpl == nil {
 		return htmlOut, mdOut, txtOut
 	}

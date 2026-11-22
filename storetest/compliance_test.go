@@ -1,6 +1,7 @@
 package storetest_test
 
 import (
+	"github.com/resumeee-app/core"
 	"github.com/resumeee-app/core/branch"
 	"github.com/resumeee-app/core/profile"
 	"github.com/resumeee-app/core/seed"
@@ -8,23 +9,11 @@ import (
 	"github.com/resumeee-app/core/worker"
 )
 
-// Compile-time checks verifying store sub-stores satisfy all consumer-defined interfaces across packages.
+// Compile-time checks verifying Store and sub-repositories satisfy all consumer-defined interfaces across packages.
 var (
-	_ branch.Store          = (*store.Branches)(nil)
-	_ branch.JobStore       = (*store.Jobs)(nil)
-	_ branch.ProfileReader  = (*store.Profiles)(nil)
-	_ branch.PresetReader   = (*store.Presets)(nil)
-	_ branch.TemplateReader = (*store.Templates)(nil)
-	_ branch.QuotaManager   = (*store.Quotas)(nil)
-
-	_ worker.BranchReader     = (*store.Branches)(nil)
-	_ worker.JobStore         = (*store.Jobs)(nil)
-	_ worker.ProfileReader    = (*store.Profiles)(nil)
-	_ worker.PresetReader     = (*store.Presets)(nil)
-	_ worker.TemplateReader   = (*store.Templates)(nil)
-	_ worker.QuotaCommitter   = (*store.Quotas)(nil)
-	_ worker.PDFQuotaReserver = (*store.Quotas)(nil)
-	_ worker.QuotaReleaser    = (*store.Quotas)(nil)
+	_ core.QuotaManager = (*store.Store)(nil)
+	_ branch.Store      = (*store.Store)(nil)
+	_ worker.Store      = (*store.Store)(nil)
 
 	_ profile.Store        = (*store.Profiles)(nil)
 	_ profile.SkillCatalog = (*store.Career)(nil)

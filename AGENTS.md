@@ -13,7 +13,7 @@ Idiomatic Go standards for `core` (`github.com/resumeee-app/core`). Run `make ve
 
 - **Consumer-side interfaces**: Define small, single-purpose interfaces in the package that *consumes* them. Keep implementations decoupled from central interface files.
 - **Accept interfaces, return structs**: Accept interfaces in constructors/functions when abstraction is needed, and return concrete struct pointers (`*Store`, `*Client`).
-- **Compile-time implementation checks**: Verify interface satisfaction at compile time with `var _ Interface = (*ConcreteType)(nil)` in the implementing package.
+- **Compile-time implementation checks**: Verify wired interface satisfaction at compile time with `var _ Interface = (*ConcreteType)(nil)` in the implementing package or a compliance test package (such as `storetest`).
 - **Typed contracts over assertions**: Pass concrete types or typed interfaces instead of `any` with runtime type assertions (`v.(T)`). Restrict `any` and type switches strictly to dynamic JSON unmarshaling or template boundaries.
 
 ## Naming & Package Structure

@@ -22,14 +22,14 @@ func (s *Service) PromptPreview(ctx context.Context, userID, branchID string, op
 		return nil, fmt.Errorf("%w: prompt compiler not configured", core.ErrValidation)
 	}
 
-	branch, err := s.branches.Branch(ctx, userID, branchID)
+	branch, err := s.store.Branch(ctx, userID, branchID)
 	if err != nil {
 		return nil, err
 	}
 	if branch.UserID != userID {
 		return nil, core.ErrNotFound
 	}
-	snapshot, err := s.profiles.Snapshot(ctx, userID)
+	snapshot, err := s.store.Snapshot(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func previewWorkflow(opts *core.PromptPreviewOptions) (core.PromptWorkflow, erro
 // compileTailoringPreview loads user writing rules, preset instructions, and prior tailored content
 // before compiling a tailoring prompt preview.
 func (s *Service) compileTailoringPreview(ctx context.Context, userID string, b *core.Branch, snapshot *core.MainProfileSnapshot, opts *core.PromptPreviewOptions) (*core.PromptPreview, error) {
-	prof, err := s.profiles.Profile(ctx, userID)
+	prof, err := s.store.Profile(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -175,8 +175,8 @@ func (s *Service) loadPreviewPresetAndPrior(ctx context.Context, userID string, 
 	explicitPreset := opts != nil && opts.PresetID != nil && strings.TrimSpace(*opts.PresetID) != ""
 	var preset *core.Preset
 	var presetInstructions string
-	if b.PresetID != nil && *b.PresetID != "" && s.presets != nil {
-		p, err := s.presets.Preset(ctx, userID, *b.PresetID)
+	if b.PresetID != nil && *b.PresetID != "" && s.store != nil {
+		p, err := s.store.Preset(ctx, userID, *b.PresetID)
 		if err != nil {
 			if explicitPreset {
 				return nil, "", nil, fmt.Errorf("failed to load preset %s: %w", *b.PresetID, err)
@@ -195,7 +195,7 @@ func (s *Service) loadPreviewPresetAndPrior(ctx context.Context, userID string, 
 
 	var priorContent *core.TailoredContent
 	if b.ActiveVersionID != nil && *b.ActiveVersionID != "" {
-		activeVer, err := s.branches.Version(ctx, b.ID, *b.ActiveVersionID)
+		activeVer, err := s.store.Version(ctx, b.ID, *b.ActiveVersionID)
 		if err == nil && activeVer != nil {
 			priorContent = activeVer.TailoredContent
 		} else if err != nil && s.logger != nil {

@@ -6,8 +6,9 @@ import (
 	"github.com/resumeee-app/core"
 )
 
-// Store defines branch and version persistence operations required by the branch service.
+// Store defines the cohesive persistence and quota contract required by the branch service.
 type Store interface {
+	core.QuotaManager
 	ListBranches(ctx context.Context, userID string) ([]core.Branch, error)
 	Branch(ctx context.Context, userID, id string) (*core.Branch, error)
 	CreateBranch(ctx context.Context, branch *core.Branch) error
@@ -20,37 +21,13 @@ type Store interface {
 	SaveCompletedVersion(ctx context.Context, version *core.BranchVersion) error
 	SetVersionGapReport(ctx context.Context, versionID string, report *core.GapReport) error
 	SetVersionATSScore(ctx context.Context, versionID string, atsScore *core.ATSScore) error
-}
-
-// JobStore defines unified background queue operations required by the branch service.
-type JobStore interface {
-	SubmitBranchTailor(ctx context.Context, job *core.Job, version *core.BranchVersion, opts core.PendingJobOptions) ([]core.ReleasedReservation, error)
-	SupersedeBranchTailor(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error)
-	AbortBranchJobs(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error)
-	CancelBranchVersion(ctx context.Context, userID, branchID, versionID, reason string) (*core.BranchVersion, *core.Job, error)
-}
-
-// ProfileReader retrieves candidate profile roots and snapshots.
-type ProfileReader interface {
+	SubmitBranchTailor(ctx context.Context, job *core.Job, version *core.BranchVersion, opts core.PendingJobOptions) error
+	SupersedeBranchTailor(ctx context.Context, branchID, reason string) error
+	AbortBranchJobs(ctx context.Context, branchID, reason string) error
 	Profile(ctx context.Context, userID string) (*core.Profile, error)
 	Snapshot(ctx context.Context, userID string) (*core.MainProfileSnapshot, error)
-}
-
-// PresetReader retrieves tailoring presets for reference validation and prompt compilation.
-type PresetReader interface {
 	Preset(ctx context.Context, userID, id string) (*core.Preset, error)
-}
-
-// TemplateReader retrieves resume template sets for validation and rendering.
-type TemplateReader interface {
 	Template(ctx context.Context, userID, id string) (*core.TemplateSet, error)
-}
-
-// QuotaManager reserves, commits, and releases tenant LLM quota units and call telemetry.
-type QuotaManager interface {
-	ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error)
-	CommitUsage(ctx context.Context, reservationID string, telemetry core.LLMTelemetry) error
-	ReleaseQuota(ctx context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error
 }
 
 // Generator executes AI-backed resume tailoring, gap analysis, and ATS simulations.

@@ -23,11 +23,11 @@ import (
 type testBranchEnv struct {
 	db           *testBranchStore
 	svc          *branch.Service
-	branchRepo   branch.Store
-	jobRepo      branch.JobStore
+	branchRepo   *store.Branches
+	jobRepo      *store.Jobs
 	profileRepo  *store.Profiles
 	careerRepo   *store.Career
-	templateRepo branch.TemplateReader
+	templateRepo *store.Templates
 	notifier     *stubNotifier
 	defaultUser  string
 	branchID     string
@@ -44,22 +44,16 @@ func setupTestBranchEnv(t *testing.T, _ int) *testBranchEnv {
 	defaultUser := "default"
 	st := newSeededBranchStore(ctx, defaultUser)
 
-	profileRepo := st.Profiles
-	presetRepo := st.Presets
-	templateRepo := st.Templates
-	branchRepo := st.Branches
-	jobRepo := st.Jobs
+	profileRepo := st.Profiles()
+	templateRepo := st.Templates()
+	branchRepo := st.Branches()
+	jobRepo := st.Jobs()
 	val := provenance.New()
 	rend := renderer.New()
 	notifier := &stubNotifier{}
 
 	svc := branch.New(
-		branch.WithBranches(branchRepo),
-		branch.WithJobs(jobRepo),
-		branch.WithProfiles(profileRepo),
-		branch.WithPresets(presetRepo),
-		branch.WithTemplates(templateRepo),
-		branch.WithQuotas(st.Quotas),
+		branch.WithStore(st),
 		branch.WithJobNotifier(notifier),
 		branch.WithValidator(val),
 		branch.WithRenderer(rend),
@@ -99,7 +93,7 @@ func setupTestBranchEnv(t *testing.T, _ int) *testBranchEnv {
 		RoleTitle: "Lead Systems Architect",
 		StartDate: core.NewDate(2020, 1, 1),
 	}
-	if err := st.CreateExperience(ctx, exp); err != nil {
+	if err := st.Career().CreateExperience(ctx, exp); err != nil {
 		t.Fatalf("failed to create experience: %v", err)
 	}
 
@@ -110,7 +104,7 @@ func setupTestBranchEnv(t *testing.T, _ int) *testBranchEnv {
 		OwnerType: core.OwnerTypeWorkExperience,
 		Statement: "Optimized distributed consensus throughput by 40%.",
 	}
-	if err := st.CreateFact(ctx, fact); err != nil {
+	if err := st.Career().CreateFact(ctx, fact); err != nil {
 		t.Fatalf("failed to create fact: %v", err)
 	}
 
@@ -142,7 +136,7 @@ func setupTestBranchEnv(t *testing.T, _ int) *testBranchEnv {
 		branchRepo:   branchRepo,
 		jobRepo:      jobRepo,
 		profileRepo:  profileRepo,
-		careerRepo:   st.Career,
+		careerRepo:   st.Career(),
 		templateRepo: templateRepo,
 		notifier:     notifier,
 		defaultUser:  defaultUser,
@@ -267,18 +261,12 @@ func TestService_EditVersionProvenanceFailure(t *testing.T) {
 func TestService_BatchSyncAndBackpressure(t *testing.T) {
 	ctx := context.Background()
 	defaultUser := "default-backpressure"
-	store := newSeededBranchStore(ctx, defaultUser)
-	spyQuota := &contextCapturingQuotaRepo{inner: store}
-	notifier := &stubNotifier{}
 	fixedNow := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	store := newSeededBranchStoreWithClock(ctx, defaultUser, func() time.Time { return fixedNow })
+	notifier := &stubNotifier{}
 
 	svc := branch.New(
-		branch.WithBranches(store),
-		branch.WithJobs(store),
-		branch.WithProfiles(store),
-		branch.WithPresets(store),
-		branch.WithTemplates(store),
-		branch.WithQuotas(spyQuota),
+		branch.WithStore(store),
 		branch.WithJobNotifier(notifier),
 		branch.WithValidator(provenance.New()),
 		branch.WithRenderer(renderer.New()),
@@ -307,7 +295,7 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 		t.Fatalf("failed to create branch 2: %v", err)
 	}
 
-	if _, err := store.IncrementMainRevision(ctx, defaultUser); err != nil {
+	if _, err := store.Profiles().IncrementMainRevision(ctx, defaultUser); err != nil {
 		t.Fatalf("failed to increment main revision: %v", err)
 	}
 
@@ -353,25 +341,20 @@ func TestService_BatchSyncAndBackpressure(t *testing.T) {
 		t.Errorf("expected ExpiresAt=%v, got %v", wantExpiry, persistedJob.ExpiresAt)
 	}
 
-	// Verify zero leaked quota: 2 reservations attempted, 1st active (pending), 2nd released on cap rejection.
+	// Verify zero leaked quota: 1 active pending reservation for b1, 0 records for cap-rejected b2.
 	records, err := store.ListUsageRecords(ctx, defaultUser, 10)
 	if err != nil {
 		t.Fatalf("ListUsageRecords failed: %v", err)
 	}
-	if len(records) != 2 {
-		t.Fatalf("expected 2 usage records, got %d", len(records))
+	if len(records) != 1 || records[0].Status != core.ReservationStatusPending {
+		t.Fatalf("expected exactly 1 pending usage record (zero leak on cap rejection), got %+v", records)
 	}
-	var pendingCount, releasedCount int
-	for _, r := range records {
-		switch r.Status {
-		case core.ReservationStatusPending:
-			pendingCount++
-		case core.ReservationStatusReleased:
-			releasedCount++
-		}
+	quota, err := store.Quota(ctx, defaultUser)
+	if err != nil {
+		t.Fatalf("Quota failed: %v", err)
 	}
-	if pendingCount != 1 || releasedCount != 1 {
-		t.Errorf("expected 1 pending and 1 released reservation (zero leak), got pending=%d released=%d", pendingCount, releasedCount)
+	if quota.DailyRequestsUsed != 1 {
+		t.Errorf("DailyRequestsUsed = %d, want 1", quota.DailyRequestsUsed)
 	}
 }
 
@@ -984,9 +967,9 @@ func TestService_EditVersionPreservesGapReport(t *testing.T) {
 }
 
 var (
-	_ branch.Generator    = (*stubGenerator)(nil)
-	_ branch.Generator    = (*stubATSSimulator)(nil)
-	_ branch.QuotaManager = (*spyQuotaRepo)(nil)
+	_ branch.Generator  = (*stubGenerator)(nil)
+	_ branch.Generator  = (*stubATSSimulator)(nil)
+	_ core.QuotaManager = (*spyQuotaRepo)(nil)
 )
 
 type stubGenerator struct {
@@ -1059,9 +1042,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 
 		// Rebuild svc with stubLLM
 		svcWithLLM := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithJobs(env.jobRepo),
-			branch.WithProfiles(env.profileRepo),
+			branch.WithStore(env.db),
 			branch.WithValidator(provenance.New()),
 			branch.WithRenderer(renderer.New()),
 			branch.WithGenerator(stubLLM),
@@ -1091,10 +1072,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
 
 		svcWithLLM := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithJobs(env.jobRepo),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithQuotas(spyQuota),
+			branch.WithStore(&quotaOverrideStore{Store: env.db, quotas: spyQuota}),
 			branch.WithValidator(provenance.New()),
 			branch.WithRenderer(renderer.New()),
 			branch.WithGenerator(&stubGenerator{}), // GenerateGapAnalysis returns (nil, nil)
@@ -1138,8 +1116,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 
 		svcWithLLM := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
+			branch.WithStore(env.db),
 			branch.WithGenerator(stubLLM),
 		)
 
@@ -1180,8 +1157,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 
 		svcWithLLM := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
+			branch.WithStore(env.db),
 			branch.WithGenerator(stubLLM),
 		)
 
@@ -1237,8 +1213,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 
 		svcWithLLM := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
+			branch.WithStore(env.db),
 			branch.WithGenerator(stubLLM),
 		)
 
@@ -1280,8 +1255,7 @@ func TestService_AnalyzeGaps(t *testing.T) {
 		}
 
 		svcWithLLM := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
+			branch.WithStore(env.db),
 			branch.WithGenerator(stubLLM),
 		)
 
@@ -1403,11 +1377,7 @@ func TestService_GetPromptPreview_UnconfiguredCompiler(t *testing.T) {
 	}
 
 	svc := branch.New(
-		branch.WithBranches(store),
-		branch.WithProfiles(store),
-		branch.WithPresets(store),
-		branch.WithTemplates(store),
-		branch.WithQuotas(store),
+		branch.WithStore(store),
 		branch.WithPromptCompiler(nil),
 	)
 
@@ -1660,6 +1630,7 @@ func TestService_PromptPreview_WorkflowsBeyondTailoring(t *testing.T) {
 }
 
 type crossTenantPresetReader struct {
+	branch.Store
 	preset core.Preset
 }
 
@@ -1682,11 +1653,10 @@ func TestService_PromptPreview_RejectsCrossTenantPreset(t *testing.T) {
 	}
 	otherPresetID := "preset-other-tenant"
 	svc := branch.New(
-		branch.WithBranches(store),
-		branch.WithProfiles(store),
-		branch.WithPresets(&crossTenantPresetReader{preset: core.Preset{ID: otherPresetID, UserID: "other-user", SystemInstructions: "SECRET"}}),
-		branch.WithTemplates(store),
-		branch.WithQuotas(store),
+		branch.WithStore(&crossTenantPresetReader{
+			Store:  store,
+			preset: core.Preset{ID: otherPresetID, UserID: "other-user", SystemInstructions: "SECRET"},
+		}),
 		branch.WithPromptCompiler(&fakePromptCompiler{}),
 	)
 
@@ -1779,6 +1749,32 @@ func (s *spyQuotaRepo) ListUsageRecords(_ context.Context, _ string, _ int) ([]c
 	return nil, nil
 }
 
+type quotaSpecCaptureStore struct {
+	*quotaOverrideStore
+	spy *spyQuotaRepo
+}
+
+func (s *quotaSpecCaptureStore) SubmitBranchTailor(ctx context.Context, job *core.Job, version *core.BranchVersion, opts core.PendingJobOptions) error {
+	if opts.Quota != nil {
+		s.spy.mu.Lock()
+		s.spy.reservations = append(s.spy.reservations, struct {
+			UserID          string
+			Op              core.LLMOperationType
+			EstimatedTokens int
+			DailyLimit      int
+			MonthlyLimit    int
+		}{
+			UserID:          job.UserID,
+			Op:              opts.Quota.Operation,
+			EstimatedTokens: opts.Quota.EstimatedTokens,
+			DailyLimit:      opts.Quota.DailyLimit,
+			MonthlyLimit:    opts.Quota.MonthlyLimit,
+		})
+		s.spy.mu.Unlock()
+	}
+	return s.quotaOverrideStore.SubmitBranchTailor(ctx, job, version, opts)
+}
+
 func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 	ctx := context.Background()
 	defaultUser := "user-custom-quota"
@@ -1826,14 +1822,13 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 
 	t.Run("Custom limits propagated across GenerateVersion, SyncBranches, AnalyzeGaps, and SimulateATS", func(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
+		capStore := &quotaSpecCaptureStore{
+			quotaOverrideStore: &quotaOverrideStore{Store: store, quotas: spyQuota},
+			spy:                spyQuota,
+		}
 
 		svc := branch.New(
-			branch.WithBranches(store),
-			branch.WithJobs(store),
-			branch.WithProfiles(store),
-			branch.WithPresets(store),
-			branch.WithTemplates(store),
-			branch.WithQuotas(spyQuota),
+			branch.WithStore(capStore),
 			branch.WithGenerator(stubLLM),
 			branch.WithDailyRequestLimit(25),
 			branch.WithMonthlyTokenLimit(250000),
@@ -1882,14 +1877,13 @@ func TestBranchService_ConfigurableQuotaLimits(t *testing.T) {
 
 	t.Run("Fallback default limits 50 and 1000000 applied when limits are <= 0", func(t *testing.T) {
 		spyQuota := &spyQuotaRepo{}
+		capStore := &quotaSpecCaptureStore{
+			quotaOverrideStore: &quotaOverrideStore{Store: store, quotas: spyQuota},
+			spy:                spyQuota,
+		}
 
 		svcDefault := branch.New(
-			branch.WithBranches(store),
-			branch.WithJobs(store),
-			branch.WithProfiles(store),
-			branch.WithPresets(store),
-			branch.WithTemplates(store),
-			branch.WithQuotas(spyQuota),
+			branch.WithStore(capStore),
 			branch.WithGenerator(stubLLM),
 			branch.WithDailyRequestLimit(0),
 			branch.WithMonthlyTokenLimit(-100),
@@ -1975,7 +1969,7 @@ func (s *stubATSSimulator) SimulateATS(_ context.Context, req core.ATSSimulation
 }
 
 type failingSnapshotProfileRepo struct {
-	branch.ProfileReader
+	branch.Store
 	snapErr error
 }
 
@@ -1983,7 +1977,7 @@ func (f *failingSnapshotProfileRepo) Snapshot(ctx context.Context, userID string
 	if f.snapErr != nil {
 		return nil, f.snapErr
 	}
-	return f.ProfileReader.Snapshot(ctx, userID)
+	return f.Store.Snapshot(ctx, userID)
 }
 
 func TestService_SimulateATS(t *testing.T) {
@@ -2070,9 +2064,7 @@ func TestService_SimulateATS(t *testing.T) {
 
 		sim := &stubATSSimulator{}
 		svc := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithTemplates(env.templateRepo),
+			branch.WithStore(env.db),
 			branch.WithRenderer(renderer.New()),
 			branch.WithGenerator(sim),
 		)
@@ -2166,10 +2158,9 @@ func TestService_SimulateATS(t *testing.T) {
 
 		sim := &stubATSSimulator{}
 		svcSnapErr := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(&failingSnapshotProfileRepo{
-				ProfileReader: env.profileRepo,
-				snapErr:       errors.New("db connection lost"),
+			branch.WithStore(&failingSnapshotProfileRepo{
+				Store:   env.db,
+				snapErr: errors.New("db connection lost"),
 			}),
 			branch.WithGenerator(sim),
 		)
@@ -2208,9 +2199,7 @@ func TestService_SimulateATS(t *testing.T) {
 			},
 		}
 		svcQuota := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithQuotas(spyQuota),
+			branch.WithStore(&quotaOverrideStore{Store: env.db, quotas: spyQuota}),
 			branch.WithGenerator(simZeroTokens),
 		)
 
@@ -2237,9 +2226,7 @@ func TestService_SimulateATS(t *testing.T) {
 
 		simErr := &stubATSSimulator{atsErr: errors.New("upstream llm failure")}
 		svcQuotaFail := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithQuotas(spyQuota),
+			branch.WithStore(&quotaOverrideStore{Store: env.db, quotas: spyQuota}),
 			branch.WithGenerator(simErr),
 		)
 
@@ -2272,9 +2259,7 @@ func TestService_SimulateATS(t *testing.T) {
 
 		sim := &stubATSSimulator{}
 		svcRender := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithTemplates(env.templateRepo),
+			branch.WithStore(env.db),
 			branch.WithRenderer(renderer.New()),
 			branch.WithGenerator(sim),
 		)
@@ -2323,8 +2308,7 @@ func TestService_SimulateATS(t *testing.T) {
 		}
 
 		svcDet := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
+			branch.WithStore(env.db),
 			branch.WithGenerator(nil),
 		)
 
@@ -2358,8 +2342,7 @@ func TestService_SimulateATS(t *testing.T) {
 			delay: 80 * time.Millisecond,
 		}
 		svcConc := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
+			branch.WithStore(env.db),
 			branch.WithGenerator(simSlow),
 		)
 
@@ -2414,48 +2397,6 @@ func (n *stubNotifier) Count() int {
 	return n.calls
 }
 
-type releaseCall struct {
-	reservationID string
-	reason        string
-	ctxErr        error
-	hasDeadline   bool
-}
-
-type contextCapturingQuotaRepo struct {
-	inner    branch.QuotaManager
-	mu       sync.Mutex
-	releases []releaseCall
-}
-
-func (q *contextCapturingQuotaRepo) ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error) {
-	return q.inner.ReserveQuota(ctx, userID, op, estimatedTokens, dailyLimit, monthlyLimit)
-}
-
-func (q *contextCapturingQuotaRepo) CommitUsage(ctx context.Context, reservationID string, telemetry core.LLMTelemetry) error {
-	return q.inner.CommitUsage(ctx, reservationID, telemetry)
-}
-
-func (q *contextCapturingQuotaRepo) ReleaseQuota(ctx context.Context, reservationID string, reason string, telemetry core.LLMTelemetry) error {
-	_, hasDeadline := ctx.Deadline()
-	q.mu.Lock()
-	q.releases = append(q.releases, releaseCall{
-		reservationID: reservationID,
-		reason:        reason,
-		ctxErr:        ctx.Err(),
-		hasDeadline:   hasDeadline,
-	})
-	q.mu.Unlock()
-	return q.inner.ReleaseQuota(ctx, reservationID, reason, telemetry)
-}
-
-func (q *contextCapturingQuotaRepo) Releases() []releaseCall {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	out := make([]releaseCall, len(q.releases))
-	copy(out, q.releases)
-	return out
-}
-
 type spyAbortStore struct {
 	*testBranchStore
 	mu              sync.Mutex
@@ -2464,12 +2405,12 @@ type spyAbortStore struct {
 	cancelCtxFn     func()
 }
 
-func (s *spyAbortStore) AbortBranchJobs(ctx context.Context, branchID, reason string) ([]core.ReleasedReservation, error) {
+func (s *spyAbortStore) AbortBranchJobs(ctx context.Context, branchID, reason string) error {
 	if s.cancelCtxFn != nil {
 		s.cancelCtxFn()
 	}
 
-	released, err := s.testBranchStore.AbortBranchJobs(ctx, branchID, reason)
+	err := s.testBranchStore.AbortBranchJobs(ctx, branchID, reason)
 	if err == nil {
 		versionsAfter, _ := s.ListVersions(ctx, branchID)
 		statuses := make([]core.VersionStatus, 0, len(versionsAfter))
@@ -2484,15 +2425,15 @@ func (s *spyAbortStore) AbortBranchJobs(ctx context.Context, branchID, reason st
 		s.abortedStatuses[branchID] = statuses
 		s.mu.Unlock()
 	}
-	return released, err
+	return err
 }
 
-func (s *spyAbortStore) SubmitBranchTailor(ctx context.Context, job *core.Job, version *core.BranchVersion, opts core.PendingJobOptions) ([]core.ReleasedReservation, error) {
-	released, err := s.testBranchStore.SubmitBranchTailor(ctx, job, version, opts)
+func (s *spyAbortStore) SubmitBranchTailor(ctx context.Context, job *core.Job, version *core.BranchVersion, opts core.PendingJobOptions) error {
+	err := s.testBranchStore.SubmitBranchTailor(ctx, job, version, opts)
 	if s.cancelCtxFn != nil {
 		s.cancelCtxFn()
 	}
-	return released, err
+	return err
 }
 
 func TestService_AdmissionControlAndNotifications(t *testing.T) {
@@ -2507,7 +2448,7 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 		wantErr            error
 		wantNotifierCalls  int
 		wantPendingVersion bool
-		wantReleasedCount  int
+		wantUsageRecords   int
 	}{
 		{
 			name:               "notifier wakes workers and persists Job ReservationID and ExpiresAt",
@@ -2516,6 +2457,7 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 			useNotifier:        true,
 			wantNotifierCalls:  1,
 			wantPendingVersion: true,
+			wantUsageRecords:   1,
 		},
 		{
 			name:               "default MaxPendingPerTenant and JobTTL applied when unset",
@@ -2525,25 +2467,26 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 			preSeedPending:     core.DefaultMaxPendingPerTenant - 1,
 			wantNotifierCalls:  1,
 			wantPendingVersion: true,
+			wantUsageRecords:   1,
 		},
 		{
-			name:              "default MaxPendingPerTenant rejects once 25 other branches have pending versions",
-			maxPending:        -1,
-			jobTTL:            -1,
-			useNotifier:       true,
-			preSeedPending:    core.DefaultMaxPendingPerTenant,
-			wantErr:           core.ErrPendingLimitExceeded,
-			wantReleasedCount: 1,
+			name:             "default MaxPendingPerTenant rejects once 25 other branches have pending versions",
+			maxPending:       -1,
+			jobTTL:           -1,
+			useNotifier:      true,
+			preSeedPending:   core.DefaultMaxPendingPerTenant,
+			wantErr:          core.ErrPendingLimitExceeded,
+			wantUsageRecords: 0,
 		},
 		{
-			name:              "cancelled caller context still releases quota via detached cleanup context on cap error",
+			name:              "cancelled caller context still rolls back atomically on cap error with zero leaked quota",
 			maxPending:        1,
 			cleanupTimeout:    2 * time.Second,
 			useNotifier:       true,
 			preSeedPending:    1,
 			cancelCtxOnSubmit: true,
 			wantErr:           core.ErrPendingLimitExceeded,
-			wantReleasedCount: 1,
+			wantUsageRecords:  0,
 		},
 	}
 
@@ -2552,7 +2495,6 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 			ctx := context.Background()
 			userID := "user-admission-" + uuid.New().String()
 			baseStore := newSeededBranchStore(ctx, userID)
-			quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
 			notifier := &stubNotifier{}
 
 			fixedNow := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
@@ -2560,21 +2502,16 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 			callCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
 
-			var jobs branch.JobStore = baseStore
+			var st branch.Store = baseStore
 			if tc.cancelCtxOnSubmit {
-				jobs = &spyAbortStore{
+				st = &spyAbortStore{
 					testBranchStore: baseStore,
 					cancelCtxFn:     cancel,
 				}
 			}
 
 			opts := []branch.Option{
-				branch.WithBranches(baseStore),
-				branch.WithJobs(jobs),
-				branch.WithProfiles(baseStore),
-				branch.WithPresets(baseStore),
-				branch.WithTemplates(baseStore),
-				branch.WithQuotas(quotaSpy),
+				branch.WithStore(st),
 				branch.WithMaxPendingPerTenant(tc.maxPending),
 				branch.WithJobTTL(tc.jobTTL),
 				branch.WithCleanupTimeout(tc.cleanupTimeout),
@@ -2662,16 +2599,20 @@ func TestService_AdmissionControlAndNotifications(t *testing.T) {
 				t.Errorf("expected %d notifier calls, got %d", tc.wantNotifierCalls, notifier.Count())
 			}
 
-			releases := quotaSpy.Releases()
-			if len(releases) != tc.wantReleasedCount {
-				t.Fatalf("expected %d quota releases, got %d (%+v)", tc.wantReleasedCount, len(releases), releases)
+			records, listErr := baseStore.ListUsageRecords(ctx, userID, 50)
+			if listErr != nil {
+				t.Fatalf("ListUsageRecords failed: %v", listErr)
 			}
-			for _, rel := range releases {
-				if rel.ctxErr != nil {
-					t.Errorf("expected detached cleanup context to have nil Err, got %v", rel.ctxErr)
+			if len(records) != tc.wantUsageRecords {
+				t.Fatalf("expected %d usage record(s), got %d (%+v)", tc.wantUsageRecords, len(records), records)
+			}
+			if tc.wantErr != nil {
+				quota, qErr := baseStore.Quota(ctx, userID)
+				if qErr != nil {
+					t.Fatalf("Quota failed: %v", qErr)
 				}
-				if !rel.hasDeadline {
-					t.Errorf("expected detached cleanup context to have bounded deadline")
+				if quota.DailyRequestsUsed != 0 {
+					t.Errorf("expected 0 DailyRequestsUsed on rolled-back submission, got %d", quota.DailyRequestsUsed)
 				}
 			}
 		})
@@ -2685,7 +2626,6 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 		maxPending        int
 		wantErr           error
 		wantSuperseded    bool
-		wantReleasedCount int
 		wantFinalVersions int
 	}{
 		{
@@ -2693,16 +2633,14 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 			existingStatus:    core.VersionStatusPending,
 			maxPending:        1,
 			wantSuperseded:    true,
-			wantReleasedCount: 1,
 			wantFinalVersions: 2,
 		},
 		{
-			name:              "rejects with ErrConflict when branch already has processing version and releases new quota",
+			name:              "rejects with ErrConflict when branch already has processing version and keeps existing reservation pending",
 			existingStatus:    core.VersionStatusProcessing,
 			maxPending:        5,
 			wantErr:           core.ErrConflict,
 			wantSuperseded:    false,
-			wantReleasedCount: 1,
 			wantFinalVersions: 1,
 		},
 	}
@@ -2712,16 +2650,10 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 			ctx := context.Background()
 			userID := "user-supersedence"
 			store := newSeededBranchStore(ctx, userID)
-			quotaSpy := &contextCapturingQuotaRepo{inner: store}
 			notifier := &stubNotifier{}
 
 			svc := branch.New(
-				branch.WithBranches(store),
-				branch.WithJobs(store),
-				branch.WithProfiles(store),
-				branch.WithPresets(store),
-				branch.WithTemplates(store),
-				branch.WithQuotas(quotaSpy),
+				branch.WithStore(store),
 				branch.WithJobNotifier(notifier),
 				branch.WithMaxPendingPerTenant(tc.maxPending),
 			)
@@ -2737,7 +2669,7 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 			}
 
 			// Reserve quota and seed prior version
-			priorRec, err := quotaSpy.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 1000000)
+			priorRec, err := store.ReserveQuota(ctx, userID, core.OperationResumeTailoring, 2000, 50, 1000000)
 			if err != nil {
 				t.Fatalf("ReserveQuota prior failed: %v", err)
 			}
@@ -2764,6 +2696,8 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 				}
 				if newJob, jErr := store.Job(ctx, userID, newVer.JobID); jErr != nil || newJob.ReservationID == "" {
 					t.Errorf("expected persisted job with ReservationID, got %+v err=%v", newJob, jErr)
+				} else {
+					assertReservationState(ctx, t, store, userID, newJob.ReservationID, core.ReservationStatusPending, "")
 				}
 			}
 
@@ -2775,19 +2709,20 @@ func TestService_GenerateVersionSupersedenceAndConflict(t *testing.T) {
 				if reloadedPrior.Status != core.VersionStatusCancelled {
 					t.Errorf("expected prior version to be cancelled, got %s", reloadedPrior.Status)
 				}
-			} else if reloadedPrior.Status != tc.existingStatus {
-				t.Errorf("expected prior version to remain %s, got %s", tc.existingStatus, reloadedPrior.Status)
+				assertReservationState(ctx, t, store, userID, priorRec.ID, core.ReservationStatusReleased, "superseded by newer pending version")
+			} else {
+				if reloadedPrior.Status != tc.existingStatus {
+					t.Errorf("expected prior version to remain %s, got %s", tc.existingStatus, reloadedPrior.Status)
+				}
+				assertReservationState(ctx, t, store, userID, priorRec.ID, core.ReservationStatusPending, "")
 			}
 
-			releases := quotaSpy.Releases()
-			if len(releases) != tc.wantReleasedCount {
-				t.Fatalf("expected %d quota release(s), got %d", tc.wantReleasedCount, len(releases))
+			quota, err := store.Quota(ctx, userID)
+			if err != nil {
+				t.Fatalf("Quota failed: %v", err)
 			}
-			if tc.wantSuperseded && releases[0].reservationID != priorRec.ID {
-				t.Errorf("expected superseded reservation %s to be released, got %s", priorRec.ID, releases[0].reservationID)
-			}
-			if tc.wantErr != nil && releases[0].reservationID == priorRec.ID {
-				t.Errorf("expected newly reserved quota (not prior processing reservation %s) to be released", priorRec.ID)
+			if quota.DailyRequestsUsed != 1 {
+				t.Errorf("DailyRequestsUsed = %d, want 1", quota.DailyRequestsUsed)
 			}
 
 			versions, err := svc.ListVersions(ctx, b.ID)
@@ -2805,16 +2740,10 @@ func TestService_SyncBranchesPartialBatchAndDefaultHandling(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-sync-partial"
 	store := newSeededBranchStore(ctx, userID)
-	quotaSpy := &contextCapturingQuotaRepo{inner: store}
 	notifier := &stubNotifier{}
 
 	svc := branch.New(
-		branch.WithBranches(store),
-		branch.WithJobs(store),
-		branch.WithProfiles(store),
-		branch.WithPresets(store),
-		branch.WithTemplates(store),
-		branch.WithQuotas(quotaSpy),
+		branch.WithStore(store),
 		branch.WithJobNotifier(notifier),
 		branch.WithRenderer(renderer.New()),
 		branch.WithMaxPendingPerTenant(1),
@@ -2841,151 +2770,19 @@ func TestService_SyncBranchesPartialBatchAndDefaultHandling(t *testing.T) {
 		t.Errorf("expected 1 notifier call for b1 only, got %d", notifier.Count())
 	}
 
-	releases := quotaSpy.Releases()
-	if len(releases) != 1 {
-		t.Fatalf("expected exactly 1 released reservation for rejected b2, got %d", len(releases))
+	records, err := store.ListUsageRecords(ctx, userID, 10)
+	if err != nil {
+		t.Fatalf("ListUsageRecords failed: %v", err)
 	}
-}
-
-func TestService_CancelVersion(t *testing.T) {
-	cases := []struct {
-		name              string
-		initialStatus     core.VersionStatus
-		callerUserID      string
-		targetBranchID    string
-		targetVersionID   string
-		wantErr           error
-		wantReleasedCount int
-	}{
-		{
-			name:              "cancels pending version and releases quota via detached context",
-			initialStatus:     core.VersionStatusPending,
-			callerUserID:      "owner-user",
-			wantReleasedCount: 1,
-		},
-		{
-			name:              "rejects processing version with ErrConflict without releasing quota",
-			initialStatus:     core.VersionStatusProcessing,
-			callerUserID:      "owner-user",
-			wantErr:           core.ErrConflict,
-			wantReleasedCount: 0,
-		},
-		{
-			name:              "rejects completed version with ErrConflict without releasing quota",
-			initialStatus:     core.VersionStatusCompleted,
-			callerUserID:      "owner-user",
-			wantErr:           core.ErrConflict,
-			wantReleasedCount: 0,
-		},
-		{
-			name:              "rejects failed version with ErrConflict without releasing quota",
-			initialStatus:     core.VersionStatusFailed,
-			callerUserID:      "owner-user",
-			wantErr:           core.ErrConflict,
-			wantReleasedCount: 0,
-		},
-		{
-			name:              "rejects already cancelled version with ErrConflict",
-			initialStatus:     core.VersionStatusCancelled,
-			callerUserID:      "owner-user",
-			wantErr:           core.ErrConflict,
-			wantReleasedCount: 0,
-		},
-		{
-			name:              "denies cross-tenant cancellation with ErrNotFound",
-			initialStatus:     core.VersionStatusPending,
-			callerUserID:      "attacker-user",
-			wantErr:           core.ErrNotFound,
-			wantReleasedCount: 0,
-		},
-		{
-			name:              "missing version returns ErrNotFound",
-			initialStatus:     core.VersionStatusPending,
-			callerUserID:      "owner-user",
-			targetVersionID:   "ver-nonexistent",
-			wantErr:           core.ErrNotFound,
-			wantReleasedCount: 0,
-		},
+	if len(records) != 1 || records[0].Status != core.ReservationStatusPending {
+		t.Fatalf("expected exactly 1 pending reservation for b1 (zero leak for rejected b2), got %+v", records)
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			owner := "owner-user"
-			store := newSeededBranchStore(ctx, owner)
-			quotaSpy := &contextCapturingQuotaRepo{inner: store}
-			svc := branch.New(
-				branch.WithBranches(store),
-				branch.WithJobs(store),
-				branch.WithProfiles(store),
-				branch.WithPresets(store),
-				branch.WithTemplates(store),
-				branch.WithQuotas(quotaSpy),
-				branch.WithCleanupTimeout(2*time.Second),
-			)
-
-			b := &core.Branch{
-				ID:            "branch-cancel-" + uuid.New().String(),
-				UserID:        owner,
-				Name:          "Cancel Target",
-				TemplateSetID: core.TemplateStandardCleanID,
-			}
-			if _, err := svc.CreateBranch(ctx, b); err != nil {
-				t.Fatalf("CreateBranch failed: %v", err)
-			}
-
-			rec, err := quotaSpy.ReserveQuota(ctx, owner, core.OperationResumeTailoring, 2000, 50, 1000000)
-			if err != nil {
-				t.Fatalf("ReserveQuota failed: %v", err)
-			}
-			ver := &core.BranchVersion{
-				ID:       "ver-cancel-" + uuid.New().String(),
-				UserID:   owner,
-				BranchID: b.ID,
-			}
-			if err := store.seedVersionInState(ctx, ver, tc.initialStatus, rec.ID); err != nil {
-				t.Fatalf("seedVersionInState failed: %v", err)
-			}
-
-			branchID := tc.targetBranchID
-			if branchID == "" {
-				branchID = b.ID
-			}
-			versionID := tc.targetVersionID
-			if versionID == "" {
-				versionID = ver.ID
-			}
-
-			cancelled, err := svc.CancelVersion(ctx, tc.callerUserID, branchID, versionID)
-			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("CancelVersion failed: %v", err)
-				}
-				if cancelled.Status != core.VersionStatusCancelled {
-					t.Errorf("expected cancelled status, got %s", cancelled.Status)
-				}
-				if cancelled.ErrorMessage != "cancelled by user" {
-					t.Errorf("expected reason 'cancelled by user', got %q", cancelled.ErrorMessage)
-				}
-				if cancelledJob, jErr := store.Job(ctx, owner, cancelled.JobID); jErr != nil || cancelledJob.ReservationID != rec.ID {
-					t.Errorf("expected ReservationID %s preserved on job, got job=%+v err=%v", rec.ID, cancelledJob, jErr)
-				}
-			}
-
-			releases := quotaSpy.Releases()
-			if len(releases) != tc.wantReleasedCount {
-				t.Fatalf("expected %d quota release(s), got %d", tc.wantReleasedCount, len(releases))
-			}
-			if tc.wantReleasedCount == 1 {
-				if releases[0].reservationID != rec.ID || !releases[0].hasDeadline || releases[0].ctxErr != nil {
-					t.Errorf("unexpected release record: %+v", releases[0])
-				}
-			}
-		})
+	quota, err := store.Quota(ctx, userID)
+	if err != nil {
+		t.Fatalf("Quota failed: %v", err)
+	}
+	if quota.DailyRequestsUsed != 1 {
+		t.Errorf("DailyRequestsUsed = %d, want 1", quota.DailyRequestsUsed)
 	}
 }
 
@@ -3051,16 +2848,10 @@ func TestService_MutationSupersedence(t *testing.T) {
 			ctx := context.Background()
 			env := setupTestBranchEnv(t, 10)
 			store := env.db
-			quotaSpy := &contextCapturingQuotaRepo{inner: store}
 			notifier := &stubNotifier{}
 
 			svc := branch.New(
-				branch.WithBranches(store),
-				branch.WithJobs(store),
-				branch.WithProfiles(store),
-				branch.WithPresets(store),
-				branch.WithTemplates(store),
-				branch.WithQuotas(quotaSpy),
+				branch.WithStore(store),
 				branch.WithJobNotifier(notifier),
 				branch.WithValidator(provenance.New()),
 				branch.WithRenderer(renderer.New()),
@@ -3113,15 +2904,13 @@ func TestService_MutationSupersedence(t *testing.T) {
 				t.Errorf("expected reason %q, got %q", tc.expectedReason, afterPending.ErrorMessage)
 			}
 
-			releases := quotaSpy.Releases()
-			if len(releases) != 1 {
-				t.Fatalf("expected 1 quota release, got %d", len(releases))
+			assertReservationState(ctx, t, store, env.defaultUser, pendingJob.ReservationID, core.ReservationStatusReleased, tc.expectedReason)
+			quota, err := store.Quota(ctx, env.defaultUser)
+			if err != nil {
+				t.Fatalf("Quota failed: %v", err)
 			}
-			if releases[0].reservationID != pendingJob.ReservationID {
-				t.Errorf("expected reservation %s released, got %s", pendingJob.ReservationID, releases[0].reservationID)
-			}
-			if releases[0].reason != tc.expectedReason {
-				t.Errorf("expected release reason %q, got %q", tc.expectedReason, releases[0].reason)
+			if quota.DailyRequestsUsed != 0 {
+				t.Errorf("DailyRequestsUsed = %d, want 0", quota.DailyRequestsUsed)
 			}
 		})
 	}
@@ -3132,15 +2921,9 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 	owner := "delete-owner"
 	baseStore := newSeededBranchStore(ctx, owner)
 	spyStore := &spyAbortStore{testBranchStore: baseStore}
-	quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
 
 	svc := branch.New(
-		branch.WithBranches(baseStore),
-		branch.WithJobs(spyStore),
-		branch.WithProfiles(baseStore),
-		branch.WithPresets(baseStore),
-		branch.WithTemplates(baseStore),
-		branch.WithQuotas(quotaSpy),
+		branch.WithStore(spyStore),
 	)
 
 	bPending := &core.Branch{
@@ -3162,11 +2945,11 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 		t.Fatalf("CreateBranch processing failed: %v", err)
 	}
 
-	resPending, err := quotaSpy.ReserveQuota(ctx, owner, core.OperationResumeTailoring, 2000, 50, 1000000)
+	resPending, err := baseStore.ReserveQuota(ctx, owner, core.OperationResumeTailoring, 2000, 50, 1000000)
 	if err != nil {
 		t.Fatalf("ReserveQuota pending failed: %v", err)
 	}
-	resProcessing, err := quotaSpy.ReserveQuota(ctx, owner, core.OperationResumeTailoring, 2000, 50, 1000000)
+	resProcessing, err := baseStore.ReserveQuota(ctx, owner, core.OperationResumeTailoring, 2000, 50, 1000000)
 	if err != nil {
 		t.Fatalf("ReserveQuota processing failed: %v", err)
 	}
@@ -3196,9 +2979,7 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 		if len(spyStore.abortedCalls) != 0 {
 			t.Errorf("expected AbortBranchJobs NOT to be called on unauthorized delete, got %v", spyStore.abortedCalls)
 		}
-		if len(quotaSpy.Releases()) != 0 {
-			t.Errorf("expected zero quota releases on unauthorized delete")
-		}
+		assertReservationState(ctx, t, baseStore, owner, resPending.ID, core.ReservationStatusPending, "")
 	})
 
 	for _, badUserID := range []struct {
@@ -3216,9 +2997,8 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 			if len(spyStore.abortedCalls) != 0 {
 				t.Errorf("expected AbortBranchJobs NOT to be called, got %v", spyStore.abortedCalls)
 			}
-			if len(quotaSpy.Releases()) != 0 {
-				t.Errorf("expected zero quota releases on rejected delete, got %+v", quotaSpy.Releases())
-			}
+			assertReservationState(ctx, t, baseStore, owner, resPending.ID, core.ReservationStatusPending, "")
+			assertReservationState(ctx, t, baseStore, owner, resProcessing.ID, core.ReservationStatusPending, "")
 			gotPending, err := svc.Version(ctx, bPending.ID, vPending.ID)
 			if err != nil || gotPending.Status != core.VersionStatusPending {
 				t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
@@ -3255,22 +3035,11 @@ func TestService_DeleteBranchAbortsVersionsAndReleasesQuota(t *testing.T) {
 			}
 		}
 
-		releases := quotaSpy.Releases()
-		if len(releases) != 2 {
-			t.Fatalf("expected 2 released quota reservations, got %d", len(releases))
-		}
-		releasedIDs := map[string]bool{}
-		for _, r := range releases {
-			releasedIDs[r.reservationID] = true
-			if r.reason != "branch deleted" {
-				t.Errorf("expected reason 'branch deleted', got %q", r.reason)
-			}
-			if r.ctxErr != nil || !r.hasDeadline {
-				t.Errorf("expected detached bounded context, got %+v", r)
-			}
-		}
-		if !releasedIDs[resPending.ID] || !releasedIDs[resProcessing.ID] {
-			t.Errorf("missing expected reservation IDs in releases: %+v", releases)
+		assertReservationState(ctx, t, baseStore, owner, resPending.ID, core.ReservationStatusReleased, "branch deleted")
+		assertReservationState(ctx, t, baseStore, owner, resProcessing.ID, core.ReservationStatusReleased, "branch deleted")
+		quota, qErr := baseStore.Quota(ctx, owner)
+		if qErr != nil || quota.DailyRequestsUsed != 0 {
+			t.Errorf("expected DailyRequestsUsed=0 after branch deletion, got %+v err=%v", quota, qErr)
 		}
 	})
 }
@@ -3314,7 +3083,7 @@ func TestStore_JobLeaseGuardsAndLifecycle(t *testing.T) {
 		CreatedAt: t0,
 		UpdatedAt: t0,
 	}
-	if _, err := st.SubmitBranchTailor(ctx, job, v, core.PendingJobOptions{
+	if err := st.SubmitBranchTailor(ctx, job, v, core.PendingJobOptions{
 		MaxPendingPerTenant: 5,
 		TTL:                 10 * time.Minute,
 		Now:                 t0,
@@ -3360,12 +3129,12 @@ func TestStore_JobLeaseGuardsAndLifecycle(t *testing.T) {
 	}
 
 	// Expire lease and verify terminal guards
-	released, err := st.FailExpiredLeases(ctx, t0.Add(10*time.Minute), "lease timed out")
+	failedCount, err := st.FailExpiredLeases(ctx, t0.Add(10*time.Minute), "lease timed out")
 	if err != nil {
 		t.Fatalf("FailExpiredLeases: %v", err)
 	}
-	if len(released) != 1 || released[0].ReservationID != "res-lease-1" {
-		t.Fatalf("expected 1 released reservation from expired lease, got %+v", released)
+	if failedCount != 1 {
+		t.Fatalf("expected 1 failed expired-lease job, got %d", failedCount)
 	}
 	if err := st.CompleteBranchTailor(ctx, reclaimed.ID, "worker-b", &staleComplete); !errors.Is(err, core.ErrConflict) {
 		t.Errorf("expected ErrConflict completing failed job, got %v", err)
@@ -3376,7 +3145,6 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 	setupTailoredWithActiveAndProcessing := func(t *testing.T, withSecondCompleted bool) (
 		context.Context,
 		*testBranchStore,
-		*contextCapturingQuotaRepo,
 		*branch.Service,
 		*core.Branch,
 		*core.BranchVersion,
@@ -3388,14 +3156,8 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		ctx := context.Background()
 		userID := "user-epoch-" + uuid.New().String()
 		baseStore := newSeededBranchStore(ctx, userID)
-		quotaSpy := &contextCapturingQuotaRepo{inner: baseStore}
 		svc := branch.New(
-			branch.WithBranches(baseStore),
-			branch.WithJobs(baseStore),
-			branch.WithProfiles(baseStore),
-			branch.WithPresets(baseStore),
-			branch.WithTemplates(baseStore),
-			branch.WithQuotas(quotaSpy),
+			branch.WithStore(baseStore),
 			branch.WithCleanupTimeout(2*time.Second),
 		)
 
@@ -3458,11 +3220,11 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Branch reload failed: %v", err)
 		}
-		return ctx, baseStore, quotaSpy, svc, loadedBranch, v1, pendingVer, claimedJob, pendingJob.ReservationID
+		return ctx, baseStore, svc, loadedBranch, v1, pendingVer, claimedJob, pendingJob.ReservationID
 	}
 
 	t.Run("rollback of ActiveVersionID cancels higher-numbered processing version, releases quota, and blocks stale CompleteBranchTailor", func(t *testing.T) {
-		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedJob, reservationID := setupTailoredWithActiveAndProcessing(t, true)
+		ctx, baseStore, svc, b, v1, pendingVer, claimedJob, reservationID := setupTailoredWithActiveAndProcessing(t, true)
 		callCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		spyStore := &spyAbortStore{
@@ -3470,12 +3232,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 			cancelCtxFn:     cancel,
 		}
 		svcWithCancel := branch.New(
-			branch.WithBranches(baseStore),
-			branch.WithJobs(spyStore),
-			branch.WithProfiles(baseStore),
-			branch.WithPresets(baseStore),
-			branch.WithTemplates(baseStore),
-			branch.WithQuotas(quotaSpy),
+			branch.WithStore(spyStore),
 			branch.WithCleanupTimeout(2*time.Second),
 		)
 
@@ -3499,13 +3256,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 			t.Errorf("expected reason 'superseded by branch update', got %q", reloadedV3.ErrorMessage)
 		}
 
-		releases := quotaSpy.Releases()
-		if len(releases) != 1 {
-			t.Fatalf("expected 1 quota release, got %d (%+v)", len(releases), releases)
-		}
-		if releases[0].reservationID != reservationID || !releases[0].hasDeadline || releases[0].ctxErr != nil {
-			t.Errorf("unexpected quota release details: %+v", releases[0])
-		}
+		assertReservationState(ctx, t, baseStore, b.UserID, reservationID, core.ReservationStatusReleased, "superseded by branch update")
 
 		staleComplete := *pendingVer
 		staleComplete.Status = core.VersionStatusCompleted
@@ -3523,7 +3274,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 	})
 
 	t.Run("TargetRequirements change cancels processing version, releases quota, and blocks stale CompleteBranchTailor", func(t *testing.T) {
-		ctx, baseStore, quotaSpy, svc, b, v1, pendingVer, claimedJob, reservationID := setupTailoredWithActiveAndProcessing(t, false)
+		ctx, baseStore, svc, b, v1, pendingVer, claimedJob, reservationID := setupTailoredWithActiveAndProcessing(t, false)
 
 		b.TargetRequirements = "Rust, Raft consensus, zero-copy networking"
 		updated, err := svc.UpdateBranch(ctx, b)
@@ -3542,10 +3293,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 			t.Errorf("expected processing v2 to be cancelled, got %s", reloadedV2.Status)
 		}
 
-		releases := quotaSpy.Releases()
-		if len(releases) != 1 || releases[0].reservationID != reservationID {
-			t.Fatalf("expected reservation %s released, got %+v", reservationID, releases)
-		}
+		assertReservationState(ctx, t, baseStore, b.UserID, reservationID, core.ReservationStatusReleased, "superseded by branch update")
 
 		staleComplete := *pendingVer
 		staleComplete.Status = core.VersionStatusCompleted
@@ -3563,7 +3311,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 	})
 
 	t.Run("store rejects stale processing CompleteBranchTailor via epoch bump even before abort runs", func(t *testing.T) {
-		ctx, baseStore, _, svc, b, v1, pendingVer, claimedJob, _ := setupTailoredWithActiveAndProcessing(t, true)
+		ctx, baseStore, svc, b, v1, pendingVer, claimedJob, _ := setupTailoredWithActiveAndProcessing(t, true)
 
 		b.ActiveVersionID = &v1.ID
 		if err := baseStore.UpdateBranch(ctx, b); err != nil {
@@ -3586,7 +3334,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 	})
 
 	t.Run("non-config metadata update does not abort in-flight processing version", func(t *testing.T) {
-		ctx, baseStore, quotaSpy, svc, b, _, pendingVer, claimedJob, _ := setupTailoredWithActiveAndProcessing(t, false)
+		ctx, baseStore, svc, b, _, pendingVer, claimedJob, reservationID := setupTailoredWithActiveAndProcessing(t, false)
 
 		b.Name = "Renamed Metadata Only"
 		b.PinnedEntityIDs = []string{}
@@ -3606,9 +3354,7 @@ func TestService_UpdateBranchProcessingAbortionAndEpochGuard(t *testing.T) {
 		if reloadedV2.Status != core.VersionStatusProcessing {
 			t.Errorf("expected processing v2 to remain processing, got %s", reloadedV2.Status)
 		}
-		if len(quotaSpy.Releases()) != 0 {
-			t.Errorf("expected zero quota releases on metadata update, got %+v", quotaSpy.Releases())
-		}
+		assertReservationState(ctx, t, baseStore, b.UserID, reservationID, core.ReservationStatusPending, "")
 
 		validComplete := *pendingVer
 		validComplete.Status = core.VersionStatusCompleted
@@ -3642,7 +3388,7 @@ func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
 		RoleTitle: "Staff Engineer",
 		StartDate: core.NewDate(2020, 1, 1),
 	}
-	if err := store.CreateExperience(ctx, exp); err != nil {
+	if err := store.Career().CreateExperience(ctx, exp); err != nil {
 		t.Fatalf("CreateExperience failed: %v", err)
 	}
 	fact := &core.Fact{
@@ -3652,17 +3398,12 @@ func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
 		OwnerType: core.OwnerTypeWorkExperience,
 		Statement: "Built deterministic Go services.",
 	}
-	if err := store.CreateFact(ctx, fact); err != nil {
+	if err := store.Career().CreateFact(ctx, fact); err != nil {
 		t.Fatalf("CreateFact failed: %v", err)
 	}
 
 	svc := branch.New(
-		branch.WithBranches(store),
-		branch.WithJobs(store),
-		branch.WithProfiles(store),
-		branch.WithPresets(store),
-		branch.WithTemplates(store),
-		branch.WithQuotas(store),
+		branch.WithStore(store),
 		branch.WithValidator(provenance.New()),
 		branch.WithRenderer(renderer.New()),
 		branch.WithClock(func() time.Time { return fixedNow }),
@@ -3748,10 +3489,7 @@ func TestService_ClockInjectionAcrossEditRenderAndATS(t *testing.T) {
 	}
 
 	svcWithGen := branch.New(
-		branch.WithBranches(store),
-		branch.WithProfiles(store),
-		branch.WithTemplates(store),
-		branch.WithQuotas(store),
+		branch.WithStore(store),
 		branch.WithRenderer(renderer.New()),
 		branch.WithGenerator(&stubATSSimulator{}),
 		branch.WithClock(func() time.Time { return fixedNow }),
@@ -3773,15 +3511,15 @@ type permissiveTenantStore struct {
 }
 
 func (s *permissiveTenantStore) Branch(ctx context.Context, _ string, id string) (*core.Branch, error) {
-	return s.Branches.Branch(ctx, "", id)
+	return s.Store.Branch(ctx, "", id)
 }
 
 func (s *permissiveTenantStore) ListBranches(ctx context.Context, _ string) ([]core.Branch, error) {
-	return s.Branches.ListBranches(ctx, s.ownerID)
+	return s.Store.ListBranches(ctx, s.ownerID)
 }
 
 func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t *testing.T) {
-	setupVictim := func(t *testing.T, withProfiles bool, permissive bool) (
+	setupVictim := func(t *testing.T, withStore bool, permissive bool) (
 		context.Context,
 		*testBranchStore,
 		*spyQuotaRepo,
@@ -3794,7 +3532,7 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 		ctx := context.Background()
 		victim := "victim-user"
 		store := newSeededBranchStore(ctx, victim)
-		if _, err := store.IncrementMainRevision(ctx, victim); err != nil {
+		if _, err := store.Profiles().IncrementMainRevision(ctx, victim); err != nil {
 			t.Fatalf("IncrementMainRevision: %v", err)
 		}
 		victimBranch := &core.Branch{
@@ -3818,23 +3556,15 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 
 		quotaSpy := &spyQuotaRepo{}
 		notifier := &stubNotifier{}
-		var branchStore branch.Store = store
-		if permissive {
-			branchStore = &permissiveTenantStore{testBranchStore: store, ownerID: victim}
+		opts := []branch.Option{branch.WithJobNotifier(notifier)}
+		if withStore {
+			var st branch.Store = store
+			if permissive {
+				st = &permissiveTenantStore{testBranchStore: store, ownerID: victim}
+			}
+			opts = append(opts, branch.WithStore(&quotaOverrideStore{Store: st, quotas: quotaSpy}))
 		}
-		var profiles branch.ProfileReader
-		if withProfiles {
-			profiles = store
-		}
-		svc := branch.New(
-			branch.WithBranches(branchStore),
-			branch.WithJobs(store),
-			branch.WithProfiles(profiles),
-			branch.WithPresets(store),
-			branch.WithTemplates(store),
-			branch.WithQuotas(quotaSpy),
-			branch.WithJobNotifier(notifier),
-		)
+		svc := branch.New(opts...)
 		return ctx, store, quotaSpy, notifier, svc, victimBranch, victimPending
 	}
 
@@ -3845,14 +3575,14 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 		{label: "empty userID", userID: ""},
 		{label: "whitespace userID", userID: "   "},
 	} {
-		for _, withProfiles := range []bool{true, false} {
-			profileLabel := "profiles_nil"
-			if withProfiles {
-				profileLabel = "profiles_configured"
+		for _, withStore := range []bool{true, false} {
+			storeLabel := "store_nil"
+			if withStore {
+				storeLabel = "store_configured"
 			}
 
-			t.Run("GenerateVersion/"+invalidUser.label+"/"+profileLabel, func(t *testing.T) {
-				ctx, _, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withProfiles, false)
+			t.Run("GenerateVersion/"+invalidUser.label+"/"+storeLabel, func(t *testing.T) {
+				ctx, st, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withStore, false)
 
 				_, err := svc.GenerateVersion(ctx, invalidUser.userID, victimBranch.ID)
 				if !errors.Is(err, core.ErrValidation) {
@@ -3869,14 +3599,14 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 				if notifier.Count() != 0 {
 					t.Errorf("expected zero worker notifications, got %d", notifier.Count())
 				}
-				gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+				gotPending, err := st.Version(ctx, victimBranch.ID, victimPending.ID)
 				if err != nil || gotPending.Status != core.VersionStatusPending {
 					t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
 				}
 			})
 
-			t.Run("SyncBranches_explicit/"+invalidUser.label+"/"+profileLabel, func(t *testing.T) {
-				ctx, _, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withProfiles, false)
+			t.Run("SyncBranches_explicit/"+invalidUser.label+"/"+storeLabel, func(t *testing.T) {
+				ctx, st, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withStore, false)
 
 				ids, err := svc.SyncBranches(ctx, invalidUser.userID, []string{victimBranch.ID})
 				if !errors.Is(err, core.ErrValidation) {
@@ -3896,14 +3626,14 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 				if notifier.Count() != 0 {
 					t.Errorf("expected zero worker notifications, got %d", notifier.Count())
 				}
-				gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+				gotPending, err := st.Version(ctx, victimBranch.ID, victimPending.ID)
 				if err != nil || gotPending.Status != core.VersionStatusPending {
 					t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
 				}
 			})
 
-			t.Run("SyncBranches_allStale/"+invalidUser.label+"/"+profileLabel, func(t *testing.T) {
-				ctx, _, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withProfiles, false)
+			t.Run("SyncBranches_allStale/"+invalidUser.label+"/"+storeLabel, func(t *testing.T) {
+				ctx, st, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, withStore, false)
 
 				ids, err := svc.SyncBranches(ctx, invalidUser.userID, nil)
 				if !errors.Is(err, core.ErrValidation) {
@@ -3918,7 +3648,7 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 				if resCount != 0 || notifier.Count() != 0 {
 					t.Errorf("expected zero reservations and notifications, got reservations=%d notifications=%d", resCount, notifier.Count())
 				}
-				gotPending, err := svc.Version(ctx, victimBranch.ID, victimPending.ID)
+				gotPending, err := st.Version(ctx, victimBranch.ID, victimPending.ID)
 				if err != nil || gotPending.Status != core.VersionStatusPending {
 					t.Errorf("expected victim pending version untouched, got %+v err=%v", gotPending, err)
 				}
@@ -3927,7 +3657,7 @@ func TestService_GenerateVersionAndSyncBranches_RejectEmptyAndWhitespaceUserID(t
 	}
 
 	t.Run("permissive store foreign branch rejected in GenerateVersion and SyncBranches", func(t *testing.T) {
-		ctx, store, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, false, true)
+		ctx, store, quotaSpy, notifier, svc, victimBranch, victimPending := setupVictim(t, true, true)
 		attacker := "attacker-user"
 		if err := store.UpsertProfile(ctx, &core.Profile{ID: "prof-att", UserID: attacker, FullName: "Attacker", MainRevision: 1}); err != nil {
 			t.Fatalf("UpsertProfile attacker: %v", err)
@@ -3974,7 +3704,7 @@ func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testi
 		RoleTitle: "Engineer",
 		StartDate: core.NewDate(2020, 1, 1),
 	}
-	if err := baseStore.CreateExperience(ctx, exp); err != nil {
+	if err := baseStore.Career().CreateExperience(ctx, exp); err != nil {
 		t.Fatalf("CreateExperience: %v", err)
 	}
 	fact := &core.Fact{
@@ -3984,7 +3714,7 @@ func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testi
 		OwnerType: core.OwnerTypeWorkExperience,
 		Statement: "Shipped core services.",
 	}
-	if err := baseStore.CreateFact(ctx, fact); err != nil {
+	if err := baseStore.Career().CreateFact(ctx, fact); err != nil {
 		t.Fatalf("CreateFact: %v", err)
 	}
 
@@ -4019,12 +3749,7 @@ func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testi
 	}
 
 	svc := branch.New(
-		branch.WithBranches(permStore),
-		branch.WithJobs(baseStore),
-		branch.WithProfiles(baseStore),
-		branch.WithPresets(baseStore),
-		branch.WithTemplates(baseStore),
-		branch.WithQuotas(quotaSpy),
+		branch.WithStore(&quotaOverrideStore{Store: permStore, quotas: quotaSpy}),
 		branch.WithGenerator(&stubATSSimulator{stubGenerator: stubGenerator{gapReport: &core.GapReport{OverallMatchSummary: "ok"}}}),
 		branch.WithPromptCompiler(&fakePromptCompiler{}),
 	)
@@ -4049,10 +3774,6 @@ func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testi
 			{name: "DeleteBranch", call: func() error { return svc.DeleteBranch(ctx, badUser, victimBranch.ID) }},
 			{name: "GenerateVersion", call: func() error { _, err := svc.GenerateVersion(ctx, badUser, victimBranch.ID); return err }},
 			{name: "SyncBranches", call: func() error { _, err := svc.SyncBranches(ctx, badUser, []string{victimBranch.ID}); return err }},
-			{name: "CancelVersion", call: func() error {
-				_, err := svc.CancelVersion(ctx, badUser, victimBranch.ID, pendingVer.ID)
-				return err
-			}},
 			{name: "EditVersion", call: func() error {
 				_, err := svc.EditVersion(ctx, badUser, victimBranch.ID, completedVer.ID, editPayload)
 				return err
@@ -4098,10 +3819,6 @@ func TestService_TenantScopedEntryPoints_RejectEmptyAndMismatchedUserID(t *testi
 		{name: "DeleteBranch", call: func() error { return svc.DeleteBranch(ctx, attacker, victimBranch.ID) }},
 		{name: "GenerateVersion", call: func() error { _, err := svc.GenerateVersion(ctx, attacker, victimBranch.ID); return err }},
 		{name: "SyncBranches", call: func() error { _, err := svc.SyncBranches(ctx, attacker, []string{victimBranch.ID}); return err }},
-		{name: "CancelVersion", call: func() error {
-			_, err := svc.CancelVersion(ctx, attacker, victimBranch.ID, pendingVer.ID)
-			return err
-		}},
 		{name: "EditVersion", call: func() error {
 			_, err := svc.EditVersion(ctx, attacker, victimBranch.ID, completedVer.ID, editPayload)
 			return err

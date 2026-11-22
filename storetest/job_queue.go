@@ -29,15 +29,14 @@ func RunJobQueue(t *testing.T, newStore Factory) {
 			Tailor:        &core.BranchTailorSpec{BranchID: br.ID},
 		}
 		ver1 := &core.BranchVersion{ID: "ver-1", BranchID: br.ID, UserID: "u1"}
-		released, err := st.Jobs().SubmitBranchTailor(ctx, job1, ver1, core.PendingJobOptions{})
-		if err != nil || len(released) != 0 {
-			t.Fatalf("SubmitBranchTailor 1 failed: released=%+v err=%v", released, err)
+		if err := st.Jobs().SubmitBranchTailor(ctx, job1, ver1, core.PendingJobOptions{}); err != nil {
+			t.Fatalf("SubmitBranchTailor 1 failed: %v", err)
 		}
 		if ver1.JobID != job1.ID || ver1.BranchEpoch != 1 {
 			t.Fatalf("expected linked JobID and epoch 1 on version, got %+v", ver1)
 		}
 
-		// Submitting a second pending job on the same branch supersedes job1 and releases res-1.
+		// Submitting a second pending job on the same branch supersedes job1.
 		job2 := &core.Job{
 			ID:            "job-2",
 			UserID:        "u1",
@@ -45,12 +44,8 @@ func RunJobQueue(t *testing.T, newStore Factory) {
 			Tailor:        &core.BranchTailorSpec{BranchID: br.ID},
 		}
 		ver2 := &core.BranchVersion{ID: "ver-2", BranchID: br.ID, UserID: "u1"}
-		released, err = st.Jobs().SubmitBranchTailor(ctx, job2, ver2, core.PendingJobOptions{})
-		if err != nil {
+		if err := st.Jobs().SubmitBranchTailor(ctx, job2, ver2, core.PendingJobOptions{}); err != nil {
 			t.Fatalf("SubmitBranchTailor supersede failed: %v", err)
-		}
-		if len(released) != 1 || released[0].ReservationID != "res-1" {
-			t.Fatalf("expected superseded res-1 released, got %+v", released)
 		}
 		j1After, _ := st.Jobs().Job(ctx, "u1", job1.ID)
 		v1After, _ := st.Branches().Version(ctx, br.ID, ver1.ID)
@@ -68,7 +63,7 @@ func RunJobQueue(t *testing.T, newStore Factory) {
 		}
 
 		// Another tailor submission while active lease is held must be rejected with ErrConflict.
-		if _, err := st.Jobs().SubmitBranchTailor(ctx, &core.Job{ID: "job-3", UserID: "u1"}, &core.BranchVersion{ID: "ver-3", BranchID: br.ID}, core.PendingJobOptions{}); !errors.Is(err, core.ErrConflict) {
+		if err := st.Jobs().SubmitBranchTailor(ctx, &core.Job{ID: "job-3", UserID: "u1"}, &core.BranchVersion{ID: "ver-3", BranchID: br.ID}, core.PendingJobOptions{}); !errors.Is(err, core.ErrConflict) {
 			t.Fatalf("expected ErrConflict submitting while processing lease is active, got %v", err)
 		}
 
@@ -88,14 +83,18 @@ func RunJobQueue(t *testing.T, newStore Factory) {
 		if err := st.Jobs().CompleteBranchTailor(ctx, job2.ID, "worker-a", &core.BranchVersion{HTMLOutput: "stale"}); !errors.Is(err, core.ErrConflict) {
 			t.Fatalf("expected ErrConflict due to branch epoch fence, got %v", err)
 		}
-		if err := st.Jobs().FailClaimed(ctx, job2.ID, "worker-a", "fenced"); err != nil {
+		if err := st.Jobs().FailClaimed(ctx, core.FailClaimedRequest{
+			JobID:     job2.ID,
+			ClaimedBy: "worker-a",
+			ErrMsg:    "fenced",
+		}); err != nil {
 			t.Fatalf("FailClaimed failed: %v", err)
 		}
 
 		// Fresh submission after epoch bump succeeds cleanly end-to-end.
 		job4 := &core.Job{ID: "job-4", UserID: "u1", Tailor: &core.BranchTailorSpec{BranchID: br.ID}}
 		ver4 := &core.BranchVersion{ID: "ver-4", BranchID: br.ID, UserID: "u1"}
-		if _, err := st.Jobs().SubmitBranchTailor(ctx, job4, ver4, core.PendingJobOptions{}); err != nil {
+		if err := st.Jobs().SubmitBranchTailor(ctx, job4, ver4, core.PendingJobOptions{}); err != nil {
 			t.Fatalf("SubmitBranchTailor job4 failed: %v", err)
 		}
 		claimed, err = st.Jobs().ClaimNext(ctx, core.ClaimJobRequest{WorkerID: "worker-a"})
@@ -134,7 +133,7 @@ func RunJobQueue(t *testing.T, newStore Factory) {
 		br := &core.Branch{ID: "br-cap", UserID: "u1", Name: "Cap", TemplateSetID: core.TemplateStandardCleanID}
 		_ = st.Branches().CreateBranch(ctx, br)
 		opts := core.PendingJobOptions{MaxPendingPerTenant: 2}
-		if _, err := st.Jobs().SubmitBranchTailor(ctx, &core.Job{ID: "t-1", UserID: "u1"}, &core.BranchVersion{ID: "v-1", BranchID: br.ID}, opts); err != nil {
+		if err := st.Jobs().SubmitBranchTailor(ctx, &core.Job{ID: "t-1", UserID: "u1"}, &core.BranchVersion{ID: "v-1", BranchID: br.ID}, opts); err != nil {
 			t.Fatalf("SubmitBranchTailor t-1 failed: %v", err)
 		}
 		pdf1 := &core.Job{
@@ -149,9 +148,9 @@ func RunJobQueue(t *testing.T, newStore Factory) {
 			t.Fatalf("expected ErrPendingLimitExceeded across mixed queue, got %v", err)
 		}
 
-		// CancelBranchVersion cancels t-1, then claim and complete pdf-1 verifying RawText is scrubbed.
-		if _, _, err := st.Jobs().CancelBranchVersion(ctx, "u1", br.ID, "v-1", "cancelled"); err != nil {
-			t.Fatalf("CancelBranchVersion failed: %v", err)
+		// SupersedeBranchTailor cancels t-1, then claim and complete pdf-1 verifying RawText is scrubbed.
+		if err := st.Jobs().SupersedeBranchTailor(ctx, br.ID, "cancelled"); err != nil {
+			t.Fatalf("SupersedeBranchTailor failed: %v", err)
 		}
 		claimed, err := st.Jobs().ClaimNext(ctx, core.ClaimJobRequest{WorkerID: "w1"})
 		if err != nil || claimed == nil || claimed.ID != pdf1.ID {
@@ -216,7 +215,9 @@ func RunJobQueue(t *testing.T, newStore Factory) {
 		if err != nil {
 			t.Fatalf("FailExpiredLeases failed: %v", err)
 		}
-		_ = expired
+		if expired != 1 {
+			t.Fatalf("expected 1 expired lease, got %d", expired)
+		}
 		a1Now, _ := st.Jobs().Job(ctx, "a", "a-1")
 		if a1Now.Status != core.JobStatusFailed || a1Now.PDF.RawText != "" {
 			t.Fatalf("expected expired a-1 failed & scrubbed, got %+v", a1Now)
@@ -230,8 +231,12 @@ func RunJobQueue(t *testing.T, newStore Factory) {
 		if err != nil || claimedB2 == nil || claimedB2.ID != "b-1" || claimedB2.AttemptCount != 2 {
 			t.Fatalf("expected reclaim b-1 attempt 2, got %+v (err=%v)", claimedB2, err)
 		}
-		if _, err := st.Jobs().RecoverInterrupted(ctx, "restart"); err != nil {
+		recovered, err := st.Jobs().RecoverInterrupted(ctx, "restart")
+		if err != nil {
 			t.Fatalf("RecoverInterrupted failed: %v", err)
+		}
+		if recovered != 1 {
+			t.Fatalf("expected 1 interrupted job recovered, got %d", recovered)
 		}
 		bNow, _ := st.Jobs().Job(ctx, "b", "b-1")
 		a2Now, _ := st.Jobs().Job(ctx, "a", "a-2")
@@ -300,6 +305,128 @@ func RunJobQueue(t *testing.T, newStore Factory) {
 			if count != 1 {
 				t.Fatalf("job %s claimed %d times", id, count)
 			}
+		}
+	})
+
+	t.Run("AtomicQuotaReservationAndSettlement", func(t *testing.T) {
+		clk := newTestClock(defaultTestBaseTime)
+		st := openStore(t, newStore, clk.Now)
+		ctx := runCtx(t)
+
+		br := &core.Branch{ID: "br-q", UserID: "u1", Name: "Quota Branch", TemplateSetID: core.TemplateStandardCleanID}
+		if err := st.Branches().CreateBranch(ctx, br); err != nil {
+			t.Fatalf("CreateBranch failed: %v", err)
+		}
+
+		// Daily limit = 1, Monthly = 1000: SubmitBranchTailor reserves atomically.
+		spec := &core.QuotaReservationSpec{
+			Operation:       core.OperationResumeTailoring,
+			EstimatedTokens: 400,
+			DailyLimit:      1,
+			MonthlyLimit:    1000,
+		}
+		job1 := &core.Job{ID: "jq-1", UserID: "u1", Tailor: &core.BranchTailorSpec{BranchID: br.ID}}
+		ver1 := &core.BranchVersion{ID: "vq-1", BranchID: br.ID, UserID: "u1"}
+		if err := st.Jobs().SubmitBranchTailor(ctx, job1, ver1, core.PendingJobOptions{
+			MaxPendingPerTenant: 1,
+			Quota:               spec,
+		}); err != nil {
+			t.Fatalf("SubmitBranchTailor jq-1 failed: %v", err)
+		}
+		if job1.ReservationID == "" {
+			t.Fatalf("expected ReservationID populated on jq-1")
+		}
+
+		// Queue cap (ErrPendingLimitExceeded) must win before quota exhaustion when submitting a PDF job,
+		// and rejected submissions must roll back without modifying quota usage.
+		pdfBlocked := &core.Job{ID: "pq-blocked", UserID: "u1", PDF: &core.PDFParseSpec{RawText: "hello"}}
+		if err := st.Jobs().SubmitPDFParse(ctx, pdfBlocked, core.PendingJobOptions{
+			MaxPendingPerTenant: 1,
+			Quota: &core.QuotaReservationSpec{
+				Operation:       core.OperationPDFParse,
+				EstimatedTokens: 400,
+				DailyLimit:      1,
+				MonthlyLimit:    1000,
+			},
+		}); !errors.Is(err, core.ErrPendingLimitExceeded) {
+			t.Fatalf("expected ErrPendingLimitExceeded before ErrQuotaExceeded, got %v", err)
+		}
+
+		// Superseding jq-1 on the same branch refunds jq-1's reservation and reserves jq-2 in one tx, even at 1/1 limit.
+		job2 := &core.Job{ID: "jq-2", UserID: "u1", Tailor: &core.BranchTailorSpec{BranchID: br.ID}}
+		ver2 := &core.BranchVersion{ID: "vq-2", BranchID: br.ID, UserID: "u1"}
+		if err := st.Jobs().SubmitBranchTailor(ctx, job2, ver2, core.PendingJobOptions{
+			MaxPendingPerTenant: 1,
+			Quota:               spec,
+		}); err != nil {
+			t.Fatalf("superseding SubmitBranchTailor at 1/1 quota failed: %v", err)
+		}
+		if job2.ReservationID == "" || job2.ReservationID == job1.ReservationID {
+			t.Fatalf("expected fresh ReservationID on jq-2, got old=%s new=%s", job1.ReservationID, job2.ReservationID)
+		}
+		qAfterSupersede, _ := st.Quotas().Quota(ctx, "u1")
+		if qAfterSupersede.DailyRequestsUsed != 1 || qAfterSupersede.MonthlyTokensUsed != 400 {
+			t.Fatalf("expected net 1 request / 400 tokens after supersede, got daily=%d monthly=%d",
+				qAfterSupersede.DailyRequestsUsed, qAfterSupersede.MonthlyTokensUsed)
+		}
+
+		// Claim jq-2 and FailClaimed with RefundQuota: true + Telemetry settles atomically.
+		claimed, err := st.Jobs().ClaimNext(ctx, core.ClaimJobRequest{WorkerID: "w-atomic"})
+		if err != nil || claimed == nil || claimed.ID != job2.ID {
+			t.Fatalf("expected claim of jq-2, got %+v (err=%v)", claimed, err)
+		}
+		if err := st.Jobs().FailClaimed(ctx, core.FailClaimedRequest{
+			JobID:       job2.ID,
+			ClaimedBy:   "w-atomic",
+			ErrMsg:      "upstream error",
+			RefundQuota: true,
+			Telemetry:   core.LLMTelemetry{Provider: "gemini", Model: "flash", StatusCode: 503},
+		}); err != nil {
+			t.Fatalf("FailClaimed failed: %v", err)
+		}
+		qAfterFail, _ := st.Quotas().Quota(ctx, "u1")
+		if qAfterFail.DailyRequestsUsed != 0 || qAfterFail.MonthlyTokensUsed != 0 {
+			t.Fatalf("expected quota fully refunded on FailClaimed, got daily=%d monthly=%d",
+				qAfterFail.DailyRequestsUsed, qAfterFail.MonthlyTokensUsed)
+		}
+		recs, _ := st.Quotas().ListUsageRecords(ctx, "u1", 10)
+		foundReleased2 := false
+		for _, r := range recs {
+			if r.ID == job2.ReservationID {
+				foundReleased2 = true
+				if r.Status != core.ReservationStatusReleased || r.StatusCode != 503 || r.Provider != "gemini" {
+					t.Fatalf("unexpected settled usage record for jq-2: %+v", r)
+				}
+			}
+		}
+		if !foundReleased2 {
+			t.Fatalf("missing settled usage record %s for jq-2", job2.ReservationID)
+		}
+
+		// SubmitPDFParse reserves quota, then ExpirePending atomically refunds it and scrubs RawText.
+		pdfExp := &core.Job{ID: "pq-exp", UserID: "u1", PDF: &core.PDFParseSpec{RawText: "confidential pdf"}}
+		if err := st.Jobs().SubmitPDFParse(ctx, pdfExp, core.PendingJobOptions{
+			MaxPendingPerTenant: 5,
+			TTL:                 time.Minute,
+			Now:                 clk.Now(),
+			Quota: &core.QuotaReservationSpec{
+				Operation:       core.OperationPDFParse,
+				EstimatedTokens: 300,
+				DailyLimit:      2,
+				MonthlyLimit:    1000,
+			},
+		}); err != nil {
+			t.Fatalf("SubmitPDFParse pq-exp failed: %v", err)
+		}
+		clk.Advance(2 * time.Minute)
+		expCount, err := st.Jobs().ExpirePending(ctx, clk.Now(), "expired")
+		if err != nil || expCount != 1 {
+			t.Fatalf("expected 1 expired pdf job, got count=%d err=%v", expCount, err)
+		}
+		qAfterExp, _ := st.Quotas().Quota(ctx, "u1")
+		if qAfterExp.DailyRequestsUsed != 0 || qAfterExp.MonthlyTokensUsed != 0 {
+			t.Fatalf("expected pdf quota released on ExpirePending, got daily=%d monthly=%d",
+				qAfterExp.DailyRequestsUsed, qAfterExp.MonthlyTokensUsed)
 		}
 	})
 }

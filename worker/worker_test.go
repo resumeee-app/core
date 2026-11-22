@@ -273,14 +273,14 @@ func submitPendingVersionWithQuota(
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
-	if _, err := st.Jobs().SubmitBranchTailor(ctx, job, ver, opts); err != nil {
+	if err := st.SubmitBranchTailor(ctx, job, ver, opts); err != nil {
 		_ = st.Quotas().ReleaseQuota(ctx, rec.ID, err.Error(), core.LLMTelemetry{})
 		t.Fatalf("SubmitBranchTailor failed: %v", err)
 	}
 	return ver
 }
 
-func jobForVersion(ctx context.Context, t *testing.T, jobs worker.JobStore, userID string, ver *core.BranchVersion) *core.Job {
+func jobForVersion(ctx context.Context, t *testing.T, jobs *store.Jobs, userID string, ver *core.BranchVersion) *core.Job {
 	t.Helper()
 	job, err := jobs.Job(ctx, userID, ver.JobID)
 	if err != nil {
@@ -299,23 +299,22 @@ func submitPendingPDFWithQuota(
 	clock func() time.Time,
 ) *core.Job {
 	t.Helper()
-	job, err := worker.SubmitPDFJob(ctx, st.Jobs(), worker.PDFJobSubmission{
-		UserID:       userID,
-		Filename:     "resume.pdf",
-		Provider:     provider,
-		Model:        model,
-		RawText:      rawText,
-		DailyLimit:   100,
-		MonthlyLimit: 1000000,
-	},
-		worker.WithPDFQuotas(st.Quotas()),
-		worker.WithPDFNotifier(notifier),
-		worker.WithPDFJobTTL(ttl),
-		worker.WithPDFCleanupTimeout(2*time.Second),
-		worker.WithPDFClock(clock),
-	)
+	coord := worker.NewPDFCoordinator(st, nil, notifier, worker.PDFCoordinatorConfig{
+		DailyLimit:     100,
+		MonthlyLimit:   1000000,
+		TTL:            ttl,
+		CleanupTimeout: 2 * time.Second,
+		Clock:          clock,
+	})
+	job, err := coord.SubmitAsync(ctx, worker.PDFParseRequest{
+		UserID:   userID,
+		Filename: "resume.pdf",
+		Provider: provider,
+		Model:    model,
+		RawText:  rawText,
+	})
 	if err != nil {
-		t.Fatalf("SubmitPDFJob failed: %v", err)
+		t.Fatalf("PDFCoordinator.SubmitAsync failed: %v", err)
 	}
 	return job
 }
@@ -323,7 +322,7 @@ func submitPendingPDFWithQuota(
 func waitForVersionStatus(
 	ctx context.Context,
 	t *testing.T,
-	branches worker.BranchReader,
+	branches *store.Branches,
 	branchID, versionID string,
 	timeout time.Duration,
 	pred func(*core.BranchVersion) bool,
@@ -351,7 +350,7 @@ func waitForVersionStatus(
 func waitForPDFStatus(
 	ctx context.Context,
 	t *testing.T,
-	jobs worker.JobStore,
+	jobs *store.Jobs,
 	userID, jobID string,
 	timeout time.Duration,
 	pred func(*core.Job) bool,
@@ -422,12 +421,7 @@ func TestPool_ParallelExecution(t *testing.T) {
 	pool := worker.New(
 		worker.WithConcurrency(4),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(env.llm),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -544,24 +538,24 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 		MainRevisionUsed:  1,
 		TemplateSetIDUsed: core.TemplateStandardCleanID,
 	}
-	_, submitErr := env.jobRepo.SubmitBranchTailor(ctx, jobOver, verOver, core.PendingJobOptions{MaxPendingPerTenant: 2})
+	submitErr := env.jobRepo.SubmitBranchTailor(ctx, jobOver, verOver, core.PendingJobOptions{MaxPendingPerTenant: 2})
 	if !errors.Is(submitErr, core.ErrPendingLimitExceeded) || !errors.Is(submitErr, core.ErrQueueFull) {
 		t.Fatalf("expected ErrPendingLimitExceeded / ErrQueueFull, got %v", submitErr)
 	}
 	_ = env.quotaRepo.ReleaseQuota(ctx, recOver.ID, "rejected by pending limit", core.LLMTelemetry{})
 
-	// Also verify PDF SubmitPDFJob enforces MaxPendingPerTenant and releases quota on rejection
-	_, pdfErr := worker.SubmitPDFJob(ctx, env.jobRepo, worker.PDFJobSubmission{
-		UserID:       env.defaultUser,
-		RawText:      "overflow pdf text",
-		DailyLimit:   100,
-		MonthlyLimit: 1000000,
-	},
-		worker.WithPDFQuotas(env.quotaRepo),
-		worker.WithPDFMaxPendingPerTenant(2),
-	)
+	// Also verify PDFCoordinator.SubmitAsync enforces MaxPendingPerTenant atomically without reserving quota
+	pdfCoord := worker.NewPDFCoordinator(env.store, nil, nil, worker.PDFCoordinatorConfig{
+		DailyLimit:          100,
+		MonthlyLimit:        1000000,
+		MaxPendingPerTenant: 2,
+	})
+	_, pdfErr := pdfCoord.SubmitAsync(ctx, worker.PDFParseRequest{
+		UserID:  env.defaultUser,
+		RawText: "overflow pdf text",
+	})
 	if !errors.Is(pdfErr, core.ErrPendingLimitExceeded) || !errors.Is(pdfErr, core.ErrQueueFull) {
-		t.Fatalf("expected SubmitPDFJob ErrPendingLimitExceeded / ErrQueueFull, got %v", pdfErr)
+		t.Fatalf("expected SubmitAsync ErrPendingLimitExceeded / ErrQueueFull, got %v", pdfErr)
 	}
 
 	// Verify direct claiming saturation with Concurrency=1 leaves remaining pending jobs in store until slot frees
@@ -572,12 +566,7 @@ func TestPool_BackpressureAndSaturation(t *testing.T) {
 	pool := worker.New(
 		worker.WithConcurrency(1),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(blockingLLM),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -683,12 +672,7 @@ func TestPool_GracefulShutdownAndDrain(t *testing.T) {
 		worker.WithConcurrency(2),
 		worker.WithMaxConcurrentPerTenant(2),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(llmMock),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -825,12 +809,7 @@ func TestPool_StartupCrashRecovery(t *testing.T) {
 		worker.WithConcurrency(2),
 		worker.WithPollInterval(20*time.Millisecond),
 		worker.WithClock(clk.Now),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(env.llm),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -899,12 +878,7 @@ func TestPool_LLMErrorTransition(t *testing.T) {
 	pool := worker.New(
 		worker.WithConcurrency(2),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(env.llm),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -960,12 +934,7 @@ func TestPool_CompletedWithWarnings(t *testing.T) {
 	pool := worker.New(
 		worker.WithConcurrency(2),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(env.llm),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -1043,12 +1012,7 @@ func TestPool_RecoverStaleJobs(t *testing.T) {
 		worker.WithConcurrency(2),
 		worker.WithPollInterval(20*time.Millisecond),
 		worker.WithClock(clk.Now),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithResumeExtractor(ext),
 		worker.WithGenerator(env.llm),
 		worker.WithValidator(env.validator),
@@ -1116,12 +1080,7 @@ func TestPool_WorkerPanicRecovery(t *testing.T) {
 	pool := worker.New(
 		worker.WithConcurrency(1),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(env.llm),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -1241,8 +1200,7 @@ func TestWorkerPool_PDFParseJob_Success(t *testing.T) {
 	pool := worker.New(
 		worker.WithConcurrency(2),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(st.Jobs()),
-		worker.WithQuotas(st.Quotas()),
+		worker.WithStore(st),
 		worker.WithResumeExtractor(mockExt),
 		worker.WithLLMTimeout(5*time.Second),
 	)
@@ -1286,8 +1244,7 @@ func TestWorkerPool_PDFParseJob_Failure(t *testing.T) {
 	pool := worker.New(
 		worker.WithConcurrency(2),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(st.Jobs()),
-		worker.WithQuotas(st.Quotas()),
+		worker.WithStore(st),
 		worker.WithResumeExtractor(mockExt),
 		worker.WithLLMTimeout(5*time.Second),
 	)
@@ -1325,12 +1282,7 @@ func TestWorkerPool_TailoringPipeline_LLMTimeout(t *testing.T) {
 	pool := worker.New(
 		worker.WithConcurrency(1),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(llmMock),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -1402,8 +1354,7 @@ func TestPool_PerTenantConcurrencyCap(t *testing.T) {
 		worker.WithConcurrency(4),
 		worker.WithMaxConcurrentPerTenant(2),
 		worker.WithPollInterval(20*time.Millisecond),
-		worker.WithJobs(st.Jobs()),
-		worker.WithQuotas(st.Quotas()),
+		worker.WithStore(st),
 		worker.WithResumeExtractor(mockExt),
 		worker.WithLLMTimeout(5*time.Second),
 	)
@@ -1462,8 +1413,7 @@ func TestPool_NoisyNeighborFairShareAntiStarvation(t *testing.T) {
 		worker.WithConcurrency(2),
 		worker.WithMaxConcurrentPerTenant(1),
 		worker.WithPollInterval(20*time.Millisecond),
-		worker.WithJobs(st.Jobs()),
-		worker.WithQuotas(st.Quotas()),
+		worker.WithStore(st),
 		worker.WithResumeExtractor(mockExt),
 		worker.WithLLMTimeout(5*time.Second),
 	)
@@ -1534,8 +1484,7 @@ func TestPool_MultiTenantRoundRobinOrdering(t *testing.T) {
 		worker.WithMaxConcurrentPerTenant(1),
 		worker.WithPollInterval(50*time.Millisecond),
 		worker.WithClock(clk.Now),
-		worker.WithJobs(st.Jobs()),
-		worker.WithQuotas(st.Quotas()),
+		worker.WithStore(st),
 		worker.WithResumeExtractor(mockExt),
 		worker.WithLLMTimeout(5*time.Second),
 	)
@@ -1629,8 +1578,7 @@ func TestPool_PanicSlotRelease(t *testing.T) {
 		worker.WithConcurrency(2),
 		worker.WithMaxConcurrentPerTenant(1),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(st.Jobs()),
-		worker.WithQuotas(st.Quotas()),
+		worker.WithStore(st),
 		worker.WithResumeExtractor(mockExt),
 		worker.WithLLMTimeout(5*time.Second),
 	)
@@ -1744,12 +1692,7 @@ func TestPool_GenerationJob_PerTenantConcurrencyCap(t *testing.T) {
 		worker.WithConcurrency(4),
 		worker.WithMaxConcurrentPerTenant(2),
 		worker.WithPollInterval(20*time.Millisecond),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(llmMock),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -1852,12 +1795,7 @@ func TestPool_MixedWorkload_SharedTenantConcurrencyCap(t *testing.T) {
 		worker.WithConcurrency(4),
 		worker.WithMaxConcurrentPerTenant(2),
 		worker.WithPollInterval(20*time.Millisecond),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithJobs(env.jobRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithResumeExtractor(extractor),
 		worker.WithGenerator(llmMock),
 		worker.WithValidator(env.validator),
@@ -1956,12 +1894,7 @@ func TestPool_MixedWorkload_FairShareMultiTenant(t *testing.T) {
 		worker.WithConcurrency(2),
 		worker.WithMaxConcurrentPerTenant(1),
 		worker.WithPollInterval(20*time.Millisecond),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithJobs(env.jobRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithResumeExtractor(extractor),
 		worker.WithGenerator(llmMock),
 		worker.WithValidator(env.validator),
@@ -2049,8 +1982,7 @@ func TestWorkerPool_PDFParseJob_UsageQuotaCommit(t *testing.T) {
 	pool := worker.New(
 		worker.WithConcurrency(2),
 		worker.WithPollInterval(50*time.Millisecond),
-		worker.WithJobs(st.Jobs()),
-		worker.WithQuotas(st.Quotas()),
+		worker.WithStore(st),
 		worker.WithResumeExtractor(mockExt),
 		worker.WithLLMTimeout(5*time.Second),
 	)
@@ -2101,12 +2033,7 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		pool := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(50*time.Millisecond),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
 		)
@@ -2171,12 +2098,7 @@ func TestPool_TailoringPipeline_ReasoningLevelPrecedence(t *testing.T) {
 		pool := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(50*time.Millisecond),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
 		)
@@ -2230,12 +2152,7 @@ func TestPool_DirectClaiming_NotifyAndPollFallback(t *testing.T) {
 		pool := worker.New(
 			worker.WithConcurrency(2),
 			worker.WithPollInterval(10*time.Second),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithJobs(env.jobRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithResumeExtractor(ext),
 			worker.WithGenerator(env.llm),
 			worker.WithValidator(env.validator),
@@ -2279,12 +2196,7 @@ func TestPool_DirectClaiming_NotifyAndPollFallback(t *testing.T) {
 		pool := worker.New(
 			worker.WithConcurrency(2),
 			worker.WithPollInterval(20*time.Millisecond),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithJobs(env.jobRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithResumeExtractor(ext),
 			worker.WithGenerator(env.llm),
 			worker.WithValidator(env.validator),
@@ -2363,22 +2275,22 @@ func TestPool_MixedWorkload_AlternatingFairness(t *testing.T) {
 			Now:                 ts,
 		})
 
-		if _, err := worker.SubmitPDFJob(ctx, env.jobRepo, worker.PDFJobSubmission{
-			UserID:       env.defaultUser,
-			Filename:     "resume.pdf",
-			Provider:     "mock",
-			Model:        "m",
-			RawText:      fmt.Sprintf("t%d", i),
-			DailyLimit:   100,
-			MonthlyLimit: 1000000,
-		},
-			worker.WithPDFQuotas(env.quotaRepo),
-			worker.WithPDFMaxPendingPerTenant(10),
-			worker.WithPDFJobTTL(core.DefaultJobTTL),
-			worker.WithPDFCleanupTimeout(2*time.Second),
-			worker.WithPDFClock(func() time.Time { return ts }),
-		); err != nil {
-			t.Fatalf("SubmitPDFJob %d failed: %v", i, err)
+		pdfCoord := worker.NewPDFCoordinator(env.store, nil, nil, worker.PDFCoordinatorConfig{
+			DailyLimit:          100,
+			MonthlyLimit:        1000000,
+			MaxPendingPerTenant: 10,
+			TTL:                 core.DefaultJobTTL,
+			CleanupTimeout:      2 * time.Second,
+			Clock:               func() time.Time { return ts },
+		})
+		if _, err := pdfCoord.SubmitAsync(ctx, worker.PDFParseRequest{
+			UserID:   env.defaultUser,
+			Filename: "resume.pdf",
+			Provider: "mock",
+			Model:    "m",
+			RawText:  fmt.Sprintf("t%d", i),
+		}); err != nil {
+			t.Fatalf("SubmitAsync %d failed: %v", i, err)
 		}
 	}
 
@@ -2387,12 +2299,7 @@ func TestPool_MixedWorkload_AlternatingFairness(t *testing.T) {
 		worker.WithMaxConcurrentPerTenant(1),
 		worker.WithPollInterval(50*time.Millisecond),
 		worker.WithClock(clk.Now),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithResumeExtractor(ext),
 		worker.WithGenerator(llmMock),
 		worker.WithValidator(env.validator),
@@ -2467,12 +2374,7 @@ func TestPool_QueueTTLExpiration_SkipAndSweepReleasesQuota(t *testing.T) {
 		worker.WithPollInterval(20*time.Millisecond),
 		worker.WithSweepInterval(25*time.Millisecond),
 		worker.WithClock(clk.Now),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithResumeExtractor(ext),
 		worker.WithGenerator(llmMock),
 		worker.WithValidator(env.validator),
@@ -2511,7 +2413,7 @@ func TestPool_QueueTTLExpiration_SkipAndSweepReleasesQuota(t *testing.T) {
 }
 
 type spyRenewJobStore struct {
-	worker.JobStore
+	worker.Store
 	renewErr    error
 	renewCalls  atomic.Int32
 	firstRenew  chan struct{}
@@ -2528,14 +2430,14 @@ func (s *spyRenewJobStore) RenewLease(ctx context.Context, jobID, claimedBy stri
 	if s.renewErr != nil {
 		return s.renewErr
 	}
-	return s.JobStore.RenewLease(ctx, jobID, claimedBy, leaseExpiresAt)
+	return s.Store.RenewLease(ctx, jobID, claimedBy, leaseExpiresAt)
 }
 
 // 24. Lease Heartbeat Renewal + Stale Lease Sweep + Lease Loss Cancellation
 func TestPool_StaleLeaseSweepAndHeartbeatRenewal(t *testing.T) {
 	t.Run("heartbeat renews lease so slow LLM call completes without premature lease expiration", func(t *testing.T) {
 		env := setupTestWorkerEnv(t)
-		spyJobs := &spyRenewJobStore{JobStore: env.jobRepo}
+		spyJobs := &spyRenewJobStore{Store: env.store}
 
 		// LLM sleeps 160ms while LeaseDuration is 70ms and LeaseRenewInterval is 20ms and SweepInterval is 25ms.
 		// Without heartbeat renewal, sweepLoop would kill the active lease!
@@ -2567,12 +2469,7 @@ func TestPool_StaleLeaseSweepAndHeartbeatRenewal(t *testing.T) {
 			worker.WithSweepInterval(25*time.Millisecond),
 			worker.WithLeaseDuration(70*time.Millisecond),
 			worker.WithLeaseRenewInterval(20*time.Millisecond),
-			worker.WithJobs(spyJobs),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(spyJobs),
 			worker.WithResumeExtractor(ext),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
@@ -2645,12 +2542,7 @@ func TestPool_StaleLeaseSweepAndHeartbeatRenewal(t *testing.T) {
 			worker.WithPollInterval(1*time.Second),
 			worker.WithSweepInterval(20*time.Millisecond),
 			worker.WithClock(clk.Now),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 		)
 		pool.Start(ctx)
 		defer pool.Stop()
@@ -2681,7 +2573,7 @@ func TestPool_StaleLeaseSweepAndHeartbeatRenewal(t *testing.T) {
 	t.Run("heartbeat losing lease via ErrConflict cancels in-flight attempt context", func(t *testing.T) {
 		env := setupTestWorkerEnv(t)
 		spyJobs := &spyRenewJobStore{
-			JobStore:   env.jobRepo,
+			Store:      env.store,
 			renewErr:   core.ErrConflict,
 			firstRenew: make(chan struct{}),
 		}
@@ -2700,12 +2592,7 @@ func TestPool_StaleLeaseSweepAndHeartbeatRenewal(t *testing.T) {
 			worker.WithPollInterval(50*time.Millisecond),
 			worker.WithLeaseDuration(60*time.Millisecond),
 			worker.WithLeaseRenewInterval(15*time.Millisecond),
-			worker.WithJobs(spyJobs),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(spyJobs),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
@@ -2764,12 +2651,7 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 					worker.WithMaxAttempts(3),
 					worker.WithRetryBaseDelay(10*time.Millisecond),
 					worker.WithPollInterval(50*time.Millisecond),
-					worker.WithJobs(env.jobRepo),
-					worker.WithBranches(env.branchRepo),
-					worker.WithProfiles(env.profileRepo),
-					worker.WithPresets(env.presetRepo),
-					worker.WithTemplates(env.templateRepo),
-					worker.WithQuotas(env.quotaRepo),
+					worker.WithStore(env.store),
 					worker.WithResumeExtractor(ext),
 					worker.WithGenerator(llmMock),
 					worker.WithValidator(env.validator),
@@ -2844,12 +2726,7 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 			worker.WithRetryBaseDelay(80*time.Millisecond),
 			worker.WithMaxRetryDelay(200*time.Millisecond),
 			worker.WithPollInterval(1*time.Second), // proves retry wakeup timer works without PollInterval
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
@@ -2934,12 +2811,7 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 			worker.WithRetryBaseDelay(10*time.Millisecond),
 			worker.WithMaxRetryDelay(20*time.Millisecond),
 			worker.WithPollInterval(50*time.Millisecond),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
@@ -2985,12 +2857,7 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 			worker.WithMaxRetryDelay(30*time.Minute),
 			worker.WithPollInterval(50*time.Millisecond),
 			worker.WithClock(clk.Now),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
@@ -3046,8 +2913,7 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 			worker.WithRetryBaseDelay(15*time.Millisecond),
 			worker.WithMaxRetryDelay(30*time.Millisecond),
 			worker.WithPollInterval(50*time.Millisecond),
-			worker.WithJobs(st.Jobs()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(st),
 			worker.WithResumeExtractor(ext),
 		)
 
@@ -3080,49 +2946,25 @@ func TestPool_UpstreamErrorClassification_FailFastAndBoundedRetries(t *testing.T
 
 // 26. Cancellation & Manual Edit / Delete Supersedence
 func TestPool_CancellationAndSupersedence(t *testing.T) {
-	t.Run("cancelled version and PDF job never execute and release quota", func(t *testing.T) {
+	t.Run("aborted pending branch job never executes and atomically releases quota", func(t *testing.T) {
 		env := setupTestWorkerEnv(t)
 		ctx := context.Background()
 
 		var genCalls atomic.Int32
-		var pdfCalls atomic.Int32
 		llmMock := &callbackLLM{fn: func(_ context.Context, _ core.GenerationRequest) (*core.GenerationResponse, error) {
 			genCalls.Add(1)
 			return &core.GenerationResponse{}, nil
 		}}
-		ext := &callbackResumeExtractor{fn: func(_ context.Context, _, _, _ string) (*core.JSONResume, error) {
-			pdfCalls.Add(1)
-			return &core.JSONResume{}, nil
-		}}
 
 		ver := submitPendingVersionWithQuota(ctx, t, env.store, env.defaultUser, env.branchID, "ver-cancel-1", core.PendingJobOptions{})
-		cancelledVer, cancelledJob, err := env.jobRepo.CancelBranchVersion(ctx, env.defaultUser, env.branchID, ver.ID, "cancelled by user")
-		if err != nil {
-			t.Fatalf("CancelBranchVersion failed: %v", err)
-		}
-		if cancelledJob != nil && cancelledJob.ReservationID != "" {
-			_ = env.quotaRepo.ReleaseQuota(ctx, cancelledJob.ReservationID, "cancelled by user", core.LLMTelemetry{})
-		}
-
-		pdfJob := submitPendingPDFWithQuota(ctx, t, env.store, nil, "user-cancel-pdf", "Sensitive raw resume text", "mock", "m", core.DefaultJobTTL, nil)
-		cancelledPDF, err := worker.CancelPDFJob(ctx, env.jobRepo, env.quotaRepo, "user-cancel-pdf", pdfJob.ID, 2*time.Second)
-		if err != nil {
-			t.Fatalf("CancelPDFJob failed: %v", err)
-		}
-		if cancelledPDF.Status != core.JobStatusCancelled || cancelledPDF.PDF == nil || cancelledPDF.PDF.RawText != "" {
-			t.Fatalf("expected cancelled PDF with pruned RawText, got status=%s pdf=%+v", cancelledPDF.Status, cancelledPDF.PDF)
+		if err := env.jobRepo.AbortBranchJobs(ctx, env.branchID, "cancelled before claim"); err != nil {
+			t.Fatalf("AbortBranchJobs failed: %v", err)
 		}
 
 		pool := worker.New(
 			worker.WithConcurrency(2),
 			worker.WithPollInterval(20*time.Millisecond),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
-			worker.WithResumeExtractor(ext),
+			worker.WithStore(env.store),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
@@ -3131,15 +2973,16 @@ func TestPool_CancellationAndSupersedence(t *testing.T) {
 		time.Sleep(60 * time.Millisecond)
 		pool.Stop()
 
-		if genCalls.Load() != 0 || pdfCalls.Load() != 0 {
-			t.Fatalf("cancelled jobs should never execute, got gen=%d pdf=%d", genCalls.Load(), pdfCalls.Load())
+		if genCalls.Load() != 0 {
+			t.Fatalf("aborted job should never execute, got gen=%d", genCalls.Load())
 		}
-		verJob := jobForVersion(ctx, t, env.jobRepo, env.defaultUser, cancelledVer)
+		reloadedVer, err := env.branchRepo.Version(ctx, env.branchID, ver.ID)
+		if err != nil || reloadedVer.Status != core.VersionStatusCancelled {
+			t.Fatalf("expected version cancelled, got %+v err=%v", reloadedVer, err)
+		}
+		verJob := jobForVersion(ctx, t, env.jobRepo, env.defaultUser, reloadedVer)
 		if st := reservationStatus(ctx, t, env.store, env.defaultUser, verJob.ReservationID); st != core.ReservationStatusReleased {
-			t.Errorf("expected version quota released, got %s", st)
-		}
-		if st := reservationStatus(ctx, t, env.store, "user-cancel-pdf", pdfJob.ReservationID); st != core.ReservationStatusReleased {
-			t.Errorf("expected pdf quota released, got %s", st)
+			t.Errorf("expected version quota released atomically, got %s", st)
 		}
 	})
 
@@ -3164,12 +3007,7 @@ func TestPool_CancellationAndSupersedence(t *testing.T) {
 		pool := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(20*time.Millisecond),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
@@ -3235,12 +3073,9 @@ func TestPool_CancellationAndSupersedence(t *testing.T) {
 		}
 
 		deletingProfiles := &hookProfileReader{
-			inner: env.profileRepo,
+			Store: env.store,
 			onProfile: func() {
-				released, _ := env.jobRepo.AbortBranchJobs(ctx, env.branchID, "branch deleted")
-				for _, r := range released {
-					_ = env.quotaRepo.ReleaseQuota(ctx, r.ReservationID, r.Reason, core.LLMTelemetry{})
-				}
+				_ = env.jobRepo.AbortBranchJobs(ctx, env.branchID, "branch deleted")
 				_ = env.branchRepo.DeleteBranch(ctx, env.defaultUser, env.branchID)
 			},
 		}
@@ -3248,12 +3083,7 @@ func TestPool_CancellationAndSupersedence(t *testing.T) {
 		pool := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(50*time.Millisecond),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(deletingProfiles),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(deletingProfiles),
 			worker.WithGenerator(llmMock),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
@@ -3289,13 +3119,13 @@ func TestPool_CancellationAndSupersedence(t *testing.T) {
 }
 
 type hookProfileReader struct {
-	inner     worker.ProfileReader
+	worker.Store
 	onProfile func()
 	once      sync.Once
 }
 
 func (h *hookProfileReader) Profile(ctx context.Context, userID string) (*core.Profile, error) {
-	p, err := h.inner.Profile(ctx, userID)
+	p, err := h.Store.Profile(ctx, userID)
 	if h.onProfile != nil {
 		h.once.Do(h.onProfile)
 	}
@@ -3303,70 +3133,57 @@ func (h *hookProfileReader) Profile(ctx context.Context, userID string) (*core.P
 }
 
 func (h *hookProfileReader) Snapshot(ctx context.Context, userID string) (*core.MainProfileSnapshot, error) {
-	return h.inner.Snapshot(ctx, userID)
+	return h.Store.Snapshot(ctx, userID)
 }
 
 type failingPDFSubmitStore struct {
-	worker.JobStore
+	worker.Store
+	cancel    context.CancelFunc
 	submitErr error
 }
 
 func (f *failingPDFSubmitStore) SubmitPDFParse(_ context.Context, _ *core.Job, _ core.PendingJobOptions) error {
+	if f.cancel != nil {
+		f.cancel()
+	}
 	return f.submitErr
 }
 
-type cancelAfterReserveQuota struct {
-	inner  worker.PDFQuotaReserver
-	cancel context.CancelFunc
-}
-
-func (c *cancelAfterReserveQuota) ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error) {
-	rec, err := c.inner.ReserveQuota(ctx, userID, op, estimatedTokens, dailyLimit, monthlyLimit)
-	if c.cancel != nil {
-		c.cancel()
-	}
-	return rec, err
-}
-
-func (c *cancelAfterReserveQuota) ReleaseQuota(ctx context.Context, reservationID, reason string, telemetry core.LLMTelemetry) error {
-	return c.inner.ReleaseQuota(ctx, reservationID, reason, telemetry)
-}
-
-// 27. PDF Submission & Cancellation Helpers + Empty RawText Validation
-func TestPool_PDFSubmitAndCancelHelpers(t *testing.T) {
-	t.Run("SubmitPDFJob validates inputs and notifies worker", func(t *testing.T) {
+// 27. PDFCoordinator Sync & Async Helpers + Empty RawText Validation
+func TestPool_PDFCoordinator(t *testing.T) {
+	t.Run("SubmitAsync validates inputs and notifies worker", func(t *testing.T) {
 		st := memory.New()
 		ctx := context.Background()
 
-		if _, err := worker.SubmitPDFJob(ctx, st.Jobs(), worker.PDFJobSubmission{
+		var notified atomic.Int32
+		coord := worker.NewPDFCoordinator(st, nil, core.JobNotifierFunc(func() { notified.Add(1) }), worker.PDFCoordinatorConfig{
+			DailyLimit:   10,
+			MonthlyLimit: 50000,
+		})
+
+		if _, err := coord.SubmitAsync(ctx, worker.PDFParseRequest{
 			UserID:  "",
 			RawText: "hello",
 		}); !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation for empty UserID, got %v", err)
 		}
 
-		if _, err := worker.SubmitPDFJob(ctx, st.Jobs(), worker.PDFJobSubmission{
+		if _, err := coord.SubmitAsync(ctx, worker.PDFParseRequest{
 			UserID:  "user-1",
 			RawText: "   ",
 		}); !errors.Is(err, core.ErrValidation) {
 			t.Errorf("expected ErrValidation for blank RawText, got %v", err)
 		}
 
-		var notified atomic.Int32
-		job, err := worker.SubmitPDFJob(ctx, st.Jobs(), worker.PDFJobSubmission{
-			UserID:       "user-1",
-			Filename:     "cv.pdf",
-			Provider:     "openai",
-			Model:        "gpt-4o",
-			RawText:      "Resume raw text",
-			DailyLimit:   10,
-			MonthlyLimit: 50000,
-		},
-			worker.WithPDFQuotas(st.Quotas()),
-			worker.WithPDFNotifier(core.JobNotifierFunc(func() { notified.Add(1) })),
-		)
+		job, err := coord.SubmitAsync(ctx, worker.PDFParseRequest{
+			UserID:   "user-1",
+			Filename: "cv.pdf",
+			Provider: "openai",
+			Model:    "gpt-4o",
+			RawText:  "Resume raw text",
+		})
 		if err != nil {
-			t.Fatalf("SubmitPDFJob failed: %v", err)
+			t.Fatalf("SubmitAsync failed: %v", err)
 		}
 		if notified.Load() != 1 {
 			t.Errorf("expected Notifier called once, got %d", notified.Load())
@@ -3376,28 +3193,25 @@ func TestPool_PDFSubmitAndCancelHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("SubmitPDFJob releases quota via detached cleanupCtx when caller context is cancelled", func(t *testing.T) {
+	t.Run("SubmitAsync failure leaves zero leaked quota when caller context is cancelled", func(t *testing.T) {
 		st := memory.New()
 		callCtx, cancel := context.WithCancel(context.Background())
 
 		failStore := &failingPDFSubmitStore{
-			JobStore:  st.Jobs(),
+			Store:     st,
+			cancel:    cancel,
 			submitErr: core.ErrPendingLimitExceeded,
 		}
-		quotas := &cancelAfterReserveQuota{
-			inner:  st.Quotas(),
-			cancel: cancel,
-		}
+		coord := worker.NewPDFCoordinator(failStore, nil, nil, worker.PDFCoordinatorConfig{
+			DailyLimit:     10,
+			MonthlyLimit:   50000,
+			CleanupTimeout: 2 * time.Second,
+		})
 
-		_, err := worker.SubmitPDFJob(callCtx, failStore, worker.PDFJobSubmission{
-			UserID:       "user-detached",
-			RawText:      "Some resume text",
-			DailyLimit:   10,
-			MonthlyLimit: 50000,
-		},
-			worker.WithPDFQuotas(quotas),
-			worker.WithPDFCleanupTimeout(2*time.Second),
-		)
+		_, err := coord.SubmitAsync(callCtx, worker.PDFParseRequest{
+			UserID:  "user-detached",
+			RawText: "Some resume text",
+		})
 		if !errors.Is(err, core.ErrPendingLimitExceeded) {
 			t.Fatalf("expected ErrPendingLimitExceeded, got %v", err)
 		}
@@ -3407,7 +3221,50 @@ func TestPool_PDFSubmitAndCancelHelpers(t *testing.T) {
 			t.Fatalf("Quota failed: %v", err)
 		}
 		if quota.DailyRequestsUsed != 0 || quota.MonthlyTokensUsed != 0 {
-			t.Errorf("expected quota fully released despite cancelled ctx, got daily=%d monthly=%d", quota.DailyRequestsUsed, quota.MonthlyTokensUsed)
+			t.Errorf("expected zero quota usage on atomic rollback, got daily=%d monthly=%d", quota.DailyRequestsUsed, quota.MonthlyTokensUsed)
+		}
+	})
+
+	t.Run("ParseSync commits tokens on success and releases sanitized quota on empty or error", func(t *testing.T) {
+		st := memory.New()
+		ctx := context.Background()
+
+		extOK := &tokenReportingExtractor{
+			res:   &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Grace Hopper"}},
+			usage: core.TokenUsage{PromptTokens: 200, CompletionTokens: 50},
+		}
+		coordOK := worker.NewPDFCoordinator(st, extOK, nil, worker.PDFCoordinatorConfig{
+			DailyLimit:   10,
+			MonthlyLimit: 50000,
+		})
+		parsed, err := coordOK.ParseSync(ctx, worker.PDFParseRequest{
+			UserID:   "user-pdf-sync-ok",
+			Provider: "openai",
+			Model:    "gpt-4o",
+			RawText:  "Grace Hopper resume text",
+		})
+		if err != nil || parsed == nil || parsed.Basics.Name != "Grace Hopper" {
+			t.Fatalf("ParseSync success mismatch: parsed=%+v err=%v", parsed, err)
+		}
+		qOK, err := st.Quota(ctx, "user-pdf-sync-ok")
+		if err != nil || qOK.DailyRequestsUsed != 1 || qOK.MonthlyTokensUsed != 250 {
+			t.Fatalf("expected daily=1 monthly=250, got %+v err=%v", qOK, err)
+		}
+
+		// Empty (nil, nil) extraction returns ErrEmptyPDFExtraction and releases quota.
+		coordEmpty := worker.NewPDFCoordinator(st, &tokenReportingExtractor{}, nil, worker.PDFCoordinatorConfig{
+			DailyLimit:   10,
+			MonthlyLimit: 50000,
+		})
+		if _, err := coordEmpty.ParseSync(ctx, worker.PDFParseRequest{
+			UserID:  "user-pdf-sync-empty",
+			RawText: "Resume text",
+		}); !errors.Is(err, worker.ErrEmptyPDFExtraction) {
+			t.Fatalf("expected ErrEmptyPDFExtraction, got %v", err)
+		}
+		records, err := st.ListUsageRecords(ctx, "user-pdf-sync-empty", 10)
+		if err != nil || len(records) != 1 || records[0].Status != core.ReservationStatusReleased {
+			t.Fatalf("expected released usage record on empty extraction, got %+v err=%v", records, err)
 		}
 	})
 
@@ -3443,8 +3300,7 @@ func TestPool_PDFSubmitAndCancelHelpers(t *testing.T) {
 		pool := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(20*time.Millisecond),
-			worker.WithJobs(st.Jobs()),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(st),
 			worker.WithResumeExtractor(&mockResumeExtractor{}),
 		)
 		pool.Start(ctx)
@@ -3486,12 +3342,7 @@ func TestPool_StopWithContext_TimeoutCancelsInFlightAndRefundsQuota(t *testing.T
 		worker.WithConcurrency(1),
 		worker.WithPollInterval(50*time.Millisecond),
 		worker.WithCleanupTimeout(2*time.Second),
-		worker.WithJobs(env.jobRepo),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithGenerator(llmMock),
 		worker.WithValidator(env.validator),
 		worker.WithRenderer(env.renderer),
@@ -3596,12 +3447,7 @@ func TestPool_ConcurrentRace_AtMostOnceAndBranchExclusivity(t *testing.T) {
 		worker.WithMaxConcurrentPerTenant(4),
 		worker.WithPollInterval(15*time.Millisecond),
 		worker.WithSweepInterval(25*time.Millisecond),
-		worker.WithBranches(env.branchRepo),
-		worker.WithProfiles(env.profileRepo),
-		worker.WithPresets(env.presetRepo),
-		worker.WithTemplates(env.templateRepo),
-		worker.WithJobs(env.jobRepo),
-		worker.WithQuotas(env.quotaRepo),
+		worker.WithStore(env.store),
 		worker.WithResumeExtractor(ext),
 		worker.WithGenerator(llmMock),
 		worker.WithValidator(env.validator),
@@ -3722,7 +3568,7 @@ func (r *failingRenderer) Render(_ context.Context, _ *core.TemplateSet, _ *core
 }
 
 type completeVersionFailStore struct {
-	worker.JobStore
+	worker.Store
 	completeErr error
 }
 
@@ -3731,7 +3577,7 @@ func (s *completeVersionFailStore) CompleteBranchTailor(_ context.Context, _, _ 
 }
 
 type completePDFFailStore struct {
-	worker.JobStore
+	worker.Store
 	completeErr error
 }
 
@@ -3750,7 +3596,7 @@ func (e *tokenReportingExtractor) ExtractResume(_ context.Context, _, _, _ strin
 }
 
 type spyQuotaReserver struct {
-	inner         worker.PDFQuotaReserver
+	worker.Store
 	reserveCalls  atomic.Int32
 	releaseMu     sync.Mutex
 	releaseReason string
@@ -3758,14 +3604,14 @@ type spyQuotaReserver struct {
 
 func (s *spyQuotaReserver) ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error) {
 	s.reserveCalls.Add(1)
-	return s.inner.ReserveQuota(ctx, userID, op, estimatedTokens, dailyLimit, monthlyLimit)
+	return s.Store.ReserveQuota(ctx, userID, op, estimatedTokens, dailyLimit, monthlyLimit)
 }
 
 func (s *spyQuotaReserver) ReleaseQuota(ctx context.Context, reservationID, reason string, telemetry core.LLMTelemetry) error {
 	s.releaseMu.Lock()
 	s.releaseReason = reason
 	s.releaseMu.Unlock()
-	return s.inner.ReleaseQuota(ctx, reservationID, reason, telemetry)
+	return s.Store.ReleaseQuota(ctx, reservationID, reason, telemetry)
 }
 
 func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.T) {
@@ -3779,12 +3625,7 @@ func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.
 		pool1 := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(20*time.Millisecond),
-			worker.WithJobs(env1.jobRepo),
-			worker.WithBranches(env1.branchRepo),
-			worker.WithProfiles(env1.profileRepo),
-			worker.WithPresets(env1.presetRepo),
-			worker.WithTemplates(env1.templateRepo),
-			worker.WithQuotas(env1.quotaRepo),
+			worker.WithStore(env1.store),
 			worker.WithGenerator(env1.llm),
 			worker.WithValidator(&redactFailingValidator{err: errors.New(secretErr)}),
 			worker.WithRenderer(env1.renderer),
@@ -3805,12 +3646,7 @@ func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.
 		pool2 := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(20*time.Millisecond),
-			worker.WithJobs(env2.jobRepo),
-			worker.WithBranches(env2.branchRepo),
-			worker.WithProfiles(env2.profileRepo),
-			worker.WithPresets(env2.presetRepo),
-			worker.WithTemplates(env2.templateRepo),
-			worker.WithQuotas(env2.quotaRepo),
+			worker.WithStore(env2.store),
 			worker.WithGenerator(env2.llm),
 			worker.WithValidator(env2.validator),
 			worker.WithRenderer(&failingRenderer{err: errors.New(secretErr)}),
@@ -3831,12 +3667,7 @@ func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.
 		pool3 := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(20*time.Millisecond),
-			worker.WithJobs(&completeVersionFailStore{JobStore: env3.jobRepo, completeErr: errors.New(secretErr)}),
-			worker.WithBranches(env3.branchRepo),
-			worker.WithProfiles(env3.profileRepo),
-			worker.WithPresets(env3.presetRepo),
-			worker.WithTemplates(env3.templateRepo),
-			worker.WithQuotas(env3.quotaRepo),
+			worker.WithStore(&completeVersionFailStore{Store: env3.store, completeErr: errors.New(secretErr)}),
 			worker.WithGenerator(env3.llm),
 			worker.WithValidator(env3.validator),
 			worker.WithRenderer(env3.renderer),
@@ -3858,8 +3689,7 @@ func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.
 		pool1 := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(20*time.Millisecond),
-			worker.WithJobs(st1.Jobs()),
-			worker.WithQuotas(st1.Quotas()),
+			worker.WithStore(st1),
 			worker.WithResumeExtractor(&tokenReportingExtractor{
 				err: fmt.Errorf("%w: parse table overflow at internal offset 0xdeadbeef", core.ErrValidation),
 			}),
@@ -3877,14 +3707,13 @@ func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.
 		// Now test extraction succeeding + CompletePDFParse failing -> commits quota (never refunds) & redacts store error.
 		st2 := memory.New()
 		wrappedPDF := &completePDFFailStore{
-			JobStore:    st2.Jobs(),
+			Store:       st2,
 			completeErr: errors.New("pq: deadlock detected on relation pdf_jobs_prod"),
 		}
 		pool2 := worker.New(
 			worker.WithConcurrency(1),
 			worker.WithPollInterval(20*time.Millisecond),
-			worker.WithJobs(wrappedPDF),
-			worker.WithQuotas(st2.Quotas()),
+			worker.WithStore(wrappedPDF),
 			worker.WithResumeExtractor(&tokenReportingExtractor{
 				res:   &core.JSONResume{Basics: core.JSONResumeBasics{Name: "Ada"}},
 				usage: core.TokenUsage{TotalTokens: 777},
@@ -3912,23 +3741,22 @@ func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.
 		}
 	})
 
-	t.Run("sanitizes SubmitPDFJob ReleaseQuota reason on store failure", func(t *testing.T) {
+	t.Run("PDFCoordinator.ParseSync sanitizes ReleaseQuota reason on extractor failure", func(t *testing.T) {
 		st := memory.New()
-		spyQuota := &spyQuotaReserver{inner: st.Quotas()}
-		failStore := &failingPDFSubmitStore{
-			JobStore:  st.Jobs(),
-			submitErr: errors.New("postgres://admin:pass@db.internal:5432/resumeee connection refused"),
+		spyQuota := &spyQuotaReserver{Store: st}
+		ext := &tokenReportingExtractor{
+			err: errors.New("postgres://admin:pass@db.internal:5432/resumeee connection refused"),
 		}
-		_, err := worker.SubmitPDFJob(ctx, failStore, worker.PDFJobSubmission{
-			UserID:       "user-sanitize-reason",
-			RawText:      "Resume raw text",
+		coord := worker.NewPDFCoordinator(spyQuota, ext, nil, worker.PDFCoordinatorConfig{
 			DailyLimit:   10,
 			MonthlyLimit: 50000,
-		},
-			worker.WithPDFQuotas(spyQuota),
-		)
+		})
+		_, err := coord.ParseSync(ctx, worker.PDFParseRequest{
+			UserID:  "user-sanitize-reason",
+			RawText: "Resume raw text",
+		})
 		if err == nil {
-			t.Fatal("expected SubmitPDFJob error")
+			t.Fatal("expected ParseSync error")
 		}
 		spyQuota.releaseMu.Lock()
 		reason := spyQuota.releaseReason
@@ -3940,7 +3768,7 @@ func TestPool_RedactsInternalErrorsAndPersistsPDFQuotaBeforeComplete(t *testing.
 }
 
 type leaseErrJobStore struct {
-	worker.JobStore
+	worker.Store
 	renewErr      error
 	requeueErr    error
 	failErr       error
@@ -3960,7 +3788,7 @@ func (s *leaseErrJobStore) RenewLease(ctx context.Context, jobID, claimedBy stri
 	if s.renewErr != nil {
 		return s.renewErr
 	}
-	return s.JobStore.RenewLease(ctx, jobID, claimedBy, leaseExpiresAt)
+	return s.Store.RenewLease(ctx, jobID, claimedBy, leaseExpiresAt)
 }
 
 func (s *leaseErrJobStore) RequeueForRetry(ctx context.Context, jobID, claimedBy string, nextRetryAt time.Time, errMsg string) error {
@@ -3972,15 +3800,15 @@ func (s *leaseErrJobStore) RequeueForRetry(ctx context.Context, jobID, claimedBy
 	if s.requeueErr != nil {
 		return s.requeueErr
 	}
-	return s.JobStore.RequeueForRetry(ctx, jobID, claimedBy, nextRetryAt, errMsg)
+	return s.Store.RequeueForRetry(ctx, jobID, claimedBy, nextRetryAt, errMsg)
 }
 
-func (s *leaseErrJobStore) FailClaimed(ctx context.Context, jobID, claimedBy, errMsg string) error {
+func (s *leaseErrJobStore) FailClaimed(ctx context.Context, req core.FailClaimedRequest) error {
 	s.failCalls.Add(1)
 	if s.failErr != nil {
 		return s.failErr
 	}
-	return s.JobStore.FailClaimed(ctx, jobID, claimedBy, errMsg)
+	return s.Store.FailClaimed(ctx, req)
 }
 
 func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
@@ -3989,7 +3817,7 @@ func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
 	t.Run("heartbeat ErrLeaseExpired cancels version attempt context and suppresses stale fail refund", func(t *testing.T) {
 		env := setupTestWorkerEnv(t)
 		leaseStore := &leaseErrJobStore{
-			JobStore:      env.jobRepo,
+			Store:         env.store,
 			renewErr:      core.ErrLeaseExpired,
 			failErr:       core.ErrLeaseExpired,
 			renewNotified: make(chan struct{}),
@@ -4000,12 +3828,7 @@ func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
 			worker.WithPollInterval(30*time.Millisecond),
 			worker.WithLeaseDuration(60*time.Millisecond),
 			worker.WithLeaseRenewInterval(15*time.Millisecond),
-			worker.WithJobs(leaseStore),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(leaseStore),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
 			worker.WithGenerator(&callbackLLM{
@@ -4038,7 +3861,7 @@ func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
 	t.Run("heartbeat ErrLeaseExpired cancels pdf attempt context", func(t *testing.T) {
 		st := memory.New()
 		leaseStore := &leaseErrJobStore{
-			JobStore:      st.Jobs(),
+			Store:         st,
 			renewErr:      core.ErrLeaseExpired,
 			failErr:       core.ErrLeaseExpired,
 			renewNotified: make(chan struct{}),
@@ -4049,8 +3872,7 @@ func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
 			worker.WithPollInterval(30*time.Millisecond),
 			worker.WithLeaseDuration(60*time.Millisecond),
 			worker.WithLeaseRenewInterval(15*time.Millisecond),
-			worker.WithJobs(leaseStore),
-			worker.WithQuotas(st.Quotas()),
+			worker.WithStore(leaseStore),
 			worker.WithResumeExtractor(&callbackResumeExtractor{
 				fn: func(c context.Context, _, _, _ string) (*core.JSONResume, error) {
 					<-c.Done()
@@ -4079,7 +3901,7 @@ func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
 	t.Run("RequeueForRetry returning ErrLeaseExpired skips failure and quota refund", func(t *testing.T) {
 		env := setupTestWorkerEnv(t)
 		verStore := &leaseErrJobStore{
-			JobStore:      env.jobRepo,
+			Store:         env.store,
 			requeueErr:    core.ErrLeaseExpired,
 			requeueCalled: make(chan struct{}),
 		}
@@ -4089,12 +3911,7 @@ func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
 			worker.WithPollInterval(30*time.Millisecond),
 			worker.WithMaxAttempts(3),
 			worker.WithRetryBaseDelay(20*time.Millisecond),
-			worker.WithJobs(verStore),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(verStore),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
 			worker.WithGenerator(&callbackLLM{
@@ -4127,7 +3944,7 @@ func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
 
 		pdfStore := memory.New()
 		wrappedPDF := &leaseErrJobStore{
-			JobStore:      pdfStore.Jobs(),
+			Store:         pdfStore,
 			requeueErr:    core.ErrLeaseExpired,
 			requeueCalled: make(chan struct{}),
 		}
@@ -4137,8 +3954,7 @@ func TestPool_ErrLeaseExpired_HeartbeatAndRequeueSkip(t *testing.T) {
 			worker.WithPollInterval(30*time.Millisecond),
 			worker.WithMaxAttempts(3),
 			worker.WithRetryBaseDelay(20*time.Millisecond),
-			worker.WithJobs(wrappedPDF),
-			worker.WithQuotas(pdfStore.Quotas()),
+			worker.WithStore(wrappedPDF),
 			worker.WithResumeExtractor(&callbackResumeExtractor{
 				fn: func(_ context.Context, _, _, _ string) (*core.JSONResume, error) {
 					pdfCalls.Add(1)
@@ -4219,12 +4035,7 @@ func TestPool_SharedStoreMultiPoolConcurrency(t *testing.T) {
 			worker.WithMaxConcurrentPerTenant(1),
 			worker.WithPollInterval(15*time.Millisecond),
 			worker.WithWorkerID("pool-shared-a"),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
 			worker.WithGenerator(gen),
@@ -4235,12 +4046,7 @@ func TestPool_SharedStoreMultiPoolConcurrency(t *testing.T) {
 			worker.WithMaxConcurrentPerTenant(1),
 			worker.WithPollInterval(15*time.Millisecond),
 			worker.WithWorkerID("pool-shared-b"),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
 			worker.WithGenerator(gen),
@@ -4305,12 +4111,7 @@ func TestPool_SharedStoreMultiPoolConcurrency(t *testing.T) {
 			worker.WithMaxConcurrentPerTenant(1),
 			worker.WithPollInterval(15*time.Millisecond),
 			worker.WithClock(clk.Now),
-			worker.WithJobs(env.jobRepo),
-			worker.WithBranches(env.branchRepo),
-			worker.WithProfiles(env.profileRepo),
-			worker.WithPresets(env.presetRepo),
-			worker.WithTemplates(env.templateRepo),
-			worker.WithQuotas(env.quotaRepo),
+			worker.WithStore(env.store),
 			worker.WithValidator(env.validator),
 			worker.WithRenderer(env.renderer),
 			worker.WithGenerator(env.llm),
@@ -4351,38 +4152,42 @@ func TestPool_PDFSubmitMaxRawTextBytes(t *testing.T) {
 
 	t.Run("rejects payload above default DefaultMaxPDFRawTextBytes before reserving quota", func(t *testing.T) {
 		st := memory.New()
-		spyQuota := &spyQuotaReserver{inner: st.Quotas()}
+		spyQuota := &spyQuotaReserver{Store: st}
 		oversized := strings.Repeat("a", core.DefaultMaxPDFRawTextBytes+1)
-
-		_, err := worker.SubmitPDFJob(ctx, st.Jobs(), worker.PDFJobSubmission{
-			UserID:       "user-raw-default-max",
-			RawText:      oversized,
+		coord := worker.NewPDFCoordinator(spyQuota, nil, nil, worker.PDFCoordinatorConfig{
 			DailyLimit:   10,
 			MonthlyLimit: 100000,
-		},
-			worker.WithPDFQuotas(spyQuota),
-		)
+		})
+
+		_, err := coord.SubmitAsync(ctx, worker.PDFParseRequest{
+			UserID:  "user-raw-default-max",
+			RawText: oversized,
+		})
 		if !errors.Is(err, core.ErrValidation) {
 			t.Fatalf("expected ErrValidation for oversized RawText, got %v", err)
 		}
 		if spyQuota.reserveCalls.Load() != 0 {
 			t.Errorf("expected ReserveQuota not called on RawText validation failure, got %d", spyQuota.reserveCalls.Load())
 		}
+		records, err := st.ListUsageRecords(ctx, "user-raw-default-max", 10)
+		if err != nil || len(records) != 0 {
+			t.Errorf("expected zero persisted usage records on validation failure, got records=%+v err=%v", records, err)
+		}
 	})
 
 	t.Run("enforces custom MaxRawTextBytes limit and allows exact cap", func(t *testing.T) {
 		st := memory.New()
-		spyQuota := &spyQuotaReserver{inner: st.Quotas()}
+		spyQuota := &spyQuotaReserver{Store: st}
+		coord := worker.NewPDFCoordinator(spyQuota, nil, nil, worker.PDFCoordinatorConfig{
+			DailyLimit:      10,
+			MonthlyLimit:    100000,
+			MaxRawTextBytes: 32,
+		})
 
-		_, err := worker.SubmitPDFJob(ctx, st.Jobs(), worker.PDFJobSubmission{
-			UserID:       "user-raw-custom-max",
-			RawText:      strings.Repeat("x", 33),
-			DailyLimit:   10,
-			MonthlyLimit: 100000,
-		},
-			worker.WithPDFQuotas(spyQuota),
-			worker.WithPDFMaxRawTextBytes(32),
-		)
+		_, err := coord.SubmitAsync(ctx, worker.PDFParseRequest{
+			UserID:  "user-raw-custom-max",
+			RawText: strings.Repeat("x", 33),
+		})
 		if !errors.Is(err, core.ErrValidation) {
 			t.Fatalf("expected ErrValidation for RawText > custom MaxRawTextBytes, got %v", err)
 		}
@@ -4390,15 +4195,10 @@ func TestPool_PDFSubmitMaxRawTextBytes(t *testing.T) {
 			t.Errorf("expected ReserveQuota skipped on oversized payload, got %d calls", spyQuota.reserveCalls.Load())
 		}
 
-		job, err := worker.SubmitPDFJob(ctx, st.Jobs(), worker.PDFJobSubmission{
-			UserID:       "user-raw-custom-max",
-			RawText:      strings.Repeat("x", 32),
-			DailyLimit:   10,
-			MonthlyLimit: 100000,
-		},
-			worker.WithPDFQuotas(spyQuota),
-			worker.WithPDFMaxRawTextBytes(32),
-		)
+		job, err := coord.SubmitAsync(ctx, worker.PDFParseRequest{
+			UserID:  "user-raw-custom-max",
+			RawText: strings.Repeat("x", 32),
+		})
 		if err != nil {
 			t.Fatalf("expected exact MaxRawTextBytes payload accepted, got %v", err)
 		}

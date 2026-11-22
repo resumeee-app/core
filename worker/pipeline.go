@@ -54,7 +54,7 @@ func (p *Pool) safeProcessBranchJob(job *core.Job) {
 
 // processClaimedBranchJob coordinates end-to-end execution of a claimed branch tailoring job.
 func (p *Pool) processClaimedBranchJob(job *core.Job) {
-	if p.jobs == nil || job == nil {
+	if p.store == nil || job == nil {
 		return
 	}
 
@@ -165,7 +165,7 @@ func (p *Pool) verifyVersionRunnableBeforeLLM(
 		return false
 	}
 
-	latestVer, err := p.branches.Version(ctx, inputs.branch.ID, ver.ID)
+	latestVer, err := p.store.Version(ctx, inputs.branch.ID, ver.ID)
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to verify version state before llm",
@@ -182,7 +182,7 @@ func (p *Pool) verifyVersionRunnableBeforeLLM(
 		return false
 	}
 
-	latestJob, jErr := p.jobs.Job(ctx, inputs.userID, job.ID)
+	latestJob, jErr := p.store.Job(ctx, inputs.userID, job.ID)
 	if jErr == nil && latestJob != nil {
 		if latestJob.Status != core.JobStatusProcessing || latestJob.ClaimedBy != claimedBy {
 			return false
@@ -208,11 +208,11 @@ func (p *Pool) verifyVersionRunnableBeforeLLM(
 
 // loadGenerationInputs resolves branch, version, profile, snapshot, optional preset/prior version, and template entities.
 func (p *Pool) loadGenerationInputs(ctx context.Context, job *core.Job) (*generationInputs, *core.BranchVersion, error) {
-	if p.branches == nil {
-		return nil, nil, errors.New("no branch reader configured")
+	if p.store == nil {
+		return nil, nil, errors.New("no store configured")
 	}
 
-	br, err := p.branches.Branch(ctx, job.UserID, job.Tailor.BranchID)
+	br, err := p.store.Branch(ctx, job.UserID, job.Tailor.BranchID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load branch: %w", err)
 	}
@@ -221,26 +221,23 @@ func (p *Pool) loadGenerationInputs(ctx context.Context, job *core.Job) (*genera
 		userID = br.UserID
 	}
 
-	ver, err := p.branches.Version(ctx, br.ID, job.Tailor.VersionID)
+	ver, err := p.store.Version(ctx, br.ID, job.Tailor.VersionID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load version: %w", err)
 	}
 
-	if p.profiles == nil {
-		return nil, nil, errors.New("no profile reader configured")
-	}
-	prof, err := p.profiles.Profile(ctx, userID)
+	prof, err := p.store.Profile(ctx, userID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load profile: %w", err)
 	}
-	snapshot, err := p.profiles.Snapshot(ctx, userID)
+	snapshot, err := p.store.Snapshot(ctx, userID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load profile snapshot: %w", err)
 	}
 
 	var preset *core.Preset
-	if br.PresetID != nil && *br.PresetID != "" && p.presets != nil {
-		if pr, prErr := p.presets.Preset(ctx, userID, *br.PresetID); prErr == nil {
+	if br.PresetID != nil && *br.PresetID != "" {
+		if pr, prErr := p.store.Preset(ctx, userID, *br.PresetID); prErr == nil {
 			preset = pr
 		}
 	}
@@ -248,16 +245,13 @@ func (p *Pool) loadGenerationInputs(ctx context.Context, job *core.Job) (*genera
 	var priorContent *core.TailoredContent
 	var activeVersionNumber int
 	if br.ActiveVersionID != nil && *br.ActiveVersionID != "" {
-		if activeVer, avErr := p.branches.Version(ctx, br.ID, *br.ActiveVersionID); avErr == nil && activeVer != nil {
+		if activeVer, avErr := p.store.Version(ctx, br.ID, *br.ActiveVersionID); avErr == nil && activeVer != nil {
 			priorContent = activeVer.TailoredContent
 			activeVersionNumber = activeVer.VersionNumber
 		}
 	}
 
-	if p.templates == nil {
-		return nil, nil, errors.New("no template reader configured")
-	}
-	tmpl, err := p.templates.Template(ctx, userID, br.TemplateSetID)
+	tmpl, err := p.store.Template(ctx, userID, br.TemplateSetID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load template set: %w", err)
 	}
@@ -401,7 +395,7 @@ func (p *Pool) persistCompletedVersion(
 	telemetry core.LLMTelemetry,
 ) {
 	desc := p.jobDescriptor(job, claimedBy)
-	ver, err := p.branches.Version(ctx, inputs.branch.ID, claimedVer.ID)
+	ver, err := p.store.Version(ctx, inputs.branch.ID, claimedVer.ID)
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to reload claimed version before completion",
@@ -435,7 +429,7 @@ func (p *Pool) persistCompletedVersion(
 	ver.MarkdownOutput = rendered.Markdown
 	ver.PlainTextOutput = rendered.PlainText
 
-	if err := p.jobs.CompleteBranchTailor(ctx, job.ID, claimedBy, ver); err != nil {
+	if err := p.store.CompleteBranchTailor(ctx, job.ID, claimedBy, ver); err != nil {
 		if p.logger != nil {
 			p.logger.Error("failed to persist completed version",
 				"job_id", job.ID,

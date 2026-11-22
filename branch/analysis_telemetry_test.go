@@ -25,12 +25,12 @@ func (s *failingATSScoreStore) SetVersionATSScore(_ context.Context, _ string, _
 }
 
 type failingSubmitBranchTailorStore struct {
-	branch.JobStore
+	branch.Store
 	submitErr error
 }
 
-func (s *failingSubmitBranchTailorStore) SubmitBranchTailor(_ context.Context, _ *core.Job, _ *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
-	return nil, s.submitErr
+func (s *failingSubmitBranchTailorStore) SubmitBranchTailor(_ context.Context, _ *core.Job, _ *core.BranchVersion, _ core.PendingJobOptions) error {
+	return s.submitErr
 }
 
 func assertTelemetryEqual(t *testing.T, got, want core.LLMTelemetry) {
@@ -257,9 +257,7 @@ func TestService_AnalyzeGaps_Telemetry(t *testing.T) {
 			}
 
 			svc := branch.New(
-				branch.WithBranches(env.branchRepo),
-				branch.WithProfiles(env.profileRepo),
-				branch.WithQuotas(spyQuota),
+				branch.WithStore(&quotaOverrideStore{Store: env.db, quotas: spyQuota}),
 				branch.WithGenerator(stubLLM),
 			)
 
@@ -494,10 +492,10 @@ func TestService_SimulateATS_Telemetry(t *testing.T) {
 			seedCompletedATSVersion(ctx, t, env, verID)
 
 			spyQuota := &spyQuotaRepo{}
-			branchStore := env.branchRepo
+			var storeOverride branch.Store = env.db
 			if tc.updateScoreErr != nil {
-				branchStore = &failingATSScoreStore{
-					Store:     env.branchRepo,
+				storeOverride = &failingATSScoreStore{
+					Store:     env.db,
 					updateErr: tc.updateScoreErr,
 				}
 			}
@@ -507,9 +505,7 @@ func TestService_SimulateATS_Telemetry(t *testing.T) {
 				atsErr:  tc.atsErr,
 			}
 			svc := branch.New(
-				branch.WithBranches(branchStore),
-				branch.WithProfiles(env.profileRepo),
-				branch.WithQuotas(spyQuota),
+				branch.WithStore(&quotaOverrideStore{Store: storeOverride, quotas: spyQuota}),
 				branch.WithGenerator(sim),
 			)
 
@@ -553,14 +549,14 @@ func TestService_SimulateATS_Telemetry(t *testing.T) {
 func TestService_GenerateVersion_PreLLMReleaseZeroTelemetry(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("SubmitBranchTailor failure passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
+	t.Run("SubmitBranchTailor failure does not invoke external ReserveQuota or ReleaseQuota", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
 		spyQuota := &spyQuotaRepo{}
 		svc := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithJobs(&failingSubmitBranchTailorStore{JobStore: env.jobRepo, submitErr: core.ErrPendingLimitExceeded}),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithQuotas(spyQuota),
+			branch.WithStore(&quotaOverrideStore{
+				Store:  &failingSubmitBranchTailorStore{Store: env.db, submitErr: core.ErrPendingLimitExceeded},
+				quotas: spyQuota,
+			}),
 		)
 
 		if _, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID); !errors.Is(err, core.ErrPendingLimitExceeded) {
@@ -569,40 +565,30 @@ func TestService_GenerateVersion_PreLLMReleaseZeroTelemetry(t *testing.T) {
 
 		spyQuota.mu.Lock()
 		defer spyQuota.mu.Unlock()
-		if len(spyQuota.releases) != 1 {
-			t.Fatalf("expected 1 release, got %d", len(spyQuota.releases))
-		}
-		if !spyQuota.releases[0].Telemetry.IsZero() {
-			t.Errorf("expected zero LLMTelemetry on pre-LLM release, got %+v", spyQuota.releases[0].Telemetry)
+		if len(spyQuota.reservations) != 0 || len(spyQuota.releases) != 0 {
+			t.Fatalf("expected atomic failure with 0 external reserve/release calls, got reservations=%d releases=%d", len(spyQuota.reservations), len(spyQuota.releases))
 		}
 	})
 
-	t.Run("CancelVersion passes zero LLMTelemetry to ReleaseQuota", func(t *testing.T) {
+	t.Run("DeleteBranch atomically releases pending job quota with zero LLMTelemetry", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
-		spyQuota := &spyQuotaRepo{}
-		svc := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithJobs(env.jobRepo),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithQuotas(spyQuota),
-		)
 
-		ver, err := svc.GenerateVersion(ctx, env.defaultUser, env.branchID)
+		ver, err := env.svc.GenerateVersion(ctx, env.defaultUser, env.branchID)
 		if err != nil {
 			t.Fatalf("GenerateVersion failed: %v", err)
 		}
-		if _, err := svc.CancelVersion(ctx, env.defaultUser, env.branchID, ver.ID); err != nil {
-			t.Fatalf("CancelVersion failed: %v", err)
+		if err := env.svc.DeleteBranch(ctx, env.defaultUser, env.branchID); err != nil {
+			t.Fatalf("DeleteBranch failed: %v", err)
 		}
 
-		spyQuota.mu.Lock()
-		defer spyQuota.mu.Unlock()
-		if len(spyQuota.releases) != 1 {
-			t.Fatalf("expected 1 release on CancelVersion, got %d", len(spyQuota.releases))
+		records, err := env.db.ListUsageRecords(ctx, env.defaultUser, 10)
+		if err != nil {
+			t.Fatalf("ListUsageRecords failed: %v", err)
 		}
-		if !spyQuota.releases[0].Telemetry.IsZero() {
-			t.Errorf("expected zero LLMTelemetry on CancelVersion release, got %+v", spyQuota.releases[0].Telemetry)
+		if len(records) != 1 {
+			t.Fatalf("expected 1 usage record for cancelled pending job ver=%s, got %d", ver.ID, len(records))
 		}
+		assertUsageRecordTelemetry(t, records[0], core.ReservationStatusReleased, core.LLMTelemetry{}, "branch deleted")
 	})
 }
 
@@ -696,10 +682,7 @@ func runConcurrentTelemetryRace(
 	profileStore := st.Profiles()
 	quotaStore := st.Quotas()
 	svc := branch.New(
-		branch.WithBranches(branchStore),
-		branch.WithJobs(st.Jobs()),
-		branch.WithProfiles(profileStore),
-		branch.WithQuotas(quotaStore),
+		branch.WithStore(st),
 		branch.WithGenerator(&concurrentTelemetryGenerator{}),
 		branch.WithDailyRequestLimit(100),
 		branch.WithMonthlyTokenLimit(1000000),
@@ -907,7 +890,7 @@ func runConcurrentTelemetryRace(
 }
 
 type strictContextQuotaManager struct {
-	inner branch.QuotaManager
+	inner core.QuotaManager
 }
 
 func (m *strictContextQuotaManager) ReserveQuota(ctx context.Context, userID string, op core.LLMOperationType, estimatedTokens, dailyLimit, monthlyLimit int) (*core.LLMUsageRecord, error) {
@@ -970,14 +953,14 @@ func (s *cancelDuringATSStub) SimulateATS(_ context.Context, _ core.ATSSimulatio
 }
 
 type cancelOnSubmitBranchTailorStore struct {
-	branch.JobStore
+	branch.Store
 	cancel context.CancelFunc
 	err    error
 }
 
-func (s *cancelOnSubmitBranchTailorStore) SubmitBranchTailor(_ context.Context, _ *core.Job, _ *core.BranchVersion, _ core.PendingJobOptions) ([]core.ReleasedReservation, error) {
+func (s *cancelOnSubmitBranchTailorStore) SubmitBranchTailor(_ context.Context, _ *core.Job, _ *core.BranchVersion, _ core.PendingJobOptions) error {
 	s.cancel()
-	return nil, s.err
+	return s.err
 }
 
 func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
@@ -992,9 +975,7 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 			err:    core.AttachLLMTelemetry(context.Canceled, core.LLMTelemetry{Provider: "openai", Model: "gpt-4o"}),
 		}
 		svc := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithQuotas(strictQuotas),
+			branch.WithStore(&quotaOverrideStore{Store: env.db, quotas: strictQuotas}),
 			branch.WithGenerator(stub),
 		)
 
@@ -1027,9 +1008,7 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 			},
 		}
 		svc := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithQuotas(strictQuotas),
+			branch.WithStore(&quotaOverrideStore{Store: env.db, quotas: strictQuotas}),
 			branch.WithGenerator(stub),
 		)
 
@@ -1070,9 +1049,7 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 			}
 
 			svc := branch.New(
-				branch.WithBranches(env.branchRepo),
-				branch.WithProfiles(env.profileRepo),
-				branch.WithQuotas(strictQuotas),
+				branch.WithStore(&quotaOverrideStore{Store: env.db, quotas: strictQuotas}),
 				branch.WithGenerator(stub),
 			)
 
@@ -1098,30 +1075,25 @@ func TestService_CanceledCallerContextStillSettlesQuota(t *testing.T) {
 		}
 	})
 
-	t.Run("GenerateVersion SubmitBranchTailor failure releases quota under canceled ctx", func(t *testing.T) {
+	t.Run("GenerateVersion SubmitBranchTailor failure leaves zero quota reservations under canceled ctx", func(t *testing.T) {
 		env := setupTestBranchEnv(t, 10)
-		quotaStore := memory.New().Quotas()
-		strictQuotas := &strictContextQuotaManager{inner: quotaStore}
 		reqCtx, cancel := context.WithCancel(context.Background())
 
 		svc := branch.New(
-			branch.WithBranches(env.branchRepo),
-			branch.WithJobs(&cancelOnSubmitBranchTailorStore{
-				JobStore: env.jobRepo,
-				cancel:   cancel,
-				err:      errors.New("db connection dropped"),
+			branch.WithStore(&cancelOnSubmitBranchTailorStore{
+				Store:  env.db,
+				cancel: cancel,
+				err:    errors.New("db connection dropped"),
 			}),
-			branch.WithProfiles(env.profileRepo),
-			branch.WithQuotas(strictQuotas),
 		)
 
 		if _, err := svc.GenerateVersion(reqCtx, env.defaultUser, env.branchID); err == nil {
 			t.Fatal("expected error from SubmitBranchTailor")
 		}
 
-		records, err := quotaStore.ListUsageRecords(context.Background(), env.defaultUser, 10)
-		if err != nil || len(records) != 1 || records[0].Status != core.ReservationStatusReleased {
-			t.Fatalf("expected 1 released record, got records=%+v err=%v", records, err)
+		records, err := env.db.ListUsageRecords(context.Background(), env.defaultUser, 10)
+		if err != nil || len(records) != 0 {
+			t.Fatalf("expected 0 records on failed SubmitBranchTailor, got records=%+v err=%v", records, err)
 		}
 	})
 }

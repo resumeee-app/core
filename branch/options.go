@@ -10,45 +10,10 @@ import (
 // Option configures optional dependencies and runtime bounds on a branch Service.
 type Option func(*Service)
 
-// WithBranches sets the branch persistence store on Service.
-func WithBranches(branches Store) Option {
+// WithStore sets the cohesive persistence and quota Store on Service.
+func WithStore(store Store) Option {
 	return func(s *Service) {
-		s.branches = branches
-	}
-}
-
-// WithJobs sets the job submission and lifecycle store on Service.
-func WithJobs(jobs JobStore) Option {
-	return func(s *Service) {
-		s.jobs = jobs
-	}
-}
-
-// WithProfiles sets the candidate main-profile reader on Service.
-func WithProfiles(profiles ProfileReader) Option {
-	return func(s *Service) {
-		s.profiles = profiles
-	}
-}
-
-// WithPresets sets the tailoring preset reader on Service.
-func WithPresets(presets PresetReader) Option {
-	return func(s *Service) {
-		s.presets = presets
-	}
-}
-
-// WithTemplates sets the template set reader on Service.
-func WithTemplates(templates TemplateReader) Option {
-	return func(s *Service) {
-		s.templates = templates
-	}
-}
-
-// WithQuotas sets the tenant LLM quota manager on Service.
-func WithQuotas(quotas QuotaManager) Option {
-	return func(s *Service) {
-		s.quotas = quotas
+		s.store = store
 	}
 }
 
@@ -130,7 +95,7 @@ func WithJobTTL(ttl time.Duration) Option {
 	}
 }
 
-// WithCleanupTimeout overrides the bounded timeout for detached quota-refund cleanup contexts when timeout > 0.
+// WithCleanupTimeout overrides the bounded timeout for detached post-commit cleanup contexts when timeout > 0.
 func WithCleanupTimeout(timeout time.Duration) Option {
 	return func(s *Service) {
 		if timeout > 0 {
